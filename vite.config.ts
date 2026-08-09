@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
+  base: "./", // 相对路径：兼容 GitHub Pages 子路径部署（https://gmsjy.github.io/aiggb/）
   plugins: [
     react(),
     VitePWA({
