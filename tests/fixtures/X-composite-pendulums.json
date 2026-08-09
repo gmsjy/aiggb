@@ -1,0 +1,134 @@
+{
+  "explanation": "已创建两个单摆（摆长1m和0.5m），可用时间滑块或动画观察摆动，初始摆角可调。",
+  "commands": [
+    {
+      "op": "constants",
+      "names": [
+        "g"
+      ]
+    },
+    {
+      "op": "slider",
+      "name": "theta0",
+      "min": 0,
+      "max": 1.5708,
+      "step": 0.01,
+      "value": 0.5,
+      "unit": "rad",
+      "label": "初始摆角"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 10,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "eval",
+      "cmd": "l1 = 1"
+    },
+    {
+      "op": "eval",
+      "cmd": "l2 = 0.5"
+    },
+    {
+      "op": "eval",
+      "cmd": "theta1 = theta0 * cos(sqrt(g/l1) * t)"
+    },
+    {
+      "op": "eval",
+      "cmd": "theta2 = theta0 * cos(sqrt(g/l2) * t)"
+    },
+    {
+      "op": "eval",
+      "cmd": "O1 = (0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "O2 = (3,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P1 = O1 + (l1*sin(theta1), -l1*cos(theta1))"
+    },
+    {
+      "op": "eval",
+      "cmd": "P2 = O2 + (l2*sin(theta2), -l2*cos(theta2))"
+    },
+    {
+      "op": "eval",
+      "cmd": "s1 = Segment(O1, P1)"
+    },
+    {
+      "op": "eval",
+      "cmd": "s2 = Segment(O2, P2)"
+    },
+    {
+      "op": "style",
+      "target": "O1",
+      "color": "#616161",
+      "thickness": 1
+    },
+    {
+      "op": "style",
+      "target": "O2",
+      "color": "#616161",
+      "thickness": 1
+    },
+    {
+      "op": "style",
+      "target": "P1",
+      "color": "#e53935"
+    },
+    {
+      "op": "style",
+      "target": "P2",
+      "color": "#1e88e5"
+    },
+    {
+      "op": "style",
+      "target": "s1",
+      "color": "#e53935",
+      "thickness": 3
+    },
+    {
+      "op": "style",
+      "target": "s2",
+      "color": "#1e88e5",
+      "thickness": 3
+    },
+    {
+      "op": "physicsTrace",
+      "target": "P1",
+      "mode": "trail"
+    },
+    {
+      "op": "physicsTrace",
+      "target": "P2",
+      "mode": "trail"
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 0.5,
+      "on": true,
+      "repeat": "increasing"
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m"
+    },
+    {
+      "op": "view",
+      "xmin": -2,
+      "xmax": 5,
+      "ymin": -1.5,
+      "ymax": 0.5
+    }
+  ]
+}

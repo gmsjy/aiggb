@@ -1,0 +1,54 @@
+{
+  "explanation": "构造两个基向量并显示叉乘结果 (0,0,1)。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "O=(0,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "uVec = Vector(O, (1,0,0))"
+    },
+    {
+      "op": "eval",
+      "cmd": "vVec = Vector(O, (0,1,0))"
+    },
+    {
+      "op": "eval",
+      "cmd": "wVec = Cross(uVec, vVec)"
+    },
+    {
+      "op": "eval",
+      "cmd": "end = O + wVec"
+    },
+    {
+      "op": "eval",
+      "cmd": "wArrow = Vector(O, end)"
+    },
+    {
+      "op": "style",
+      "target": "uVec",
+      "color": "#4CAF50",
+      "thickness": 4
+    },
+    {
+      "op": "style",
+      "target": "vVec",
+      "color": "#FF9800",
+      "thickness": 4
+    },
+    {
+      "op": "style",
+      "target": "wArrow",
+      "color": "#E91E63",
+      "thickness": 4
+    },
+    {
+      "op": "view",
+      "xmin": -1,
+      "xmax": 2,
+      "ymin": -1,
+      "ymax": 2
+    }
+  ]
+}

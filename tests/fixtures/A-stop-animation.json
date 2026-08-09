@@ -1,0 +1,9 @@
+{
+  "explanation": "已停止所有动画，滑块将不再自动变化。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "StartAnimation(false)"
+    }
+  ]
+}

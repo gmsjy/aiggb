@@ -1,0 +1,30 @@
+{
+  "explanation": "使用两点Cube构造边长为3的正方体，并通过view设置对称视口保持坐标轴等比例显示。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "A=(0,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B=(3,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "cube=Cube(A,B)"
+    },
+    {
+      "op": "style",
+      "target": "cube",
+      "color": "#90CAF9",
+      "opacity": 0.3
+    },
+    {
+      "op": "view",
+      "xmin": -2,
+      "xmax": 5,
+      "ymin": -2,
+      "ymax": 5
+    }
+  ]
+}

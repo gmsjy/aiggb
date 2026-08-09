@@ -1,0 +1,20 @@
+{
+  "explanation": "生成了以原点为中心、间距为1的5×5点阵，共25个点。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "pointGrid = Sequence(Sequence((i,j), i, -2, 2, 1), j, -2, 2, 1)"
+    },
+    {
+      "op": "eval",
+      "cmd": "points = Flatten(pointGrid)"
+    },
+    {
+      "op": "view",
+      "xmin": -3,
+      "xmax": 3,
+      "ymin": -3,
+      "ymax": 3
+    }
+  ]
+}

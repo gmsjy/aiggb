@@ -1,0 +1,458 @@
+{
+  "mode": "replay",
+  "timestamp": 1786278711811,
+  "pass": 59,
+  "total": 63,
+  "rate": 93.65079365079364,
+  "results": [
+    {
+      "id": "S-circle",
+      "category": "static",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 5
+    },
+    {
+      "id": "S-sinkx",
+      "category": "static",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "S-polygon",
+      "category": "static",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "S-ellipse",
+      "category": "static",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "D-cycloid",
+      "category": "dynamic",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "D-rotation",
+      "category": "dynamic",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "D-locus",
+      "category": "dynamic",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "D-param-curve",
+      "category": "dynamic",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "P-projectile",
+      "category": "physics",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "P-pendulum",
+      "category": "physics",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "P-incline",
+      "category": "physics",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "P-spring",
+      "category": "physics",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "P-wave",
+      "category": "physics",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "M-color-undo",
+      "category": "modify",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "M-add-point",
+      "category": "modify",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "M-change-speed",
+      "category": "modify",
+      "pass": false,
+      "failures": [
+        "缺少 op: animate"
+      ],
+      "latencyMs": 0
+    },
+    {
+      "id": "M-delete-object",
+      "category": "modify",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "F-ambiguous-radius",
+      "category": "clarify",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "F-ambiguous-speed",
+      "category": "clarify",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "F-ambiguous-function",
+      "category": "clarify",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "E-regression-point-plus-point",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "E-regression-sequence-list",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "E-regression-nsolve-2d",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "E-regression-format-string-number",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "E-regression-denominator-zero",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "E-regression-naming-v",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "E-regression-naming-A",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "E-regression-code-fence",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "E-regression-anonymous-segment",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "B-setlineopacity",
+      "category": "boundary",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "B-blacklist-violation",
+      "category": "boundary",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "B-3d-surface",
+      "category": "boundary",
+      "pass": false,
+      "failures": [
+        "缺少 GGB 命令: Surface"
+      ],
+      "latencyMs": 0
+    },
+    {
+      "id": "B-nested-sequence",
+      "category": "boundary",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "C-multi-turn",
+      "category": "context",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "C-multi-modify",
+      "category": "context",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "A-stop-animation",
+      "category": "adversarial",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "A-export-gif",
+      "category": "adversarial",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "A-opacity-trap",
+      "category": "adversarial",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "E-edge-very-fast",
+      "category": "edge",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "E-edge-empty",
+      "category": "edge",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "E-edge-negative",
+      "category": "edge",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "X-composite-pendulums",
+      "category": "composite",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "X-composite-compare",
+      "category": "composite",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "X-field-particle",
+      "category": "composite",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "L-casual-chinese",
+      "category": "language",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "L-homework-style",
+      "category": "language",
+      "pass": false,
+      "failures": [
+        "缺少 GGB 命令: Polygon"
+      ],
+      "latencyMs": 0
+    },
+    {
+      "id": "L-mixed-lang",
+      "category": "language",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "N-very-small",
+      "category": "numeric",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "N-zero-value",
+      "category": "numeric",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "H-cube-section",
+      "category": "highschool",
+      "pass": false,
+      "failures": [
+        "执行成功率 88% < 100%; 失败: eval: GGB evalCommand 返回 false"
+      ],
+      "latencyMs": 1
+    },
+    {
+      "id": "H-cylinder-net",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "H-sphere-volume",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "H-spatial-vector",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "H-helix",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "H-pyramid",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "H-cross-product",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "H-tetrahedron",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "H-regr-setcolor-int",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "H-regr-nofilling",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "H-regr-nopointsize",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "H-regr-noaxesratio",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    },
+    {
+      "id": "H-regr-predeclare",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
+    },
+    {
+      "id": "H-regr-no-setview",
+      "category": "highschool",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 0
+    }
+  ]
+}

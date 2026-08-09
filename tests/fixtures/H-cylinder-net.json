@@ -1,0 +1,70 @@
+{
+  "explanation": "创建半径2高5的圆柱，用正n棱柱近似并生成侧面展开图（Net），n可调。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "n",
+      "min": 3,
+      "max": 60,
+      "step": 1,
+      "value": 24
+    },
+    {
+      "op": "eval",
+      "cmd": "O1=(0,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "O2=(0,0,5)"
+    },
+    {
+      "op": "eval",
+      "cmd": "cyl=Cylinder(O1,O2,2)"
+    },
+    {
+      "op": "style",
+      "target": "cyl",
+      "color": "#90CAF9",
+      "opacity": 0.3
+    },
+    {
+      "op": "eval",
+      "cmd": "pts=Sequence((2*cos(i*2*pi/n),2*sin(i*2*pi/n),0),i,0,n-1,1)"
+    },
+    {
+      "op": "eval",
+      "cmd": "base=Polygon(pts)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P=(2,0,5)"
+    },
+    {
+      "op": "eval",
+      "cmd": "prismObj=Prism(base,P)"
+    },
+    {
+      "op": "style",
+      "target": "prismObj",
+      "color": "#90CAF9",
+      "opacity": 0.15
+    },
+    {
+      "op": "eval",
+      "cmd": "netObj=Net(prismObj)"
+    },
+    {
+      "op": "style",
+      "target": "netObj",
+      "color": "#E91E63",
+      "thickness": 3
+    },
+    {
+      "op": "view",
+      "xmin": -6,
+      "xmax": 6,
+      "ymin": -4,
+      "ymax": 8
+    }
+  ]
+}

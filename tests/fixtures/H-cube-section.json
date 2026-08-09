@@ -1,0 +1,41 @@
+{
+  "explanation": "构造边长3的正方体，并用平面ACF截取其截面。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "A=(0,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B=(3,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "C=(3,3,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "cube=Cube(A,B,C)"
+    },
+    {
+      "op": "style",
+      "target": "cube",
+      "color": "#90CAF9",
+      "opacity": 0.3
+    },
+    {
+      "op": "eval",
+      "cmd": "section=IntersectPath(Plane(A,C,F),cube)"
+    },
+    {
+      "op": "style",
+      "target": "section",
+      "color": "#E91E63",
+      "thickness": 3
+    },
+    {
+      "op": "eval",
+      "cmd": "ZoomIn(0.5)"
+    }
+  ]
+}

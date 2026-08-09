@@ -1,0 +1,80 @@
+{
+  "explanation": "以(0,1),(0,-1)为焦点、过(2,0)的椭圆：2a=2√5，a=√5，b=2，方程x²/4+y²/5=1。P点可拖动，椭圆实时更新。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "F1 = (0,1)"
+    },
+    {
+      "op": "eval",
+      "cmd": "F2 = (0,-1)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (2,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "a = (Distance(P,F1)+Distance(P,F2))/2"
+    },
+    {
+      "op": "eval",
+      "cmd": "ell = Ellipse(F1,F2,a)"
+    },
+    {
+      "op": "style",
+      "target": "ell",
+      "color": "#1565C0",
+      "thickness": 3
+    },
+    {
+      "op": "eval",
+      "cmd": "SetPointSize(F1, 5)"
+    },
+    {
+      "op": "eval",
+      "cmd": "SetPointSize(F2, 5)"
+    },
+    {
+      "op": "eval",
+      "cmd": "SetPointSize(P, 5)"
+    },
+    {
+      "op": "style",
+      "target": "F1",
+      "color": "#E53935"
+    },
+    {
+      "op": "style",
+      "target": "F2",
+      "color": "#E53935"
+    },
+    {
+      "op": "style",
+      "target": "P",
+      "color": "#2E7D32"
+    },
+    {
+      "op": "caption",
+      "target": "F1",
+      "text": "F1(0,1)"
+    },
+    {
+      "op": "caption",
+      "target": "F2",
+      "text": "F2(0,-1)"
+    },
+    {
+      "op": "caption",
+      "target": "P",
+      "text": "P(2,0)"
+    },
+    {
+      "op": "view",
+      "xmin": -3.5,
+      "xmax": 3.5,
+      "ymin": -3.5,
+      "ymax": 3.5
+    }
+  ]
+}

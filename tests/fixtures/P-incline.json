@@ -1,0 +1,136 @@
+{
+  "explanation": "30° 斜面上 2kg 物块受力分析：重力 G、支持力 N、摩擦力 f，可用滑块调节倾角与质量。",
+  "commands": [
+    {
+      "op": "constants",
+      "names": [
+        "g"
+      ]
+    },
+    {
+      "op": "slider",
+      "name": "thetaDeg",
+      "min": 0,
+      "max": 90,
+      "step": 1,
+      "value": 30,
+      "unit": "°",
+      "label": "斜面倾角"
+    },
+    {
+      "op": "slider",
+      "name": "m",
+      "min": 0.5,
+      "max": 10,
+      "step": 0.1,
+      "value": 2,
+      "unit": "kg",
+      "label": "物块质量"
+    },
+    {
+      "op": "eval",
+      "cmd": "theta = thetaDeg * pi / 180"
+    },
+    {
+      "op": "eval",
+      "cmd": "O = (0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B = (5*cos(theta), 5*sin(theta))"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (3*cos(theta), 3*sin(theta))"
+    },
+    {
+      "op": "eval",
+      "cmd": "uvec = Vector((0,0), (cos(theta), sin(theta)))"
+    },
+    {
+      "op": "eval",
+      "cmd": "nvec = Vector((0,0), (-sin(theta), cos(theta)))"
+    },
+    {
+      "op": "eval",
+      "cmd": "block = Polygon(P + 0.3*uvec + 0.2*nvec, P + 0.3*uvec - 0.2*nvec, P - 0.3*uvec - 0.2*nvec, P - 0.3*uvec + 0.2*nvec)"
+    },
+    {
+      "op": "eval",
+      "cmd": "incline = Segment(O, B)"
+    },
+    {
+      "op": "forceDiagram",
+      "at": "P",
+      "forces": [
+        {
+          "name": "weight",
+          "vec": "(0, -0.15*m*g)",
+          "color": "#e53935",
+          "label": "G"
+        },
+        {
+          "name": "normal",
+          "vec": "(-0.15*m*g*cos(theta)*sin(theta), 0.15*m*g*cos(theta)^2)",
+          "color": "#1e88e5",
+          "label": "N"
+        },
+        {
+          "name": "friction",
+          "vec": "(0.15*m*g*sin(theta)*cos(theta), 0.15*m*g*sin(theta)^2)",
+          "color": "#2e7d32",
+          "label": "f"
+        }
+      ]
+    },
+    {
+      "op": "style",
+      "target": "O",
+      "visible": false
+    },
+    {
+      "op": "style",
+      "target": "B",
+      "visible": false
+    },
+    {
+      "op": "style",
+      "target": "P",
+      "visible": false
+    },
+    {
+      "op": "style",
+      "target": "uvec",
+      "visible": false
+    },
+    {
+      "op": "style",
+      "target": "nvec",
+      "visible": false
+    },
+    {
+      "op": "style",
+      "target": "block",
+      "color": "#90a4ae",
+      "opacity": 0.5
+    },
+    {
+      "op": "style",
+      "target": "incline",
+      "color": "#333333",
+      "thickness": 3
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m"
+    },
+    {
+      "op": "view",
+      "xmin": -5,
+      "xmax": 8,
+      "ymin": -4,
+      "ymax": 7
+    }
+  ]
+}

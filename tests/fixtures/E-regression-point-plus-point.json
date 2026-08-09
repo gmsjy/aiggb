@@ -1,0 +1,17 @@
+{
+  "explanation": "在 block 点绘制竖直向下的重力矢量，大小 m·g，方向向下。",
+  "commands": [
+    {
+      "op": "forceDiagram",
+      "at": "block",
+      "forces": [
+        {
+          "name": "weight",
+          "vec": "(0, -m*g)",
+          "color": "#1e88e5",
+          "label": "mg"
+        }
+      ]
+    }
+  ]
+}

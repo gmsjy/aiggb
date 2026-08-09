@@ -1,0 +1,34 @@
+{
+  "explanation": "以原点为球心，半径 r 可调（默认 1），创建红色半透明球体。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "r",
+      "min": 0.1,
+      "max": 5,
+      "step": 0.1,
+      "value": 1
+    },
+    {
+      "op": "eval",
+      "cmd": "O=(0,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "sphere=Sphere(O,r)"
+    },
+    {
+      "op": "style",
+      "target": "sphere",
+      "color": "#E53935",
+      "opacity": 0.8
+    },
+    {
+      "op": "view",
+      "xmin": -3,
+      "xmax": 3,
+      "ymin": -3,
+      "ymax": 3
+    }
+  ]
+}

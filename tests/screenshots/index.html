@@ -1,0 +1,111 @@
+<!doctype html><html lang="zh"><head><meta charset="UTF-8"><title>AiGGB Visual Test Report</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,sans-serif;background:#0f172a;color:#e2e8f0;padding:24px}
+  h1{color:#1e88e5} .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));gap:16px}
+  .card{background:#1e293b;border-radius:10px;padding:12px;border:1px solid #2c3a52}
+  .card.ok{border-color:#43a047} .card.fail{border-color:#e53935}
+  .card h3{margin:0;font-size:16px} .cat{font-size:11px;color:#64748b;margin-left:8px}
+  .card p{margin:4px 0;font-size:13px;color:#94a3b8}
+  .card img{width:100%;border-radius:6px;margin-top:8px}
+  .stats{font-size:12px;color:#64748b;margin-top:4px}
+  .err{color:#e53935}
+</style></head><body>
+<h1>AiGGB 可视化测试报告</h1>
+<p>12 cases | 0 pass | 2026-07-31</p>
+<div class="grid">
+    <div class="card fail">
+      <h3>D-cycloid <span class="cat">dynamic</span></h3>
+      <p>摆线动画</p>
+      <p class="err">截图失败</p>
+      <div class="stats">0 ok / 1 fail</div>
+    </div>
+  
+
+    <div class="card fail">
+      <h3>D-rotation <span class="cat">dynamic</span></h3>
+      <p>旋转变换动画</p>
+      <img src="D-rotation.png" loading="lazy" />
+      <div class="stats">1 ok / 2 fail</div>
+    </div>
+  
+
+    <div class="card fail">
+      <h3>D-locus <span class="cat">dynamic</span></h3>
+      <p>Locus 轨迹</p>
+      <p class="err">截图失败</p>
+      <div class="stats">0 ok / 1 fail</div>
+    </div>
+  
+
+    <div class="card fail">
+      <h3>D-param-curve <span class="cat">dynamic</span></h3>
+      <p>参数曲线+动画</p>
+      <p class="err">截图失败</p>
+      <div class="stats">0 ok / 1 fail</div>
+    </div>
+  
+
+    <div class="card fail">
+      <h3>P-projectile <span class="cat">physics</span></h3>
+      <p>斜抛运动</p>
+      <p class="err">截图失败</p>
+      <div class="stats">0 ok / 1 fail</div>
+    </div>
+  
+
+    <div class="card fail">
+      <h3>P-pendulum <span class="cat">physics</span></h3>
+      <p>单摆</p>
+      <img src="P-pendulum.png" loading="lazy" />
+      <div class="stats">1 ok / 7 fail</div>
+    </div>
+  
+
+    <div class="card fail">
+      <h3>P-incline <span class="cat">physics</span></h3>
+      <p>斜面受力分析</p>
+      <img src="P-incline.png" loading="lazy" />
+      <div class="stats">3 ok / 11 fail</div>
+    </div>
+  
+
+    <div class="card fail">
+      <h3>P-spring <span class="cat">physics</span></h3>
+      <p>弹簧振子</p>
+      <p class="err">截图失败</p>
+      <div class="stats">0 ok / 1 fail</div>
+    </div>
+  
+
+    <div class="card fail">
+      <h3>P-wave <span class="cat">physics</span></h3>
+      <p>横波传播</p>
+      <p class="err">截图失败</p>
+      <div class="stats">0 ok / 1 fail</div>
+    </div>
+  
+
+    <div class="card fail">
+      <h3>X-composite-pendulums <span class="cat">composite</span></h3>
+      <p>两个不同长度单摆</p>
+      <p class="err">截图失败</p>
+      <div class="stats">0 ok / 1 fail</div>
+    </div>
+  
+
+    <div class="card fail">
+      <h3>X-composite-compare <span class="cat">composite</span></h3>
+      <p>两角度斜抛对比</p>
+      <p class="err">截图失败</p>
+      <div class="stats">0 ok / 1 fail</div>
+    </div>
+  
+
+    <div class="card fail">
+      <h3>X-field-particle <span class="cat">composite</span></h3>
+      <p>场+运动复合</p>
+      <p class="err">截图失败</p>
+      <div class="stats">0 ok / 1 fail</div>
+    </div>
+  </div>
+</body></html>

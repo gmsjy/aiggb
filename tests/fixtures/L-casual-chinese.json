@@ -1,0 +1,93 @@
+{
+  "explanation": "斜抛运动：初速度 v0=20 m/s，仰角 45°。已生成可拖动滑块与轨迹动画。",
+  "commands": [
+    {
+      "op": "constants",
+      "names": [
+        "g"
+      ]
+    },
+    {
+      "op": "slider",
+      "name": "v0",
+      "min": 1,
+      "max": 50,
+      "step": 1,
+      "value": 20,
+      "unit": "m/s",
+      "label": "初速"
+    },
+    {
+      "op": "slider",
+      "name": "theta",
+      "min": 0,
+      "max": 90,
+      "step": 1,
+      "value": 45,
+      "unit": "°",
+      "label": "仰角"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 5,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "eval",
+      "cmd": "alpha = theta*pi/180"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (v0*cos(alpha)*t, v0*sin(alpha)*t - 0.5*g*t^2)"
+    },
+    {
+      "op": "eval",
+      "cmd": "vx = v0*cos(alpha)"
+    },
+    {
+      "op": "eval",
+      "cmd": "vy = v0*sin(alpha) - g*t"
+    },
+    {
+      "op": "eval",
+      "cmd": "Ptip = P + (vx/5, vy/5)"
+    },
+    {
+      "op": "vector",
+      "name": "vArrow",
+      "from": "P",
+      "to": "Ptip",
+      "color": "#43a047",
+      "label": "v"
+    },
+    {
+      "op": "physicsTrace",
+      "target": "P",
+      "mode": "trail"
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m"
+    },
+    {
+      "op": "view",
+      "xmin": -2,
+      "xmax": 50,
+      "ymin": -2,
+      "ymax": 20
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 0.5,
+      "on": true,
+      "repeat": "increasing"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+[
+  {
+    "hash": "5fe4bcdb_cqi",
+    "timestamp": 1782688318706,
+    "generalTokens": 5483,
+    "physicsTokens": 7214,
+    "e2ePassRate": 1.0,
+    "formatDriftRate": 0.0,
+    "sampleCases": 6,
+    "nRepeat": 10,
+    "note": "初始基线 — 2026-06-29 优化后 prompt（压缩白名单、2-shot、去重规则）。`npm run test:drift` 建立精确基线。",
+    "golden": true
+  }
+]

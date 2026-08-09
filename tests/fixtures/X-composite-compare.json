@@ -1,0 +1,98 @@
+{
+  "explanation": "同时展示30°和60°斜抛轨迹，共享初速v0并随时间动画运动。",
+  "commands": [
+    {
+      "op": "constants",
+      "names": [
+        "g"
+      ]
+    },
+    {
+      "op": "slider",
+      "name": "v0",
+      "min": 1,
+      "max": 50,
+      "step": 1,
+      "value": 20,
+      "unit": "m/s",
+      "label": "初速"
+    },
+    {
+      "op": "slider",
+      "name": "theta1",
+      "min": 0,
+      "max": 1.5708,
+      "step": 0.01,
+      "value": 0.5236,
+      "unit": "rad",
+      "label": "θ₁=30°"
+    },
+    {
+      "op": "slider",
+      "name": "theta2",
+      "min": 0,
+      "max": 1.5708,
+      "step": 0.01,
+      "value": 1.0472,
+      "unit": "rad",
+      "label": "θ₂=60°"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 4.5,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "eval",
+      "cmd": "P1 = (v0*cos(theta1)*t, v0*sin(theta1)*t - 0.5*g*t^2)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P2 = (v0*cos(theta2)*t, v0*sin(theta2)*t - 0.5*g*t^2)"
+    },
+    {
+      "op": "style",
+      "target": "P1",
+      "color": "#e53935"
+    },
+    {
+      "op": "style",
+      "target": "P2",
+      "color": "#1e88e5"
+    },
+    {
+      "op": "physicsTrace",
+      "target": "P1",
+      "mode": "trail"
+    },
+    {
+      "op": "physicsTrace",
+      "target": "P2",
+      "mode": "trail"
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m"
+    },
+    {
+      "op": "view",
+      "xmin": -2,
+      "xmax": 40,
+      "ymin": -2,
+      "ymax": 18
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 0.5,
+      "on": true,
+      "repeat": "increasing"
+    }
+  ]
+}

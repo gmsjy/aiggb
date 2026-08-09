@@ -1,0 +1,120 @@
+{
+  "explanation": "水平弹簧振子：由滑块输入参数 k、m、振幅 A 和时间 t，计算角频率并驱动质点 P 做简谐运动，同时显示位移-时间曲线（Q 点轨迹）。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "k",
+      "min": 1,
+      "max": 20,
+      "step": 0.5,
+      "value": 10,
+      "unit": "N/m",
+      "label": "劲度系数"
+    },
+    {
+      "op": "slider",
+      "name": "m",
+      "min": 0.5,
+      "max": 5,
+      "step": 0.1,
+      "value": 1,
+      "unit": "kg",
+      "label": "质量"
+    },
+    {
+      "op": "slider",
+      "name": "amp",
+      "min": 0.1,
+      "max": 3,
+      "step": 0.1,
+      "value": 1,
+      "unit": "m",
+      "label": "振幅"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 5,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "eval",
+      "cmd": "omega = sqrt(k/m)"
+    },
+    {
+      "op": "eval",
+      "cmd": "F = (-4,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (amp*cos(omega*t), 0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "c_mass = Circle(P, 0.3)"
+    },
+    {
+      "op": "eval",
+      "cmd": "spring = Segment(F, P)"
+    },
+    {
+      "op": "eval",
+      "cmd": "f(x) = amp*cos(omega*x)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Q = (t, f(t))"
+    },
+    {
+      "op": "physicsTrace",
+      "target": "Q",
+      "mode": "trail"
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 0.5,
+      "on": true,
+      "repeat": "increasing"
+    },
+    {
+      "op": "style",
+      "target": "P",
+      "color": "#e53935"
+    },
+    {
+      "op": "style",
+      "target": "c_mass",
+      "color": "#1e88e5",
+      "opacity": 0.6
+    },
+    {
+      "op": "style",
+      "target": "spring",
+      "color": "#8d6e63",
+      "thickness": 3
+    },
+    {
+      "op": "style",
+      "target": "Q",
+      "color": "#43a047"
+    },
+    {
+      "op": "style",
+      "target": "f",
+      "color": "#43a047",
+      "thickness": 2
+    },
+    {
+      "op": "view",
+      "xmin": -5,
+      "xmax": 5,
+      "ymin": -2,
+      "ymax": 2
+    }
+  ]
+}

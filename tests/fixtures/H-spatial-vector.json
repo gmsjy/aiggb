@@ -1,0 +1,75 @@
+{
+  "explanation": "已创建从原点 O 到 P(2,3,4) 的空间向量，并以虚线显示 P 到三个坐标平面的投影分量。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "O=(0,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P=(2,3,4)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Pxy=(2,3,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Pxz=(2,0,4)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Pyz=(0,3,4)"
+    },
+    {
+      "op": "eval",
+      "cmd": "vVec = Vector(O, P)"
+    },
+    {
+      "op": "style",
+      "target": "vVec",
+      "color": "#4CAF50",
+      "thickness": 3
+    },
+    {
+      "op": "eval",
+      "cmd": "dashXY = Segment(P, Pxy)"
+    },
+    {
+      "op": "eval",
+      "cmd": "dashXZ = Segment(P, Pxz)"
+    },
+    {
+      "op": "eval",
+      "cmd": "dashYZ = Segment(P, Pyz)"
+    },
+    {
+      "op": "style",
+      "target": "dashXY",
+      "color": "#FF5722",
+      "thickness": 2,
+      "dashed": true
+    },
+    {
+      "op": "style",
+      "target": "dashXZ",
+      "color": "#FF5722",
+      "thickness": 2,
+      "dashed": true
+    },
+    {
+      "op": "style",
+      "target": "dashYZ",
+      "color": "#FF5722",
+      "thickness": 2,
+      "dashed": true
+    },
+    {
+      "op": "view",
+      "xmin": -1,
+      "xmax": 3,
+      "ymin": -1,
+      "ymax": 4
+    }
+  ]
+}

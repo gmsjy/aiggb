@@ -1,0 +1,2292 @@
+{
+  "mode": "record",
+  "timestamp": 1782738425089,
+  "pass": 36,
+  "total": 49,
+  "rate": 73.46938775510205,
+  "results": [
+    {
+      "id": "S-circle",
+      "category": "static",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 4913,
+      "raw": {
+        "explanation": "由三点 (0,0), (3,0), (1,2) 作外接圆并找出圆心。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "A = (0,0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "B = (3,0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "C = (1,2)"
+          },
+          {
+            "op": "eval",
+            "cmd": "c = Circle(A, B, C)"
+          },
+          {
+            "op": "eval",
+            "cmd": "O = Center(c)"
+          },
+          {
+            "op": "style",
+            "target": "O",
+            "color": "#FF0000",
+            "thickness": 5
+          },
+          {
+            "op": "caption",
+            "target": "O",
+            "text": "圆心"
+          }
+        ]
+      }
+    },
+    {
+      "id": "S-sinkx",
+      "category": "static",
+      "pass": false,
+      "failures": [
+        "获取 AI 响应失败：AI 返回的不是合法 JSON"
+      ]
+    },
+    {
+      "id": "S-polygon",
+      "category": "static",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 3367,
+      "raw": {
+        "explanation": "创建三角形 ABC，顶点分别为 A(0,0), B(4,0), C(2,3)。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "A = (0,0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "B = (4,0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "C = (2,3)"
+          },
+          {
+            "op": "eval",
+            "cmd": "Polygon(A, B, C)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "S-ellipse",
+      "category": "static",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 15774,
+      "raw": {
+        "explanation": "以 (0,1) (0,-1) 为焦点、经过 (2,0) 的椭圆，长半轴 a=√5，短半轴 b=2。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "F1 = (0, 1)"
+          },
+          {
+            "op": "eval",
+            "cmd": "F2 = (0, -1)"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (2, 0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "a = sqrt(5)"
+          },
+          {
+            "op": "eval",
+            "cmd": "ell = Ellipse(F1, F2, a)"
+          },
+          {
+            "op": "style",
+            "target": "ell",
+            "color": "#3366cc",
+            "thickness": 2
+          },
+          {
+            "op": "caption",
+            "target": "F1",
+            "text": "焦点1"
+          },
+          {
+            "op": "caption",
+            "target": "F2",
+            "text": "焦点2"
+          },
+          {
+            "op": "caption",
+            "target": "P",
+            "text": "经过点"
+          },
+          {
+            "op": "view",
+            "xmin": -4,
+            "xmax": 4,
+            "ymin": -3,
+            "ymax": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "D-cycloid",
+      "category": "dynamic",
+      "pass": false,
+      "failures": [
+        "执行成功率 91% < 100%; 失败: eval: GGB evalCommand 返回 false"
+      ],
+      "latencyMs": 29683,
+      "raw": {
+        "explanation": "我用半径为 r 的圆沿 x 轴无滑动滚动，滑动条 t 控制滚动角度，点 P 的轨迹即摆线。可拖动滑块或播放动画。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "r",
+            "min": 0.1,
+            "max": 5,
+            "step": 0.1,
+            "value": 1,
+            "label": "半径"
+          },
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 12.56637,
+            "step": 0.01,
+            "value": 0,
+            "label": "角度"
+          },
+          {
+            "op": "eval",
+            "cmd": "C = (r * t, r)"
+          },
+          {
+            "op": "eval",
+            "cmd": "c = Circle(C, r)"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (r*(t - sin(t)), r*(1 - cos(t)))"
+          },
+          {
+            "op": "eval",
+            "cmd": "curve = Curve(r*(s - sin(s)), r*(1 - cos(s)), s, 0, t)"
+          },
+          {
+            "op": "style",
+            "target": "P",
+            "color": "#ff0000",
+            "thickness": 5
+          },
+          {
+            "op": "style",
+            "target": "curve",
+            "color": "#0000ff",
+            "thickness": 3
+          },
+          {
+            "op": "trace",
+            "target": "P",
+            "on": true
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 0.5,
+            "on": true,
+            "repeat": "increasing"
+          },
+          {
+            "op": "view",
+            "xmin": -1,
+            "xmax": 15,
+            "ymin": -1,
+            "ymax": 5
+          }
+        ]
+      }
+    },
+    {
+      "id": "D-rotation",
+      "category": "dynamic",
+      "pass": false,
+      "failures": [
+        "缺少 op: physicsTrace"
+      ],
+      "latencyMs": 10432,
+      "raw": {
+        "explanation": "创建角速度滑动条与时间滑动条，动点 P = (cos(ωt), sin(ωt)) 绕原点匀速旋转，开启轨迹追踪。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "omega",
+            "min": 0.1,
+            "max": 5,
+            "step": 0.1,
+            "value": 1,
+            "label": "ω"
+          },
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 100,
+            "step": 0.01,
+            "value": 0
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (cos(omega*t), sin(omega*t))"
+          },
+          {
+            "op": "trace",
+            "target": "P",
+            "on": true
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 1,
+            "on": true,
+            "repeat": "increasing"
+          },
+          {
+            "op": "style",
+            "target": "P",
+            "color": "#2196F3",
+            "thickness": 5
+          }
+        ]
+      }
+    },
+    {
+      "id": "D-locus",
+      "category": "dynamic",
+      "pass": false,
+      "failures": [
+        "缺少 GGB 命令: Locus"
+      ],
+      "latencyMs": 16358,
+      "raw": {
+        "explanation": "创建半径为2的圆，用滑块t作为角度参数控制圆上点P的位置，并启用轨迹追踪。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 6.283185307179586,
+            "step": 0.01,
+            "value": 0
+          },
+          {
+            "op": "eval",
+            "cmd": "Circle((0,0), 2)"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (2*cos(t), 2*sin(t))"
+          },
+          {
+            "op": "trace",
+            "target": "P",
+            "on": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "D-param-curve",
+      "category": "dynamic",
+      "pass": false,
+      "failures": [
+        "执行成功率 86% < 100%; 失败: eval: GGB evalCommand 返回 false"
+      ],
+      "latencyMs": 21643,
+      "raw": {
+        "explanation": "使用滑动条 t 控制参数，显示曲线上的对应点。曲线为 Lissajous 形：$x=\\cos(3t), y=\\sin(2t)$。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 6.283185307179586,
+            "step": 0.01,
+            "value": 0
+          },
+          {
+            "op": "eval",
+            "cmd": "curve = Curve(cos(3*s), sin(2*s), s, 0, 2*pi)"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (cos(3*t), sin(2*t))"
+          },
+          {
+            "op": "style",
+            "target": "curve",
+            "color": "#1e88e5",
+            "thickness": 3
+          },
+          {
+            "op": "style",
+            "target": "P",
+            "color": "#d32f2f"
+          },
+          {
+            "op": "eval",
+            "cmd": "SetPointSize(P, 8)"
+          },
+          {
+            "op": "view",
+            "xmin": -1.5,
+            "xmax": 1.5,
+            "ymin": -1.5,
+            "ymax": 1.5
+          }
+        ]
+      }
+    },
+    {
+      "id": "P-projectile",
+      "category": "physics",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 9898,
+      "raw": {
+        "explanation": "5阶段流程→①滑块②P声明③vx/vy④矢量+轨迹⑤动画",
+        "commands": [
+          {
+            "op": "constants",
+            "names": [
+              "g"
+            ]
+          },
+          {
+            "op": "slider",
+            "name": "v0",
+            "min": 1,
+            "max": 50,
+            "step": 1,
+            "value": 20,
+            "unit": "m/s",
+            "label": "初速"
+          },
+          {
+            "op": "slider",
+            "name": "theta",
+            "min": 0,
+            "max": 1.5708,
+            "step": 0.01,
+            "value": 0.785,
+            "unit": "rad",
+            "label": "仰角"
+          },
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 4,
+            "step": 0.02,
+            "value": 0,
+            "unit": "s",
+            "label": "时间"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (v0*cos(theta)*t, v0*sin(theta)*t - 0.5*g*t^2)"
+          },
+          {
+            "op": "eval",
+            "cmd": "vx = v0*cos(theta)"
+          },
+          {
+            "op": "eval",
+            "cmd": "vy = v0*sin(theta) - g*t"
+          },
+          {
+            "op": "eval",
+            "cmd": "Ptip = P + (vx/5, vy/5)"
+          },
+          {
+            "op": "vector",
+            "name": "vArrow",
+            "from": "P",
+            "to": "Ptip",
+            "color": "#43a047",
+            "label": "v"
+          },
+          {
+            "op": "physicsTrace",
+            "target": "P",
+            "mode": "trail"
+          },
+          {
+            "op": "unitAxes",
+            "xUnit": "m",
+            "yUnit": "m"
+          },
+          {
+            "op": "view",
+            "xmin": -2,
+            "xmax": 45,
+            "ymin": -2,
+            "ymax": 15
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 0.5,
+            "on": true,
+            "repeat": "increasing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "P-pendulum",
+      "category": "physics",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 12221,
+      "raw": {
+        "explanation": "单摆模拟：使用小角度近似 θ=θ₀cos(ωt)，ω=√(g/L)。滑块可调摆长和初角。",
+        "commands": [
+          {
+            "op": "constants",
+            "names": [
+              "g"
+            ]
+          },
+          {
+            "op": "slider",
+            "name": "L",
+            "min": 0.5,
+            "max": 2,
+            "step": 0.1,
+            "value": 1,
+            "unit": "m",
+            "label": "摆长"
+          },
+          {
+            "op": "slider",
+            "name": "theta0",
+            "min": 0,
+            "max": 1.5708,
+            "step": 0.01745,
+            "value": 0.5236,
+            "unit": "rad",
+            "label": "初角"
+          },
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 10,
+            "step": 0.02,
+            "value": 0,
+            "unit": "s",
+            "label": "时间"
+          },
+          {
+            "op": "eval",
+            "cmd": "omega = sqrt(g / L)"
+          },
+          {
+            "op": "eval",
+            "cmd": "theta = theta0 * cos(omega * t)"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (L * sin(theta), -L * cos(theta))"
+          },
+          {
+            "op": "eval",
+            "cmd": "O = (0,0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "rod = Segment(O, P)"
+          },
+          {
+            "op": "style",
+            "target": "rod",
+            "color": "#333333",
+            "thickness": 2
+          },
+          {
+            "op": "style",
+            "target": "P",
+            "color": "#e53935"
+          },
+          {
+            "op": "style",
+            "target": "O",
+            "color": "#1e88e5"
+          },
+          {
+            "op": "physicsTrace",
+            "target": "P",
+            "mode": "trail"
+          },
+          {
+            "op": "unitAxes",
+            "xUnit": "m",
+            "yUnit": "m"
+          },
+          {
+            "op": "view",
+            "xmin": -1.5,
+            "xmax": 1.5,
+            "ymin": -1.5,
+            "ymax": 0.5
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 0.5,
+            "on": true,
+            "repeat": "oscillating"
+          }
+        ]
+      }
+    },
+    {
+      "id": "P-incline",
+      "category": "physics",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 48747,
+      "raw": {
+        "explanation": "30°斜面上2kg物块受力分析：重力G, 支持力N, 摩擦力f（可调）。滑块可调节质量、倾角和摩擦系数。",
+        "commands": [
+          {
+            "op": "constants",
+            "names": [
+              "g"
+            ]
+          },
+          {
+            "op": "slider",
+            "name": "m",
+            "min": 0.5,
+            "max": 5,
+            "step": 0.1,
+            "value": 2,
+            "unit": "kg",
+            "label": "质量"
+          },
+          {
+            "op": "slider",
+            "name": "theta",
+            "min": 0,
+            "max": 1.57,
+            "step": 0.01,
+            "value": 0.5236,
+            "unit": "rad",
+            "label": "θ"
+          },
+          {
+            "op": "slider",
+            "name": "mu",
+            "min": 0,
+            "max": 1,
+            "step": 0.01,
+            "value": 0,
+            "unit": "",
+            "label": "μ"
+          },
+          {
+            "op": "eval",
+            "cmd": "A = (0,0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "B = (5*cos(theta), 5*sin(theta))"
+          },
+          {
+            "op": "eval",
+            "cmd": "seg = Segment(A,B)"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = Midpoint(A,B)"
+          },
+          {
+            "op": "style",
+            "target": "P",
+            "color": "#333333",
+            "thickness": 8
+          },
+          {
+            "op": "eval",
+            "cmd": "Gmag = m*g"
+          },
+          {
+            "op": "eval",
+            "cmd": "Nmag = m*g*cos(theta)"
+          },
+          {
+            "op": "eval",
+            "cmd": "Ffric_mag = If(mu>0, mu*Nmag, 0)"
+          },
+          {
+            "op": "forceDiagram",
+            "at": "P",
+            "forces": [
+              {
+                "name": "gravity",
+                "vec": "(0, -Gmag)",
+                "color": "#e53935",
+                "label": "G"
+              },
+              {
+                "name": "normal",
+                "vec": "(-Nmag*sin(theta), Nmag*cos(theta))",
+                "color": "#1e88e5",
+                "label": "N"
+              },
+              {
+                "name": "friction",
+                "vec": "(Ffric_mag*cos(theta), Ffric_mag*sin(theta))",
+                "color": "#43a047",
+                "label": "f"
+              }
+            ]
+          },
+          {
+            "op": "view",
+            "xmin": -1,
+            "xmax": 6,
+            "ymin": -2,
+            "ymax": 4
+          }
+        ]
+      }
+    },
+    {
+      "id": "P-spring",
+      "category": "physics",
+      "pass": false,
+      "failures": [
+        "缺少 op: physicsTrace"
+      ],
+      "latencyMs": 26652,
+      "raw": {
+        "explanation": "水平弹簧振子：参数可调，显示滑块位置、速度矢量及轨迹。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 10,
+            "step": 0.01,
+            "value": 0,
+            "unit": "s",
+            "label": "时间"
+          },
+          {
+            "op": "slider",
+            "name": "k",
+            "min": 0.1,
+            "max": 50,
+            "step": 0.1,
+            "value": 10,
+            "unit": "N/m",
+            "label": "劲度系数"
+          },
+          {
+            "op": "slider",
+            "name": "m",
+            "min": 0.1,
+            "max": 10,
+            "step": 0.1,
+            "value": 1,
+            "unit": "kg",
+            "label": "质量"
+          },
+          {
+            "op": "slider",
+            "name": "A",
+            "min": 0.1,
+            "max": 5,
+            "step": 0.1,
+            "value": 1,
+            "unit": "m",
+            "label": "振幅"
+          },
+          {
+            "op": "eval",
+            "cmd": "omega = sqrt(k / m)"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (A * cos(omega * t), 0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "F = (-1.5 * A, 0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "spring = Segment(F, P)"
+          },
+          {
+            "op": "style",
+            "target": "spring",
+            "color": "#333333",
+            "thickness": 3,
+            "dashed": true
+          },
+          {
+            "op": "eval",
+            "cmd": "vx = -A * omega * sin(omega * t)"
+          },
+          {
+            "op": "vector",
+            "name": "V",
+            "from": "P",
+            "to": "P + (vx/5, 0)",
+            "color": "#e53935",
+            "label": "v"
+          },
+          {
+            "op": "trace",
+            "target": "P",
+            "on": true
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 0.5,
+            "on": true,
+            "repeat": "increasing"
+          },
+          {
+            "op": "view",
+            "xmin": -3,
+            "xmax": 3,
+            "ymin": -1.5,
+            "ymax": 1.5
+          },
+          {
+            "op": "unitAxes",
+            "xUnit": "m",
+            "yUnit": "m"
+          }
+        ]
+      }
+    },
+    {
+      "id": "P-wave",
+      "category": "physics",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 16050,
+      "raw": {
+        "explanation": "横波 y=A·sin(kx-ωt)，A/k/ω 可调，动画演示向右传播。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "a",
+            "min": 0.1,
+            "max": 5,
+            "step": 0.1,
+            "value": 1,
+            "label": "振幅 A"
+          },
+          {
+            "op": "slider",
+            "name": "k",
+            "min": 0.1,
+            "max": 10,
+            "step": 0.1,
+            "value": 2,
+            "label": "波数 k"
+          },
+          {
+            "op": "slider",
+            "name": "omega",
+            "min": 0.1,
+            "max": 10,
+            "step": 0.1,
+            "value": 3,
+            "label": "角频率 ω"
+          },
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 10,
+            "step": 0.01,
+            "value": 0,
+            "label": "时间 t"
+          },
+          {
+            "op": "eval",
+            "cmd": "f(x) = a * sin(k*x - omega*t)"
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 1,
+            "on": true,
+            "repeat": "increasing"
+          },
+          {
+            "op": "view",
+            "xmin": 0,
+            "xmax": 20,
+            "ymin": -6,
+            "ymax": 6
+          }
+        ]
+      }
+    },
+    {
+      "id": "M-color-undo",
+      "category": "modify",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 3017,
+      "raw": {
+        "explanation": "将圆形修改为红色虚线样式",
+        "commands": [
+          {
+            "op": "style",
+            "target": "circle1",
+            "color": "#FF0000",
+            "dashed": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "M-add-point",
+      "category": "modify",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 5570,
+      "raw": {
+        "explanation": "使用中点命令创建中点 M 并设置标签。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "M = Midpoint(A, B)"
+          },
+          {
+            "op": "caption",
+            "target": "M",
+            "text": "M"
+          }
+        ]
+      }
+    },
+    {
+      "id": "M-change-speed",
+      "category": "modify",
+      "pass": false,
+      "failures": [
+        "缺少 op: animate"
+      ],
+      "latencyMs": 10238,
+      "raw": {
+        "explanation": "使用 SetAnimationSpeed 将滑动条 t 的动画速度设为 2 倍。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "SetAnimationSpeed(t, 2)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "M-delete-object",
+      "category": "modify",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 2249,
+      "raw": {
+        "explanation": "已删除辅助点 P。",
+        "commands": [
+          {
+            "op": "delete",
+            "target": "P"
+          }
+        ]
+      }
+    },
+    {
+      "id": "F-ambiguous-radius",
+      "category": "clarify",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 3674,
+      "raw": {
+        "explanation": "您想要画一个圆，但未指定圆心和半径。请提供圆心坐标和半径，或者我可以用滑动条让您动态调整。",
+        "commands": [],
+        "ask": "请指定圆的圆心坐标（例如 (0,0)）和半径？"
+      }
+    },
+    {
+      "id": "F-ambiguous-speed",
+      "category": "clarify",
+      "pass": false,
+      "failures": [
+        "containsAsk=false，期望 true"
+      ],
+      "latencyMs": 7040,
+      "raw": {
+        "explanation": "使用滑块控制时间，点P沿x轴运动。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 10,
+            "step": 0.1,
+            "value": 0,
+            "unit": "s",
+            "label": "时间"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (t, 0)"
+          },
+          {
+            "op": "view",
+            "xmin": -1,
+            "xmax": 11,
+            "ymin": -1,
+            "ymax": 1
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 1,
+            "on": true,
+            "repeat": "increasing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "F-ambiguous-function",
+      "category": "clarify",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1964,
+      "raw": {
+        "explanation": "需要明确要绘制的函数表达式。",
+        "commands": [],
+        "ask": "请指定要绘制的函数，例如 y = sin(x) 或 y = x^2。"
+      }
+    },
+    {
+      "id": "E-regression-point-plus-point",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 5142,
+      "raw": {
+        "explanation": "重力矢量需要大小，请指定质量（kg）或直接指定力的大小？",
+        "commands": [],
+        "ask": "请指定重力的大小（例如质量 m = 2 kg，或者直接力 F = 20 N）？"
+      }
+    },
+    {
+      "id": "E-regression-sequence-list",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 24114,
+      "raw": {
+        "explanation": "在 -3 到 3 的整数坐标位置生成点阵，共49个点。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "pgrid = Flatten(Sequence(Sequence(Point({i, j}), i, -3, 3), j, -3, 3))"
+          },
+          {
+            "op": "eval",
+            "cmd": "SetPointSize(pgrid, 4)"
+          },
+          {
+            "op": "eval",
+            "cmd": "SetColor(pgrid, \"#2196F3\")"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E-regression-nsolve-2d",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 5071,
+      "raw": {
+        "explanation": "创建两个点电荷的电场示意，使用滑块控制间距和电荷量，绘制矢量网格。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "d",
+            "min": 1,
+            "max": 4,
+            "step": 0.1,
+            "value": 2,
+            "unit": "m",
+            "label": "间距/2"
+          },
+          {
+            "op": "slider",
+            "name": "qmag",
+            "min": 1,
+            "max": 5,
+            "step": 0.5,
+            "value": 1,
+            "unit": "",
+            "label": "电荷量"
+          },
+          {
+            "op": "eval",
+            "cmd": "A = (d, 0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "B = (-d, 0)"
+          },
+          {
+            "op": "style",
+            "target": "A",
+            "color": "#e53935"
+          },
+          {
+            "op": "style",
+            "target": "B",
+            "color": "#1e88e5"
+          },
+          {
+            "op": "eval",
+            "cmd": "Ex(x,y) = qmag*(x-d)/((x-d)^2+y^2+0.01)^1.5 - qmag*(x+d)/((x+d)^2+y^2+0.01)^1.5"
+          },
+          {
+            "op": "eval",
+            "cmd": "Ey(x,y) = qmag*y/((x-d)^2+y^2+0.01)^1.5 - qmag*y/((x+d)^2+y^2+0.01)^1.5"
+          },
+          {
+            "op": "eval",
+            "cmd": "Emag(x,y) = sqrt(Ex(x,y)^2+Ey(x,y)^2+0.001)"
+          },
+          {
+            "op": "eval",
+            "cmd": "step=0.4"
+          },
+          {
+            "op": "eval",
+            "cmd": "arrows = Sequence(Sequence(Vector((i,j), (i+step*Ex(i,j)/Emag(i,j), j+step*Ey(i,j)/Emag(i,j))), i, -4, 4, 1), j, -3, 3, 1)"
+          },
+          {
+            "op": "unitAxes",
+            "xUnit": "m",
+            "yUnit": "m"
+          },
+          {
+            "op": "view",
+            "xmin": -5,
+            "xmax": 5,
+            "ymin": -4,
+            "ymax": 4
+          }
+        ]
+      }
+    },
+    {
+      "id": "E-regression-format-string-number",
+      "category": "regression",
+      "pass": false,
+      "failures": [
+        "获取 AI 响应失败：AI 输出不符合 schema"
+      ]
+    },
+    {
+      "id": "E-regression-denominator-zero",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 11573,
+      "raw": {
+        "explanation": "使用滑块控制等势线数目和间距，生成一系列同心圆表示点电荷等势线。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "O = (0,0)"
+          },
+          {
+            "op": "style",
+            "target": "O",
+            "color": "#e53935"
+          },
+          {
+            "op": "slider",
+            "name": "N",
+            "min": 1,
+            "max": 10,
+            "step": 1,
+            "value": 5,
+            "label": "等势线数目"
+          },
+          {
+            "op": "slider",
+            "name": "dr",
+            "min": 0.5,
+            "max": 2,
+            "step": 0.1,
+            "value": 1,
+            "unit": "",
+            "label": "半径步长"
+          },
+          {
+            "op": "eval",
+            "cmd": "circles = Sequence(Circle(O, k*dr), k, 1, N)"
+          },
+          {
+            "op": "style",
+            "target": "circles",
+            "color": "#1565c0",
+            "thickness": 1,
+            "opacity": 0.5
+          },
+          {
+            "op": "view",
+            "xmin": -10,
+            "xmax": 10,
+            "ymin": -10,
+            "ymax": 10
+          },
+          {
+            "op": "unitAxes",
+            "xUnit": "m",
+            "yUnit": "m"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E-regression-naming-v",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 3908,
+      "raw": {
+        "explanation": "需要确认质点的运动类型才能生成正确的动态图像。",
+        "commands": [],
+        "ask": "请指定质点的运动类型（例如：匀速直线运动、圆周运动、抛体运动）以及方向或半径等参数？"
+      }
+    },
+    {
+      "id": "E-regression-naming-A",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 21379,
+      "raw": {
+        "explanation": "生成振幅为2的简谐运动，使用滑块调节角频率和初相，点P沿竖直方向振动。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "amp",
+            "min": 0.1,
+            "max": 5,
+            "step": 0.1,
+            "value": 2,
+            "unit": "",
+            "label": "振幅"
+          },
+          {
+            "op": "slider",
+            "name": "omega",
+            "min": 0.1,
+            "max": 5,
+            "step": 0.1,
+            "value": 1,
+            "unit": "rad/s",
+            "label": "角频率"
+          },
+          {
+            "op": "slider",
+            "name": "phi",
+            "min": 0,
+            "max": 6.2832,
+            "step": 0.01,
+            "value": 0,
+            "unit": "rad",
+            "label": "初相"
+          },
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 10,
+            "step": 0.02,
+            "value": 0,
+            "unit": "s",
+            "label": "时间"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (0, amp*sin(omega*t+phi))"
+          },
+          {
+            "op": "physicsTrace",
+            "target": "P",
+            "mode": "trail"
+          },
+          {
+            "op": "view",
+            "xmin": -1.5,
+            "xmax": 1.5,
+            "ymin": -6,
+            "ymax": 6
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 0.5,
+            "on": true,
+            "repeat": "increasing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E-regression-code-fence",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 7473,
+      "raw": {
+        "explanation": "绘制函数 y = x²，即一条开口向上的抛物线。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "f(x) = x^2"
+          },
+          {
+            "op": "view",
+            "xmin": -5,
+            "xmax": 5,
+            "ymin": -1,
+            "ymax": 10
+          },
+          {
+            "op": "style",
+            "target": "f",
+            "color": "#1e88e5",
+            "thickness": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "E-regression-anonymous-segment",
+      "category": "regression",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 2275,
+      "raw": {
+        "explanation": "绘制从原点到 (3,4) 的线段。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "Segment((0,0), (3,4))"
+          }
+        ]
+      }
+    },
+    {
+      "id": "B-setlineopacity",
+      "category": "boundary",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 16779,
+      "raw": {
+        "explanation": "创建一个半径为1的圆，并设置其线透明度为50%。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "c = Circle((0,0), 1)"
+          },
+          {
+            "op": "style",
+            "target": "c",
+            "opacity": 0.5
+          }
+        ]
+      }
+    },
+    {
+      "id": "B-blacklist-violation",
+      "category": "boundary",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 8574,
+      "raw": {
+        "explanation": "已暂停所有滑动条动画。如需恢复，请说“恢复动画”。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "StartAnimation(false)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "B-3d-surface",
+      "category": "boundary",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 13132,
+      "raw": {
+        "explanation": "绘制曲面 z=x^2+y^2，添加滑块控制显示范围",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "range",
+            "min": 1,
+            "max": 10,
+            "step": 0.5,
+            "value": 5,
+            "label": "范围"
+          },
+          {
+            "op": "eval",
+            "cmd": "Surface(s, t, s^2 + t^2, s, -range, range, t, -range, range)"
+          },
+          {
+            "op": "style",
+            "target": "a",
+            "color": "#4caf50",
+            "opacity": 0.8
+          }
+        ]
+      }
+    },
+    {
+      "id": "B-nested-sequence",
+      "category": "boundary",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 7062,
+      "raw": {
+        "explanation": "使用嵌套Sequence生成5×5的点阵，每个点坐标为(i,j)。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "Sequence(Sequence(Point(i, j), i, 1, 5), j, 1, 5)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "C-multi-turn",
+      "category": "context",
+      "pass": false,
+      "failures": [
+        "缺少 op: style",
+        "未引用 context 已存在对象 A, B, c"
+      ],
+      "latencyMs": 3890,
+      "raw": {
+        "explanation": "我需要知道要修改颜色的圆的名称，例如 'c' 或 'circle'。请指定。",
+        "commands": [],
+        "ask": "请指定要改变颜色的圆的名称（例如 'c' 或 'circle'）？"
+      }
+    },
+    {
+      "id": "C-multi-modify",
+      "category": "context",
+      "pass": false,
+      "failures": [
+        "未引用 context 已存在对象 A, B, s, M"
+      ],
+      "latencyMs": 10771,
+      "raw": {
+        "explanation": "已将红线颜色改为蓝色，透明度设为0.3（即不透明度0.7）。若对象名不是\"line\"，请重新指定。",
+        "commands": [
+          {
+            "op": "style",
+            "target": "line",
+            "color": "#0000FF",
+            "opacity": 0.7
+          }
+        ]
+      }
+    },
+    {
+      "id": "A-stop-animation",
+      "category": "adversarial",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 9288,
+      "raw": {
+        "explanation": "已停止所有动画。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "StartAnimation(false)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A-export-gif",
+      "category": "adversarial",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 4263,
+      "raw": {
+        "explanation": "GeoGebra 命令接口不支持直接导出 GIF。请手动使用文件→导出→动画 GIF（或使用屏幕录制软件）导出动画。",
+        "commands": []
+      }
+    },
+    {
+      "id": "A-opacity-trap",
+      "category": "adversarial",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 3222,
+      "raw": {
+        "explanation": "需要知道具体对象名称才能设置透明度。",
+        "commands": [],
+        "ask": "请指定需要修改透明度的对象名称（如 'circle1' 或 'lineAB'）？"
+      }
+    },
+    {
+      "id": "E-edge-very-fast",
+      "category": "edge",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 21567,
+      "raw": {
+        "explanation": "斜抛：v0=1000m/s,θ=80°,g=9.8,滑块控制时间,显示速度矢量和轨迹",
+        "commands": [
+          {
+            "op": "constants",
+            "names": [
+              "g"
+            ]
+          },
+          {
+            "op": "slider",
+            "name": "v0",
+            "min": 500,
+            "max": 1500,
+            "step": 10,
+            "value": 1000,
+            "unit": "m/s",
+            "label": "初速"
+          },
+          {
+            "op": "slider",
+            "name": "theta",
+            "min": 0,
+            "max": 1.5708,
+            "step": 0.01,
+            "value": 1.396,
+            "unit": "rad",
+            "label": "仰角"
+          },
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 250,
+            "step": 0.1,
+            "value": 0,
+            "unit": "s",
+            "label": "时间"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (v0*cos(theta)*t, v0*sin(theta)*t - 0.5*g*t^2)"
+          },
+          {
+            "op": "eval",
+            "cmd": "vx = v0*cos(theta)"
+          },
+          {
+            "op": "eval",
+            "cmd": "vy = v0*sin(theta) - g*t"
+          },
+          {
+            "op": "eval",
+            "cmd": "Ptip = P + (vx/50, vy/50)"
+          },
+          {
+            "op": "vector",
+            "name": "vArrow",
+            "from": "P",
+            "to": "Ptip",
+            "color": "#43a047",
+            "label": "v"
+          },
+          {
+            "op": "physicsTrace",
+            "target": "P",
+            "mode": "trail"
+          },
+          {
+            "op": "unitAxes",
+            "xUnit": "m",
+            "yUnit": "m"
+          },
+          {
+            "op": "view",
+            "xmin": -2000,
+            "xmax": 40000,
+            "ymin": -2000,
+            "ymax": 50000
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 1,
+            "on": true,
+            "repeat": "increasing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "E-edge-empty",
+      "category": "edge",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 4451,
+      "raw": {
+        "explanation": "请指定您想要绘制的图形或场景，例如函数、几何图形、物理演示等。",
+        "commands": [],
+        "ask": "请问您想画什么？例如：函数图像、几何图形、物理模拟等。"
+      }
+    },
+    {
+      "id": "E-edge-negative",
+      "category": "edge",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 5104,
+      "raw": {
+        "explanation": "半径不能为负，已自动取绝对值 2，圆心设在原点(0,0)，可拖动滑块调整半径。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "r",
+            "min": 0.1,
+            "max": 5,
+            "step": 0.1,
+            "value": 2,
+            "label": "半径"
+          },
+          {
+            "op": "eval",
+            "cmd": "O = (0,0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "c = Circle(O, r)"
+          },
+          {
+            "op": "style",
+            "target": "c",
+            "color": "#2196F3",
+            "thickness": 2,
+            "opacity": 0.8
+          }
+        ]
+      }
+    },
+    {
+      "id": "X-composite-pendulums",
+      "category": "composite",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 24300,
+      "raw": {
+        "explanation": "创建两个单摆，摆长分别为1m和0.5m，使用时间滑块驱动简谐运动，振幅可调。",
+        "commands": [
+          {
+            "op": "constants",
+            "names": [
+              "g"
+            ]
+          },
+          {
+            "op": "slider",
+            "name": "len1",
+            "min": 0.2,
+            "max": 2,
+            "step": 0.1,
+            "value": 1,
+            "unit": "m",
+            "label": "摆长1"
+          },
+          {
+            "op": "slider",
+            "name": "len2",
+            "min": 0.2,
+            "max": 2,
+            "step": 0.1,
+            "value": 0.5,
+            "unit": "m",
+            "label": "摆长2"
+          },
+          {
+            "op": "slider",
+            "name": "A",
+            "min": 0,
+            "max": 1.57,
+            "step": 0.01,
+            "value": 0.5236,
+            "unit": "rad",
+            "label": "振幅"
+          },
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 10,
+            "step": 0.01,
+            "value": 0,
+            "unit": "s",
+            "label": "时间"
+          },
+          {
+            "op": "eval",
+            "cmd": "omega1 = sqrt(g / len1)"
+          },
+          {
+            "op": "eval",
+            "cmd": "omega2 = sqrt(g / len2)"
+          },
+          {
+            "op": "eval",
+            "cmd": "theta1 = A * sin(omega1 * t)"
+          },
+          {
+            "op": "eval",
+            "cmd": "theta2 = A * sin(omega2 * t)"
+          },
+          {
+            "op": "eval",
+            "cmd": "O1 = (-1.5, 0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "O2 = (1.5, 0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "P1 = O1 + (len1 * sin(theta1), -len1 * cos(theta1))"
+          },
+          {
+            "op": "eval",
+            "cmd": "P2 = O2 + (len2 * sin(theta2), -len2 * cos(theta2))"
+          },
+          {
+            "op": "eval",
+            "cmd": "s1 = Segment(O1, P1)"
+          },
+          {
+            "op": "eval",
+            "cmd": "s2 = Segment(O2, P2)"
+          },
+          {
+            "op": "style",
+            "target": "s1",
+            "color": "#e53935",
+            "thickness": 3
+          },
+          {
+            "op": "style",
+            "target": "s2",
+            "color": "#1e88e5",
+            "thickness": 3
+          },
+          {
+            "op": "style",
+            "target": "P1",
+            "color": "#e53935"
+          },
+          {
+            "op": "style",
+            "target": "P2",
+            "color": "#1e88e5"
+          },
+          {
+            "op": "unitAxes",
+            "xUnit": "m",
+            "yUnit": "m"
+          },
+          {
+            "op": "view",
+            "xmin": -4,
+            "xmax": 4,
+            "ymin": -3,
+            "ymax": 1
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 0.5,
+            "on": true,
+            "repeat": "increasing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "X-composite-compare",
+      "category": "composite",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 8649,
+      "raw": {
+        "explanation": "用两个角度的滑块（默认30°和60°）同时绘制斜抛轨迹，共用初速v0和时间t。",
+        "commands": [
+          {
+            "op": "constants",
+            "names": [
+              "g"
+            ]
+          },
+          {
+            "op": "slider",
+            "name": "v0",
+            "min": 1,
+            "max": 50,
+            "step": 1,
+            "value": 20,
+            "unit": "m/s",
+            "label": "初速"
+          },
+          {
+            "op": "slider",
+            "name": "theta1",
+            "min": 0,
+            "max": 1.5708,
+            "step": 0.01,
+            "value": 0.5236,
+            "unit": "rad",
+            "label": "角度1 (30°)"
+          },
+          {
+            "op": "slider",
+            "name": "theta2",
+            "min": 0,
+            "max": 1.5708,
+            "step": 0.01,
+            "value": 1.0472,
+            "unit": "rad",
+            "label": "角度2 (60°)"
+          },
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 5,
+            "step": 0.02,
+            "value": 0,
+            "unit": "s",
+            "label": "时间"
+          },
+          {
+            "op": "eval",
+            "cmd": "P1 = (v0*cos(theta1)*t, v0*sin(theta1)*t - 0.5*g*t^2)"
+          },
+          {
+            "op": "eval",
+            "cmd": "P2 = (v0*cos(theta2)*t, v0*sin(theta2)*t - 0.5*g*t^2)"
+          },
+          {
+            "op": "eval",
+            "cmd": "vx1 = v0*cos(theta1)"
+          },
+          {
+            "op": "eval",
+            "cmd": "vy1 = v0*sin(theta1) - g*t"
+          },
+          {
+            "op": "eval",
+            "cmd": "vx2 = v0*cos(theta2)"
+          },
+          {
+            "op": "eval",
+            "cmd": "vy2 = v0*sin(theta2) - g*t"
+          },
+          {
+            "op": "eval",
+            "cmd": "P1tip = P1 + (vx1/5, vy1/5)"
+          },
+          {
+            "op": "eval",
+            "cmd": "P2tip = P2 + (vx2/5, vy2/5)"
+          },
+          {
+            "op": "vector",
+            "name": "vArrow1",
+            "from": "P1",
+            "to": "P1tip",
+            "color": "#e53935",
+            "label": "v1"
+          },
+          {
+            "op": "vector",
+            "name": "vArrow2",
+            "from": "P2",
+            "to": "P2tip",
+            "color": "#1e88e5",
+            "label": "v2"
+          },
+          {
+            "op": "physicsTrace",
+            "target": "P1",
+            "mode": "trail"
+          },
+          {
+            "op": "physicsTrace",
+            "target": "P2",
+            "mode": "trail"
+          },
+          {
+            "op": "unitAxes",
+            "xUnit": "m",
+            "yUnit": "m"
+          },
+          {
+            "op": "view",
+            "xmin": -2,
+            "xmax": 50,
+            "ymin": -2,
+            "ymax": 25
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 0.5,
+            "on": true,
+            "repeat": "increasing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "X-field-particle",
+      "category": "composite",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 25560,
+      "raw": {
+        "explanation": "正电荷在均匀磁场中做匀速圆周运动，参数可调：初速v0、磁感应强度B。显示速度矢量和轨迹。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "v0",
+            "min": 1,
+            "max": 10,
+            "step": 0.5,
+            "value": 5,
+            "unit": "m/s",
+            "label": "初速"
+          },
+          {
+            "op": "slider",
+            "name": "B",
+            "min": 0.5,
+            "max": 2,
+            "step": 0.1,
+            "value": 1,
+            "unit": "T",
+            "label": "磁场"
+          },
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 10,
+            "step": 0.02,
+            "value": 0,
+            "unit": "s",
+            "label": "时间"
+          },
+          {
+            "op": "eval",
+            "cmd": "r = v0 / B"
+          },
+          {
+            "op": "eval",
+            "cmd": "omega = B"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (r * cos(omega * t), r * sin(omega * t))"
+          },
+          {
+            "op": "eval",
+            "cmd": "vVec = (-v0 * sin(omega * t), v0 * cos(omega * t))"
+          },
+          {
+            "op": "eval",
+            "cmd": "Pvel = P + vVec / 5"
+          },
+          {
+            "op": "vector",
+            "name": "velArrow",
+            "from": "P",
+            "to": "Pvel",
+            "color": "#fdd835",
+            "label": "v"
+          },
+          {
+            "op": "eval",
+            "cmd": "circle = Circle((0,0), r)"
+          },
+          {
+            "op": "style",
+            "target": "circle",
+            "color": "#42a5f5",
+            "thickness": 1,
+            "opacity": 0.3
+          },
+          {
+            "op": "physicsTrace",
+            "target": "P",
+            "mode": "trail"
+          },
+          {
+            "op": "unitAxes",
+            "xUnit": "m",
+            "yUnit": "m"
+          },
+          {
+            "op": "view",
+            "xmin": -25,
+            "xmax": 25,
+            "ymin": -25,
+            "ymax": 25
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 0.3,
+            "on": true,
+            "repeat": "increasing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "L-casual-chinese",
+      "category": "language",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 8750,
+      "raw": {
+        "explanation": "斜抛运动：滑块控制初速、仰角和时刻，显示速度矢量与轨迹。",
+        "commands": [
+          {
+            "op": "constants",
+            "names": [
+              "g"
+            ]
+          },
+          {
+            "op": "slider",
+            "name": "v0",
+            "min": 1,
+            "max": 50,
+            "step": 1,
+            "value": 20,
+            "unit": "m/s",
+            "label": "初速"
+          },
+          {
+            "op": "slider",
+            "name": "theta",
+            "min": 0,
+            "max": 1.5708,
+            "step": 0.01,
+            "value": 0.785,
+            "unit": "rad",
+            "label": "仰角"
+          },
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 5,
+            "step": 0.02,
+            "value": 0,
+            "unit": "s",
+            "label": "时间"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (v0*cos(theta)*t, v0*sin(theta)*t - 0.5*g*t^2)"
+          },
+          {
+            "op": "eval",
+            "cmd": "vx = v0*cos(theta)"
+          },
+          {
+            "op": "eval",
+            "cmd": "vy = v0*sin(theta) - g*t"
+          },
+          {
+            "op": "eval",
+            "cmd": "Ptip = P + (vx/5, vy/5)"
+          },
+          {
+            "op": "vector",
+            "name": "vArrow",
+            "from": "P",
+            "to": "Ptip",
+            "color": "#43a047",
+            "label": "v"
+          },
+          {
+            "op": "physicsTrace",
+            "target": "P",
+            "mode": "trail"
+          },
+          {
+            "op": "unitAxes",
+            "xUnit": "m",
+            "yUnit": "m"
+          },
+          {
+            "op": "view",
+            "xmin": -2,
+            "xmax": 45,
+            "ymin": -2,
+            "ymax": 15
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 0.5,
+            "on": true,
+            "repeat": "increasing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "L-homework-style",
+      "category": "language",
+      "pass": false,
+      "failures": [
+        "缺少 GGB 命令: Polygon"
+      ],
+      "latencyMs": 16405,
+      "raw": {
+        "explanation": "绘制三边长分别为3、4、5的直角三角形ABC，并标注边长。",
+        "commands": [
+          {
+            "op": "eval",
+            "cmd": "A = (3, 0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "B = (0, 0)"
+          },
+          {
+            "op": "eval",
+            "cmd": "C = (0, 4)"
+          },
+          {
+            "op": "eval",
+            "cmd": "AB = Segment(A, B)"
+          },
+          {
+            "op": "eval",
+            "cmd": "BC = Segment(B, C)"
+          },
+          {
+            "op": "eval",
+            "cmd": "CA = Segment(C, A)"
+          },
+          {
+            "op": "eval",
+            "cmd": "SetCaption(AB, \"AB=3\")"
+          },
+          {
+            "op": "eval",
+            "cmd": "SetCaption(BC, \"BC=4\")"
+          },
+          {
+            "op": "eval",
+            "cmd": "SetCaption(CA, \"CA=5\")"
+          },
+          {
+            "op": "style",
+            "target": "AB",
+            "color": "#0000FF",
+            "thickness": 2
+          },
+          {
+            "op": "style",
+            "target": "BC",
+            "color": "#00FF00",
+            "thickness": 2
+          },
+          {
+            "op": "style",
+            "target": "CA",
+            "color": "#FF0000",
+            "thickness": 2
+          },
+          {
+            "op": "view",
+            "xmin": -1,
+            "xmax": 5,
+            "ymin": -1,
+            "ymax": 5
+          }
+        ]
+      }
+    },
+    {
+      "id": "L-mixed-lang",
+      "category": "language",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 7058,
+      "raw": {
+        "explanation": "生成正弦波 $y = a \\sin(\\omega x)$，其中 $a=2,\\ \\omega=3$，滑块可调节。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "a",
+            "min": 0.1,
+            "max": 5,
+            "step": 0.1,
+            "value": 2,
+            "label": "振幅"
+          },
+          {
+            "op": "slider",
+            "name": "freq",
+            "min": 0.1,
+            "max": 10,
+            "step": 0.1,
+            "value": 3,
+            "label": "频率"
+          },
+          {
+            "op": "eval",
+            "cmd": "f(x)=a*sin(freq*x)"
+          },
+          {
+            "op": "view",
+            "xmin": -6.28,
+            "xmax": 6.28,
+            "ymin": -3,
+            "ymax": 3
+          }
+        ]
+      }
+    },
+    {
+      "id": "N-very-small",
+      "category": "numeric",
+      "pass": false,
+      "failures": [
+        "缺少 GGB 命令: Circle"
+      ],
+      "latencyMs": 2661,
+      "raw": {
+        "explanation": "需要确认圆的圆心位置",
+        "commands": [],
+        "ask": "请指定圆的圆心坐标，例如 (0,0) 或 (-2,3)？"
+      }
+    },
+    {
+      "id": "N-zero-value",
+      "category": "numeric",
+      "pass": true,
+      "failures": [],
+      "latencyMs": 8090,
+      "raw": {
+        "explanation": "创建振幅滑块初始为0，角频率和时间滑块，质点沿x轴做简谐运动，振幅可调。",
+        "commands": [
+          {
+            "op": "slider",
+            "name": "A",
+            "min": 0,
+            "max": 5,
+            "step": 0.1,
+            "value": 0,
+            "label": "振幅"
+          },
+          {
+            "op": "slider",
+            "name": "omega",
+            "min": 0.1,
+            "max": 5,
+            "step": 0.1,
+            "value": 2,
+            "label": "角频率"
+          },
+          {
+            "op": "slider",
+            "name": "t",
+            "min": 0,
+            "max": 6.28,
+            "step": 0.02,
+            "value": 0,
+            "label": "时间"
+          },
+          {
+            "op": "eval",
+            "cmd": "P = (A*cos(omega*t), 0)"
+          },
+          {
+            "op": "trace",
+            "target": "P",
+            "on": true
+          },
+          {
+            "op": "animate",
+            "target": "t",
+            "speed": 1,
+            "on": true,
+            "repeat": "increasing"
+          },
+          {
+            "op": "view",
+            "xmin": -6,
+            "xmax": 6,
+            "ymin": -2,
+            "ymax": 2
+          }
+        ]
+      }
+    }
+  ]
+}

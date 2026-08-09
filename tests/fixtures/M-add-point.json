@@ -1,0 +1,14 @@
+{
+  "explanation": "已在线段 AB 上创建中点 M 并标注。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "M = Midpoint(A, B)"
+    },
+    {
+      "op": "caption",
+      "target": "M",
+      "text": "M"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "explanation": "已暂停全部动画并立即恢复。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "StartAnimation(false)"
+    },
+    {
+      "op": "eval",
+      "cmd": "StartAnimation(true)"
+    }
+  ]
+}

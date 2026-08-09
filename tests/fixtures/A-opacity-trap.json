@@ -1,0 +1,10 @@
+{
+  "explanation": "已将对象 P 的透明度设为 0.5（50% 半透明）",
+  "commands": [
+    {
+      "op": "style",
+      "target": "P",
+      "opacity": 0.5
+    }
+  ]
+}

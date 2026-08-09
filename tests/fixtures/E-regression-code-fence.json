@@ -1,0 +1,16 @@
+{
+  "explanation": "绘制抛物线 y = x^2。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "f(x) = x^2"
+    },
+    {
+      "op": "view",
+      "xmin": -5,
+      "xmax": 5,
+      "ymin": -5,
+      "ymax": 10
+    }
+  ]
+}

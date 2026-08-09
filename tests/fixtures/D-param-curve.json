@@ -1,0 +1,39 @@
+{
+  "explanation": "已生成参数曲线 x=cos(3t), y=sin(2t)，滑块 t (0~2π) 控制曲线绘制长度及末端点 P。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 6.283185307179586,
+      "step": 0.01,
+      "value": 6.283185307179586
+    },
+    {
+      "op": "eval",
+      "cmd": "c = Curve(cos(3u), sin(2u), u, 0, t)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (cos(3t), sin(2t))"
+    },
+    {
+      "op": "style",
+      "target": "c",
+      "color": "#1e88e5",
+      "thickness": 3
+    },
+    {
+      "op": "style",
+      "target": "P",
+      "color": "#e53935"
+    },
+    {
+      "op": "view",
+      "xmin": -2,
+      "xmax": 2,
+      "ymin": -2,
+      "ymax": 2
+    }
+  ]
+}

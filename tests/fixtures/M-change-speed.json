@@ -1,0 +1,9 @@
+{
+  "explanation": "将 t 的动画速度设为 2 倍",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "SetAnimationSpeed(t, 2)"
+    }
+  ]
+}

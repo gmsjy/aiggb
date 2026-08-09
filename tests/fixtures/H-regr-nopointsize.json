@@ -1,0 +1,18 @@
+{
+  "explanation": "在三维空间标记点 (1,2,3)，用红色小球使其显眼。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "P=(1,2,3)"
+    },
+    {
+      "op": "eval",
+      "cmd": "marker=Sphere(P,0.4)"
+    },
+    {
+      "op": "style",
+      "target": "marker",
+      "color": "#E91E63"
+    }
+  ]
+}

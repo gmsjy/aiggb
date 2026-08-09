@@ -1,0 +1,107 @@
+{
+  "explanation": "电子在均匀磁场B中作等距螺旋运动：v∥匀速沿B，v⊥匀速圆周；物理尺度极小，坐标整体放大4e5倍显示。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "mElec = 9.109e-31"
+    },
+    {
+      "op": "eval",
+      "cmd": "eCharge = 1.602e-19"
+    },
+    {
+      "op": "eval",
+      "cmd": "speedMag = 100000"
+    },
+    {
+      "op": "eval",
+      "cmd": "bMag = 1"
+    },
+    {
+      "op": "eval",
+      "cmd": "theta0 = pi/6"
+    },
+    {
+      "op": "eval",
+      "cmd": "speedPerp = speedMag*sin(theta0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "speedPar = speedMag*cos(theta0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "omega = eCharge*bMag/mElec"
+    },
+    {
+      "op": "eval",
+      "cmd": "rad = speedPerp/omega"
+    },
+    {
+      "op": "eval",
+      "cmd": "period = 2*pi/omega"
+    },
+    {
+      "op": "eval",
+      "cmd": "tmax = 4*period"
+    },
+    {
+      "op": "eval",
+      "cmd": "scale = 400000"
+    },
+    {
+      "op": "eval",
+      "cmd": "helix = Curve(scale*rad*cos(omega*t), -scale*rad*sin(omega*t), scale*speedPar*t, t, 0, tmax)"
+    },
+    {
+      "op": "slider",
+      "name": "time",
+      "min": 0,
+      "max": 1.43e-10,
+      "step": 1e-13,
+      "value": 0
+    },
+    {
+      "op": "eval",
+      "cmd": "P = helix(time)"
+    },
+    {
+      "op": "eval",
+      "cmd": "marker = Sphere(P, 0.2*scale*rad)"
+    },
+    {
+      "op": "vector",
+      "name": "Bvec",
+      "from": "(0,0,0)",
+      "to": "(0,0,1.5)",
+      "color": "#4CAF50",
+      "label": "B"
+    },
+    {
+      "op": "style",
+      "target": "helix",
+      "color": "#FF5722",
+      "thickness": 3
+    },
+    {
+      "op": "style",
+      "target": "marker",
+      "color": "#E91E63",
+      "opacity": 0.8
+    },
+    {
+      "op": "animate",
+      "target": "time",
+      "speed": 0.3,
+      "on": true,
+      "repeat": "increasing"
+    },
+    {
+      "op": "view",
+      "xmin": -0.5,
+      "xmax": 0.5,
+      "ymin": -0.5,
+      "ymax": 0.5
+    }
+  ]
+}

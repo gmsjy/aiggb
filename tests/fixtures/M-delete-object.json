@@ -1,0 +1,9 @@
+{
+  "explanation": "已删除辅助点 P",
+  "commands": [
+    {
+      "op": "delete",
+      "target": "P"
+    }
+  ]
+}

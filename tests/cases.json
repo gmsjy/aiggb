@@ -1,0 +1,1077 @@
+{
+  "meta": {
+    "version": "2.0",
+    "date": "2026-06-29",
+    "description": "AiGGB 测试用例 — 36 条，8 类，覆盖所有已知漂移模式",
+    "targetPassRate": 95
+  },
+  "cases": [
+    {
+      "id": "S-circle",
+      "category": "static",
+      "description": "过三点画外接圆并标圆心",
+      "input": "过三点 (0,0) (3,0) (1,2) 画外接圆并标出圆心",
+      "domain": "general",
+      "expected": {
+        "mustContainCommands": [
+          "Circle"
+        ],
+        "mustNotContainCommands": [
+          "DSolve",
+          "VectorField"
+        ],
+        "commandCount": {
+          "min": 3,
+          "max": 30
+        },
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "S-sinkx",
+      "category": "static",
+      "description": "正弦函数族 + 滑块",
+      "input": "画 y = sin(k·x)，k 用滑块从 1 到 5",
+      "domain": "general",
+      "expected": {
+        "mustContainCommands": [
+          "Slider"
+        ],
+        "mustHaveOps": [
+          "slider"
+        ],
+        "commandCount": {
+          "min": 2,
+          "max": 20
+        },
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "S-polygon",
+      "category": "static",
+      "description": "多边形构造",
+      "input": "画一个以 A(0,0) B(4,0) C(2,3) 为顶点的三角形",
+      "domain": "general",
+      "expected": {
+        "mustContainCommands": [
+          "Polygon"
+        ],
+        "mustNotContainCommands": [
+          "Segment"
+        ],
+        "commandCount": {
+          "min": 3,
+          "max": 10
+        },
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "S-ellipse",
+      "category": "static",
+      "description": "椭圆从焦点构造",
+      "input": "画一个以 (0,1) (0,-1) 为焦点、经过 (2,0) 的椭圆",
+      "domain": "general",
+      "expected": {
+        "mustContainCommands": [
+          "Ellipse"
+        ],
+        "commandCount": {
+          "min": 3,
+          "max": 16
+        },
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "D-cycloid",
+      "category": "dynamic",
+      "description": "摆线动画",
+      "input": "演示摆线：圆沿 x 轴滚动，画出圆周一点轨迹",
+      "domain": "general",
+      "expected": {
+        "mustHaveOps": [
+          "slider",
+          "animate"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 5,
+          "max": 30
+        }
+      }
+    },
+    {
+      "id": "D-rotation",
+      "category": "dynamic",
+      "description": "旋转变换动画",
+      "input": "画一个点绕 O(0,0) 匀速旋转，角速度可调，留下轨迹",
+      "domain": "general",
+      "expected": {
+        "mustHaveOps": [
+          "slider",
+          "animate"
+        ],
+        "mustContainPatterns": [
+          "SetTrace|physicsTrace|trace"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 5,
+          "max": 30
+        }
+      }
+    },
+    {
+      "id": "D-locus",
+      "category": "dynamic",
+      "description": "Locus 轨迹",
+      "input": "一个圆上的一点 P 随滑块 t 运动，画出 P 的轨迹",
+      "domain": "general",
+      "expected": {
+        "mustHaveOps": [
+          "slider"
+        ],
+        "mustContainCommands": [
+          "Circle"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 4,
+          "max": 20
+        },
+        "mustContainPatterns": [
+          "Locus|trace"
+        ]
+      }
+    },
+    {
+      "id": "D-param-curve",
+      "category": "dynamic",
+      "description": "参数曲线+动画",
+      "input": "曲线 x=cos(3t) y=sin(2t)，t 从 0 到 2π 用滑块控制",
+      "domain": "general",
+      "expected": {
+        "mustHaveOps": [
+          "slider"
+        ],
+        "mustContainCommands": [
+          "Curve"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 3,
+          "max": 15
+        }
+      }
+    },
+    {
+      "id": "P-projectile",
+      "category": "physics",
+      "description": "斜抛运动",
+      "input": "斜抛运动 v0=20 m/s 仰角 45°",
+      "domain": "physics",
+      "expected": {
+        "mustHaveOps": [
+          "slider",
+          "vector",
+          "physicsTrace",
+          "animate"
+        ],
+        "mustContainConstants": [
+          "g"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 8,
+          "max": 30
+        }
+      }
+    },
+    {
+      "id": "P-pendulum",
+      "category": "physics",
+      "description": "单摆",
+      "input": "长 1 m 的单摆，初角 30°",
+      "domain": "physics",
+      "expected": {
+        "mustHaveOps": [
+          "slider",
+          "animate"
+        ],
+        "mustContainConstants": [
+          "g"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "P-incline",
+      "category": "physics",
+      "description": "斜面受力分析",
+      "input": "30° 斜面上 2 kg 物块的受力分析图",
+      "domain": "physics",
+      "expected": {
+        "mustHaveOps": [
+          "forceDiagram",
+          "slider"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 5,
+          "max": 30
+        }
+      }
+    },
+    {
+      "id": "P-spring",
+      "category": "physics",
+      "description": "弹簧振子",
+      "input": "水平弹簧振子：k=10 N/m m=1 kg A=1，画出振动",
+      "domain": "physics",
+      "expected": {
+        "mustHaveOps": [
+          "slider",
+          "animate"
+        ],
+        "mustContainPatterns": [
+          "SetTrace|physicsTrace|trace"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 5,
+          "max": 30
+        }
+      }
+    },
+    {
+      "id": "P-wave",
+      "category": "physics",
+      "description": "横波传播",
+      "input": "横波 y=A·sin(kx-ωt)，A/k/ω 可调，演示传播",
+      "domain": "physics",
+      "expected": {
+        "mustHaveOps": [
+          "slider",
+          "animate"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 5,
+          "max": 30
+        }
+      }
+    },
+    {
+      "id": "M-color-undo",
+      "category": "modify",
+      "description": "修改颜色为红色虚线",
+      "input": "把刚才的圆改成红色虚线",
+      "domain": "general",
+      "context": {
+        "existingObjects": [
+          "A",
+          "B",
+          "C",
+          "circ"
+        ]
+      },
+      "expected": {
+        "mustHaveOps": [
+          "style"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 1,
+          "max": 5
+        }
+      }
+    },
+    {
+      "id": "M-add-point",
+      "category": "modify",
+      "description": "给已有线段添加中点",
+      "input": "在线段 AB 上添加中点 M 并标注",
+      "domain": "general",
+      "context": {
+        "existingObjects": [
+          "A",
+          "B",
+          "s"
+        ]
+      },
+      "expected": {
+        "mustContainCommands": [
+          "Midpoint"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 2,
+          "max": 8
+        }
+      }
+    },
+    {
+      "id": "M-change-speed",
+      "category": "modify",
+      "description": "修改动画速度",
+      "input": "把 t 的动画速度改成 2 倍",
+      "domain": "general",
+      "context": {
+        "existingObjects": [
+          "t",
+          "P"
+        ]
+      },
+      "expected": {
+        "mustHaveOps": [
+          "animate"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "M-delete-object",
+      "category": "modify",
+      "description": "删除一个对象",
+      "input": "删除辅助点 P",
+      "domain": "general",
+      "context": {
+        "existingObjects": [
+          "P",
+          "A",
+          "B",
+          "c"
+        ]
+      },
+      "expected": {
+        "mustHaveOps": [
+          "delete"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "F-ambiguous-radius",
+      "category": "clarify",
+      "description": "画圆未指定半径",
+      "input": "画个圆",
+      "domain": "general",
+      "expected": {
+        "containsAsk": true
+      }
+    },
+    {
+      "id": "F-ambiguous-speed",
+      "category": "clarify",
+      "description": "画运动点未指定速度",
+      "input": "画一个运动的点",
+      "domain": "physics",
+      "expected": {
+        "containsAsk": true
+      }
+    },
+    {
+      "id": "F-ambiguous-function",
+      "category": "clarify",
+      "description": "画函数未指定表达式",
+      "input": "画一个函数的图像",
+      "domain": "general",
+      "expected": {
+        "containsAsk": true
+      }
+    },
+    {
+      "id": "E-regression-point-plus-point",
+      "category": "regression",
+      "description": "禁止 Gvec=Point 后 block+Gvec",
+      "input": "在 block 点画一个竖直向下的重力矢量",
+      "domain": "physics",
+      "context": {
+        "existingObjects": [
+          "block",
+          "m",
+          "g"
+        ]
+      },
+      "expected": {
+        "mustNotPatterns": [
+          "(?<=\\n)\\s*\\w+\\s*=\\s*\\([^)]*\\)[^\\n]*\\n[^\\n]*Vector\\([^,]+,\\s*[^+]+\\+\\s*\\w+\\s*\\)"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "E-regression-sequence-list",
+      "category": "regression",
+      "description": "禁止 Sequence(var,list) 简写",
+      "input": "在 -3 到 3 的整数坐标点上画一组点",
+      "domain": "general",
+      "expected": {
+        "mustNotPatterns": [
+          "Sequence\\(\\s*\\w+\\s*,\\s*\\w+\\s*\\)\\s*$"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "E-regression-nsolve-2d",
+      "category": "regression",
+      "description": "电场用矢量网格非 NSolveODE",
+      "input": "两个点电荷的电场示意",
+      "domain": "physics",
+      "expected": {
+        "mustNotContainCommands": [
+          "NSolveODE",
+          "VectorField",
+          "StreamPlot"
+        ],
+        "mustContainPatterns": [
+          "Sequence\\(Sequence\\(Vector"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "E-regression-format-string-number",
+      "category": "regression",
+      "description": "数值字段不能写成字符串",
+      "input": "画振幅 2 的简谐振动",
+      "domain": "physics",
+      "expected": {
+        "schemaValid": true,
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "E-regression-denominator-zero",
+      "category": "regression",
+      "description": "分母必须含 epsilon 防护",
+      "input": "画点电荷周围的等势点",
+      "domain": "physics",
+      "expected": {
+        "mustNotPatterns": [
+          "\\(\\s*\\(\\s*\\w+\\s*-\\s*\\w+\\s*\\)\\s*\\^\\s*2\\s*\\+\\s*\\w+\\s*\\^\\s*2\\s*\\)\\s*\\^\\s*1\\.?5(?![^)]*\\+\\s*0\\.0)"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "E-regression-naming-v",
+      "category": "regression",
+      "description": "禁止 v 作标量（GGB 默认识别为 Vector）",
+      "input": "画出速度大小为 5 的质点运动",
+      "domain": "physics",
+      "expected": {
+        "mustNotPatterns": [
+          "^(?![\\s]*\\/\\/)\\s*v\\s*=\\s*(?![Vv]ector\\()[^Vv]"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "E-regression-naming-A",
+      "category": "regression",
+      "description": "禁止大写 A 作数值",
+      "input": "振幅为 2 的简谐运动",
+      "domain": "physics",
+      "expected": {
+        "mustNotPatterns": [
+          "\\bA\\s*=\\s*\\d"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 4,
+          "max": 25
+        }
+      }
+    },
+    {
+      "id": "E-regression-code-fence",
+      "category": "regression",
+      "description": "响应不应含 Markdown 代码块",
+      "input": "画 y = x^2",
+      "domain": "general",
+      "expected": {
+        "schemaValid": true,
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "E-regression-anonymous-segment",
+      "category": "regression",
+      "description": "禁止匿名 Segment((x1,y1),(x2,y2))",
+      "input": "画一条从原点到 (3,4) 的线段",
+      "domain": "general",
+      "expected": {
+        "mustContainCommands": [
+          "Segment"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "B-setlineopacity",
+      "category": "boundary",
+      "description": "SetLineOpacity 透明度",
+      "input": "画一个半透明的圆，透明度 50%",
+      "domain": "general",
+      "expected": {
+        "mustNotContainCommands": [
+          "SetOpacity",
+          "SetTransparency"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "B-blacklist-violation",
+      "category": "boundary",
+      "description": "禁止假命令 PauseAnimation",
+      "input": "暂停动画然后恢复",
+      "domain": "general",
+      "expected": {
+        "mustNotContainCommands": [
+          "PauseAnimation",
+          "StopAnimation",
+          "Animate"
+        ]
+      }
+    },
+    {
+      "id": "B-3d-surface",
+      "category": "boundary",
+      "description": "3D 曲面命令",
+      "input": "画参数曲面 z=x^2+y^2",
+      "domain": "general",
+      "expected": {
+        "mustContainCommands": [
+          "Surface"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 1,
+          "max": 20
+        }
+      }
+    },
+    {
+      "id": "B-nested-sequence",
+      "category": "boundary",
+      "description": "嵌套 Sequence 语法正确",
+      "input": "画 5×5 的点阵",
+      "domain": "general",
+      "expected": {
+        "mustContainCommands": [
+          "Sequence"
+        ],
+        "mustContainPatterns": [
+          "Sequence\\(Sequence\\("
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "C-multi-turn",
+      "category": "context",
+      "description": "第二轮引用第一轮对象",
+      "input": "把圆的颜色改成蓝色",
+      "domain": "general",
+      "context": {
+        "existingObjects": [
+          "A",
+          "B",
+          "c"
+        ]
+      },
+      "expected": {
+        "mustHaveOps": [
+          "style"
+        ],
+        "mustReferenceExisting": true
+      }
+    },
+    {
+      "id": "C-multi-modify",
+      "category": "context",
+      "description": "三轮连续修改",
+      "input": "把红线改成蓝色，透明度改为 0.3",
+      "domain": "general",
+      "context": {
+        "existingObjects": [
+          "A",
+          "B",
+          "s",
+          "M"
+        ]
+      },
+      "expected": {
+        "mustHaveOps": [
+          "style"
+        ],
+        "mustReferenceExisting": true,
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "A-stop-animation",
+      "category": "adversarial",
+      "description": "禁止 StopAnimation/PauseAnimation",
+      "input": "停止动画",
+      "domain": "general",
+      "expected": {
+        "mustNotContainCommands": [
+          "StopAnimation",
+          "PauseAnimation",
+          "ResumeAnimation"
+        ]
+      }
+    },
+    {
+      "id": "A-export-gif",
+      "category": "adversarial",
+      "description": "禁止虚构 ExportGIF",
+      "input": "导出动画为 GIF",
+      "domain": "general",
+      "expected": {
+        "mustNotContainCommands": [
+          "ExportGIF"
+        ]
+      }
+    },
+    {
+      "id": "A-opacity-trap",
+      "category": "adversarial",
+      "description": "SetOpacity 陷阱",
+      "input": "把这个对象改成透明度 0.5",
+      "domain": "general",
+      "context": {
+        "existingObjects": [
+          "P"
+        ]
+      },
+      "expected": {
+        "mustNotContainCommands": [
+          "SetOpacity",
+          "SetTransparency"
+        ]
+      }
+    },
+    {
+      "id": "E-edge-very-fast",
+      "category": "edge",
+      "description": "大数值参数",
+      "input": "初速度 1000 m/s 仰角 80°的抛体",
+      "domain": "physics",
+      "expected": {
+        "mustHaveOps": [
+          "slider"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 5,
+          "max": 30
+        }
+      }
+    },
+    {
+      "id": "E-edge-empty",
+      "category": "edge",
+      "description": "极度模糊输入",
+      "input": "画",
+      "domain": "general",
+      "expected": {
+        "containsAsk": true
+      }
+    },
+    {
+      "id": "E-edge-negative",
+      "category": "edge",
+      "description": "负半径的圆",
+      "input": "画一个半径 -2 的圆",
+      "domain": "general",
+      "expected": {
+        "mustHaveOps": [
+          "slider"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "X-composite-pendulums",
+      "category": "composite",
+      "description": "两个不同长度单摆",
+      "input": "画两个单摆：一个摆长 1 m 另一个摆长 0.5 m",
+      "domain": "physics",
+      "expected": {
+        "mustHaveOps": [
+          "slider",
+          "animate"
+        ],
+        "mustContainConstants": [
+          "g"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 8,
+          "max": 40
+        }
+      }
+    },
+    {
+      "id": "X-composite-compare",
+      "category": "composite",
+      "description": "两角度斜抛对比",
+      "input": "同时画 30°和 60°的斜抛轨迹，v0 都是 20",
+      "domain": "physics",
+      "expected": {
+        "mustHaveOps": [
+          "slider",
+          "animate"
+        ],
+        "mustContainConstants": [
+          "g"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 8,
+          "max": 40
+        }
+      }
+    },
+    {
+      "id": "X-field-particle",
+      "category": "composite",
+      "description": "场+运动复合",
+      "input": "正电荷在均匀磁场中做圆周运动",
+      "domain": "physics",
+      "expected": {
+        "mustHaveOps": [
+          "slider",
+          "animate"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 5,
+          "max": 30
+        }
+      }
+    },
+    {
+      "id": "L-casual-chinese",
+      "category": "language",
+      "description": "口语化中文触发物理模式",
+      "input": "来个斜抛吧，初速 20 角度 45",
+      "domain": "physics",
+      "expected": {
+        "mustHaveOps": [
+          "slider",
+          "animate"
+        ],
+        "mustContainConstants": [
+          "g"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "L-homework-style",
+      "category": "language",
+      "description": "作业风格长文本",
+      "input": "帮我画一道几何题：已知三角形ABC中，AB=3，BC=4，CA=5，画出这个三角形并标注边长",
+      "domain": "general",
+      "expected": {
+        "mustContainCommands": [
+          "Segment",
+          "Polygon"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 4,
+          "max": 20
+        }
+      }
+    },
+    {
+      "id": "L-mixed-lang",
+      "category": "language",
+      "description": "中英混合",
+      "input": "画一个 sin wave 振幅 amplitude=2 频率 frequency=3",
+      "domain": "general",
+      "expected": {
+        "mustContainCommands": [
+          "Slider"
+        ],
+        "mustHaveOps": [
+          "slider"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "N-very-small",
+      "category": "numeric",
+      "description": "极小数值",
+      "input": "画一个半径为 0.001 的圆",
+      "domain": "general",
+      "expected": {
+        "mustContainCommands": [
+          "Circle"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "N-zero-value",
+      "category": "numeric",
+      "description": "零值边界",
+      "input": "振幅设为 0 的简谐运动",
+      "domain": "physics",
+      "expected": {
+        "mustHaveOps": [
+          "slider"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "H-cube-section",
+      "category": "highschool",
+      "description": "正方体截面",
+      "input": "画边长为 3 的正方体，显示平面 ACF 截正方体的截面",
+      "domain": "highschool",
+      "expected": {
+        "mustContainCommands": [
+          "Cube",
+          "IntersectPath",
+          "Plane"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 8,
+          "max": 30
+        }
+      }
+    },
+    {
+      "id": "H-cylinder-net",
+      "category": "highschool",
+      "description": "圆柱展开图",
+      "input": "画一个底面半径 2 高 5 的圆柱，显示侧面展开图",
+      "domain": "highschool",
+      "expected": {
+        "mustContainCommands": [
+          "Cylinder",
+          "Net"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 4,
+          "max": 20
+        }
+      }
+    },
+    {
+      "id": "H-sphere-volume",
+      "category": "highschool",
+      "description": "球体体积",
+      "input": "画一个半径为 3 的球，标注体积",
+      "domain": "highschool",
+      "expected": {
+        "mustContainCommands": [
+          "Sphere",
+          "Volume"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 3,
+          "max": 15
+        }
+      }
+    },
+    {
+      "id": "H-spatial-vector",
+      "category": "highschool",
+      "description": "空间向量",
+      "input": "画从 (0,0,0) 到 (2,3,4) 的空间向量并显示分量虚线",
+      "domain": "highschool",
+      "expected": {
+        "mustContainCommands": [
+          "Vector",
+          "Segment"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 4,
+          "max": 20
+        }
+      }
+    },
+    {
+      "id": "H-helix",
+      "category": "highschool",
+      "description": "螺旋运动",
+      "input": "电子以 v0=1e5 m/s 与 B=1T 成 30° 射入，画三维螺旋轨迹",
+      "domain": "highschool",
+      "expected": {
+        "mustContainCommands": [
+          "Curve",
+          "Sphere",
+          "Vector"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 8,
+          "max": 35
+        }
+      }
+    },
+    {
+      "id": "H-pyramid",
+      "category": "highschool",
+      "description": "棱锥体积",
+      "input": "画底面边长 4 的正四棱锥，高为 5",
+      "domain": "highschool",
+      "expected": {
+        "mustContainCommands": [
+          "Pyramid",
+          "Polygon"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 4,
+          "max": 20
+        }
+      }
+    },
+    {
+      "id": "H-cross-product",
+      "category": "highschool",
+      "description": "叉乘/法向量",
+      "input": "画两个空间向量 (1,0,0) 和 (0,1,0)，显示它们的叉乘结果",
+      "domain": "highschool",
+      "expected": {
+        "mustContainCommands": [
+          "Cross",
+          "Vector"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 4,
+          "max": 20
+        }
+      }
+    },
+    {
+      "id": "H-tetrahedron",
+      "category": "highschool",
+      "description": "正四面体",
+      "input": "画边长为 3 的正四面体",
+      "domain": "highschool",
+      "expected": {
+        "mustContainCommands": [
+          "Tetrahedron"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 2,
+          "max": 15
+        }
+      }
+    },
+    {
+      "id": "H-regr-setcolor-int",
+      "category": "highschool",
+      "description": "3D回归：SetColor RGB 必须是 0-255 整数",
+      "input": "画一个红色球体",
+      "domain": "highschool",
+      "expected": {
+        "mustContainCommands": [
+          "Sphere"
+        ],
+        "mustNotPatterns": [
+          "SetColor\\([^)]*\\b\\d\\.\\d+\\b"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "H-regr-nofilling",
+      "category": "highschool",
+      "description": "3D回归：禁止 SetFilling 在 3D 立体上",
+      "input": "画一个半透明的正方体",
+      "domain": "highschool",
+      "expected": {
+        "mustNotContainCommands": [
+          "SetFilling"
+        ],
+        "mustHaveOps": [
+          "style"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "H-regr-nopointsize",
+      "category": "highschool",
+      "description": "3D回归：禁止 SetPointSize",
+      "input": "在空间中标记一个显眼的点 (1,2,3)",
+      "domain": "highschool",
+      "expected": {
+        "mustNotContainCommands": [
+          "SetPointSize"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "H-regr-noaxesratio",
+      "category": "highschool",
+      "description": "3D回归：禁止 SetAxesRatio",
+      "input": "画一个正方体并保持坐标轴等比例",
+      "domain": "highschool",
+      "expected": {
+        "mustNotContainCommands": [
+          "SetAxesRatio"
+        ],
+        "executeSuccessRate": 1
+      }
+    },
+    {
+      "id": "H-regr-predeclare",
+      "category": "highschool",
+      "description": "3D回归：必须先声明顶点再构造几何体",
+      "input": "画底面为正方形的正四棱柱，底面边长 3，高 5",
+      "domain": "highschool",
+      "expected": {
+        "mustContainCommands": [
+          "Prism",
+          "Polygon"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 6,
+          "max": 25
+        }
+      }
+    },
+    {
+      "id": "H-regr-no-setview",
+      "category": "highschool",
+      "description": "3D回归：禁止 SetViewDirection",
+      "input": "画一个圆柱然后调整视角",
+      "domain": "highschool",
+      "expected": {
+        "mustNotContainCommands": [
+          "SetViewDirection"
+        ],
+        "executeSuccessRate": 1,
+        "commandCount": {
+          "min": 3,
+          "max": 15
+        }
+      }
+    }
+  ]
+}

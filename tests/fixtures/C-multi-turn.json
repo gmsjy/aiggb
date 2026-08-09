@@ -1,0 +1,10 @@
+{
+  "explanation": "已将圆 c 设为蓝色。",
+  "commands": [
+    {
+      "op": "style",
+      "target": "c",
+      "color": "#0000FF"
+    }
+  ]
+}

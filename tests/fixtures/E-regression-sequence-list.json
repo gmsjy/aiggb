@@ -1,0 +1,26 @@
+{
+  "explanation": "生成从 -3 到 3 的所有整数坐标点（7×7 网格），并调整视图范围。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "pts = Sequence(Sequence((i, j), i, -3, 3), j, -3, 3)"
+    },
+    {
+      "op": "eval",
+      "cmd": "ptsFlat = Flatten(pts)"
+    },
+    {
+      "op": "style",
+      "target": "ptsFlat",
+      "color": "#1565C0",
+      "visible": true
+    },
+    {
+      "op": "view",
+      "xmin": -4.5,
+      "xmax": 4.5,
+      "ymin": -4.5,
+      "ymax": 4.5
+    }
+  ]
+}

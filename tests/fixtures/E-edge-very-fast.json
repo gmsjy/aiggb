@@ -1,0 +1,97 @@
+{
+  "explanation": "初速度1000 m/s、仰角80°的抛体运动：滑块可调初速/仰角/时间，动态显示轨迹与速度矢量。",
+  "commands": [
+    {
+      "op": "constants",
+      "names": [
+        "g"
+      ]
+    },
+    {
+      "op": "slider",
+      "name": "v0",
+      "min": 500,
+      "max": 1500,
+      "step": 10,
+      "value": 1000,
+      "unit": "m/s",
+      "label": "初速度"
+    },
+    {
+      "op": "slider",
+      "name": "thetaDeg",
+      "min": 0,
+      "max": 90,
+      "step": 1,
+      "value": 80,
+      "unit": "°",
+      "label": "仰角"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 400,
+      "step": 0.1,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "eval",
+      "cmd": "theta = thetaDeg * pi / 180"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (v0*cos(theta)*t, v0*sin(theta)*t - 0.5*g*t^2)"
+    },
+    {
+      "op": "eval",
+      "cmd": "vx = v0*cos(theta)"
+    },
+    {
+      "op": "eval",
+      "cmd": "vy = v0*sin(theta) - g*t"
+    },
+    {
+      "op": "eval",
+      "cmd": "vScale = 10"
+    },
+    {
+      "op": "eval",
+      "cmd": "Ptip = P + (vScale*vx, vScale*vy)"
+    },
+    {
+      "op": "vector",
+      "name": "vArrow",
+      "from": "P",
+      "to": "Ptip",
+      "color": "#43a047",
+      "label": "v"
+    },
+    {
+      "op": "physicsTrace",
+      "target": "P",
+      "mode": "trail"
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m"
+    },
+    {
+      "op": "view",
+      "xmin": -10000,
+      "xmax": 90000,
+      "ymin": -10000,
+      "ymax": 125000
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 5,
+      "on": true,
+      "repeat": "increasing"
+    }
+  ]
+}

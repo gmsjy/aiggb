@@ -1,0 +1,19 @@
+{
+  "explanation": "圆半径 -2 无几何意义，取其绝对值 2 作默认半径，并添加滑动条以便调节。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "r",
+      "min": 0,
+      "max": 5,
+      "step": 0.1,
+      "value": 2,
+      "unit": "",
+      "label": "半径"
+    },
+    {
+      "op": "eval",
+      "cmd": "c = Circle((0,0), r)"
+    }
+  ]
+}

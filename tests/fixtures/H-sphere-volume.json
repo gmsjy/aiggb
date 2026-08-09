@@ -1,0 +1,23 @@
+{
+  "explanation": "已创建半径3的球体并标注体积",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "sph = Sphere((0,0,0),3)"
+    },
+    {
+      "op": "style",
+      "target": "sph",
+      "color": "#90CAF9",
+      "opacity": 0.3
+    },
+    {
+      "op": "eval",
+      "cmd": "vol = Volume(sph)"
+    },
+    {
+      "op": "eval",
+      "cmd": "txt = Text(\"体积 = \" + vol, (0,0,5))"
+    }
+  ]
+}

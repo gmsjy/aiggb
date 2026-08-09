@@ -1,0 +1,89 @@
+{
+  "explanation": "斜抛运动：v0=20 m/s，仰角45°，用滑块调节初速、仰角和时间，轨迹拖尾显示速度矢量。",
+  "commands": [
+    {
+      "op": "constants",
+      "names": [
+        "g"
+      ]
+    },
+    {
+      "op": "slider",
+      "name": "v0",
+      "min": 1,
+      "max": 50,
+      "step": 1,
+      "value": 20,
+      "unit": "m/s",
+      "label": "初速"
+    },
+    {
+      "op": "slider",
+      "name": "theta",
+      "min": 0,
+      "max": 1.5708,
+      "step": 0.01,
+      "value": 0.785,
+      "unit": "rad",
+      "label": "仰角"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 5,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (v0*cos(theta)*t, v0*sin(theta)*t - 0.5*g*t^2)"
+    },
+    {
+      "op": "eval",
+      "cmd": "vx = v0*cos(theta)"
+    },
+    {
+      "op": "eval",
+      "cmd": "vy = v0*sin(theta) - g*t"
+    },
+    {
+      "op": "eval",
+      "cmd": "Ptip = P + (vx/5, vy/5)"
+    },
+    {
+      "op": "vector",
+      "name": "vArrow",
+      "from": "P",
+      "to": "Ptip",
+      "color": "#43a047",
+      "label": "v"
+    },
+    {
+      "op": "physicsTrace",
+      "target": "P",
+      "mode": "trail"
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m"
+    },
+    {
+      "op": "view",
+      "xmin": -2,
+      "xmax": 50,
+      "ymin": -2,
+      "ymax": 20
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 0.5,
+      "on": true,
+      "repeat": "increasing"
+    }
+  ]
+}

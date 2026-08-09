@@ -1,0 +1,33 @@
+{
+  "explanation": "从原点 (0,0) 到点 (3,4) 画一条线段，并添加滑块以便调整终点横坐标。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "xB",
+      "min": 0,
+      "max": 6,
+      "step": 0.1,
+      "value": 3,
+      "label": "B点横坐标"
+    },
+    {
+      "op": "eval",
+      "cmd": "A = (0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B = (xB,4)"
+    },
+    {
+      "op": "eval",
+      "cmd": "seg = Segment(A,B)"
+    },
+    {
+      "op": "view",
+      "xmin": -1,
+      "xmax": 7,
+      "ymin": -1,
+      "ymax": 5
+    }
+  ]
+}

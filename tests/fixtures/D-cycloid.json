@@ -1,0 +1,97 @@
+{
+  "explanation": "生成摆线演示：圆沿x轴滚动，圆上一点P的轨迹为摆线，可用滑块调节半径r和滚动角度θ。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "r",
+      "min": 0.5,
+      "max": 3,
+      "step": 0.1,
+      "value": 1,
+      "label": "半径 r"
+    },
+    {
+      "op": "slider",
+      "name": "theta",
+      "min": 0,
+      "max": 12.56637,
+      "step": 0.01,
+      "value": 0.01,
+      "label": "滚动角度 θ"
+    },
+    {
+      "op": "eval",
+      "cmd": "C = (r*theta, r)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (r*(theta - sin(theta)), r*(1 - cos(theta)))"
+    },
+    {
+      "op": "eval",
+      "cmd": "contact = (r*theta, 0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "rollingCircle = Circle(C, r)"
+    },
+    {
+      "op": "eval",
+      "cmd": "radiusToP = Segment(C, P)"
+    },
+    {
+      "op": "eval",
+      "cmd": "radiusToContact = Segment(C, contact)"
+    },
+    {
+      "op": "eval",
+      "cmd": "cycloid = Curve(r*(t - sin(t)), r*(1 - cos(t)), t, 0, theta)"
+    },
+    {
+      "op": "animate",
+      "target": "theta",
+      "speed": 1,
+      "on": true,
+      "repeat": "increasing"
+    },
+    {
+      "op": "eval",
+      "cmd": "SetPointSize(P, 5)"
+    },
+    {
+      "op": "eval",
+      "cmd": "SetPointSize(contact, 3)"
+    },
+    {
+      "op": "style",
+      "target": "cycloid",
+      "color": "#e53935",
+      "thickness": 3
+    },
+    {
+      "op": "style",
+      "target": "rollingCircle",
+      "color": "#1e88e5",
+      "thickness": 2
+    },
+    {
+      "op": "style",
+      "target": "P",
+      "color": "#fb8c00",
+      "visible": true
+    },
+    {
+      "op": "style",
+      "target": "contact",
+      "color": "#43a047",
+      "visible": true
+    },
+    {
+      "op": "view",
+      "xmin": -1,
+      "xmax": 15,
+      "ymin": -1,
+      "ymax": 4
+    }
+  ]
+}

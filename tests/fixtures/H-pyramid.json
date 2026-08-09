@@ -1,0 +1,79 @@
+{
+  "explanation": "构建底面边长与高可调的正四棱锥，底面中心在原点，可拖动滑块调整尺寸。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "s",
+      "min": 1,
+      "max": 8,
+      "step": 0.1,
+      "value": 4,
+      "label": "底面边长"
+    },
+    {
+      "op": "slider",
+      "name": "h",
+      "min": 1,
+      "max": 10,
+      "step": 0.1,
+      "value": 5,
+      "label": "高"
+    },
+    {
+      "op": "eval",
+      "cmd": "A=(-s/2,-s/2,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B=(s/2,-s/2,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "C=(s/2,s/2,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "D=(-s/2,s/2,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "base=Polygon(A,B,C,D)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P=(0,0,h)"
+    },
+    {
+      "op": "eval",
+      "cmd": "pyramid=Pyramid(base,P)"
+    },
+    {
+      "op": "style",
+      "target": "pyramid",
+      "color": "#90CAF9",
+      "opacity": 0.3
+    },
+    {
+      "op": "eval",
+      "cmd": "O=(0,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "heightLine=Segment(O,P)"
+    },
+    {
+      "op": "style",
+      "target": "heightLine",
+      "color": "#FF5722",
+      "thickness": 2,
+      "dashed": true
+    },
+    {
+      "op": "view",
+      "xmin": -6,
+      "xmax": 6,
+      "ymin": -6,
+      "ymax": 6
+    }
+  ]
+}

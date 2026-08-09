@@ -1,0 +1,85 @@
+{
+  "explanation": "已创建点 P 绕原点 O 匀速旋转，ω 与 r 可调，轨迹已开启。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "omega",
+      "min": 0.1,
+      "max": 3,
+      "step": 0.1,
+      "value": 1,
+      "label": "角速度 ω"
+    },
+    {
+      "op": "slider",
+      "name": "r",
+      "min": 0.5,
+      "max": 5,
+      "step": 0.5,
+      "value": 2,
+      "label": "半径 r"
+    },
+    {
+      "op": "slider",
+      "name": "time",
+      "min": 0,
+      "max": 100,
+      "step": 0.02,
+      "value": 0,
+      "label": "时间 t"
+    },
+    {
+      "op": "eval",
+      "cmd": "O = (0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (r*cos(omega*time), r*sin(omega*time))"
+    },
+    {
+      "op": "eval",
+      "cmd": "c = Circle(O, r)"
+    },
+    {
+      "op": "eval",
+      "cmd": "seg = Segment(O, P)"
+    },
+    {
+      "op": "animate",
+      "target": "time",
+      "speed": 1,
+      "on": true,
+      "repeat": "increasing"
+    },
+    {
+      "op": "trace",
+      "target": "P",
+      "on": true
+    },
+    {
+      "op": "style",
+      "target": "P",
+      "color": "#d32f2f"
+    },
+    {
+      "op": "style",
+      "target": "c",
+      "color": "#888888",
+      "opacity": 0.5,
+      "dashed": true
+    },
+    {
+      "op": "style",
+      "target": "seg",
+      "color": "#1565c0",
+      "thickness": 2
+    },
+    {
+      "op": "view",
+      "xmin": -6,
+      "xmax": 6,
+      "ymin": -6,
+      "ymax": 6
+    }
+  ]
+}

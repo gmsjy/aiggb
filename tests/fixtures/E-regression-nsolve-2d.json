@@ -1,0 +1,75 @@
+{
+  "explanation": "两个点电荷电场示意：默认偶极子±q，用滑块调控间距与电荷量，画电场矢量网格。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "d",
+      "min": 1,
+      "max": 4,
+      "step": 0.1,
+      "value": 2,
+      "unit": "m",
+      "label": "间距/2"
+    },
+    {
+      "op": "slider",
+      "name": "qmag",
+      "min": 1,
+      "max": 5,
+      "step": 0.5,
+      "value": 1,
+      "unit": "",
+      "label": "电荷量"
+    },
+    {
+      "op": "eval",
+      "cmd": "A=(d,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B=(-d,0)"
+    },
+    {
+      "op": "style",
+      "target": "A",
+      "color": "#e53935"
+    },
+    {
+      "op": "style",
+      "target": "B",
+      "color": "#1e88e5"
+    },
+    {
+      "op": "eval",
+      "cmd": "Ex(x,y)=qmag*(x-d)/((x-d)^2+y^2+0.01)^1.5 - qmag*(x+d)/((x+d)^2+y^2+0.01)^1.5"
+    },
+    {
+      "op": "eval",
+      "cmd": "Ey(x,y)=qmag*y/((x-d)^2+y^2+0.01)^1.5 - qmag*y/((x+d)^2+y^2+0.01)^1.5"
+    },
+    {
+      "op": "eval",
+      "cmd": "Emag(x,y)=sqrt(Ex(x,y)^2+Ey(x,y)^2+0.001)"
+    },
+    {
+      "op": "eval",
+      "cmd": "gridStep=0.4"
+    },
+    {
+      "op": "eval",
+      "cmd": "arrows=Sequence(Sequence(Vector((i,j),(i+gridStep*Ex(i,j)/Emag(i,j),j+gridStep*Ey(i,j)/Emag(i,j))),i,-4,4,1),j,-3,3,1)"
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m"
+    },
+    {
+      "op": "view",
+      "xmin": -5,
+      "xmax": 5,
+      "ymin": -4,
+      "ymax": 4
+    }
+  ]
+}

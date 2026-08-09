@@ -1,0 +1,52 @@
+{
+  "explanation": "创建底面边长为3、高为5的正四棱柱，底面正方形位于z=0平面。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "A=(0,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B=(3,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "C=(3,3,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "D=(0,3,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "E=(0,0,5)"
+    },
+    {
+      "op": "eval",
+      "cmd": "base=Polygon(A,B,C,D)"
+    },
+    {
+      "op": "eval",
+      "cmd": "prism=Prism(base,E)"
+    },
+    {
+      "op": "style",
+      "target": "prism",
+      "color": "#90CAF9",
+      "opacity": 0.3
+    },
+    {
+      "op": "style",
+      "target": "base",
+      "color": "#90CAF9",
+      "opacity": 0.3
+    },
+    {
+      "op": "view",
+      "xmin": -2,
+      "xmax": 5,
+      "ymin": -2,
+      "ymax": 5
+    }
+  ]
+}

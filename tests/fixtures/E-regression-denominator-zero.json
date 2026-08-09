@@ -1,0 +1,71 @@
+{
+  "explanation": "归一化单位下点电荷的等势线为同心圆。红色点为电荷，蓝色圆环为等势线，半径 r=kq/V。拖动滑块可调节电荷量与等势线数。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "q",
+      "min": 0.5,
+      "max": 5,
+      "step": 0.1,
+      "value": 2,
+      "unit": "",
+      "label": "电荷量 q"
+    },
+    {
+      "op": "slider",
+      "name": "n",
+      "min": 2,
+      "max": 10,
+      "step": 1,
+      "value": 5,
+      "label": "等势线数"
+    },
+    {
+      "op": "eval",
+      "cmd": "O = (0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "k = 1"
+    },
+    {
+      "op": "eval",
+      "cmd": "Vmin = 1"
+    },
+    {
+      "op": "eval",
+      "cmd": "Vmax = 5"
+    },
+    {
+      "op": "eval",
+      "cmd": "eqRings = Sequence(Circle(O, k*q/(Vmin + (i-1)*(Vmax-Vmin)/(n-1))), i, 1, n, 1)"
+    },
+    {
+      "op": "style",
+      "target": "O",
+      "color": "#e53935"
+    },
+    {
+      "op": "eval",
+      "cmd": "SetPointSize(O, 6)"
+    },
+    {
+      "op": "caption",
+      "target": "O",
+      "text": "q"
+    },
+    {
+      "op": "style",
+      "target": "eqRings",
+      "color": "#1e88e5",
+      "thickness": 2
+    },
+    {
+      "op": "view",
+      "xmin": -7,
+      "xmax": 7,
+      "ymin": -7,
+      "ymax": 7
+    }
+  ]
+}

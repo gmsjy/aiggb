@@ -1,0 +1,123 @@
+{
+  "explanation": "单摆：L=1m，θ0=30°，小角近似 θ=θ0cos(√(g/L)t)，含摆线、摆球、速度箭头与轨迹。",
+  "commands": [
+    {
+      "op": "constants",
+      "names": [
+        "g"
+      ]
+    },
+    {
+      "op": "slider",
+      "name": "L",
+      "min": 0.5,
+      "max": 2,
+      "step": 0.01,
+      "value": 1,
+      "unit": "m",
+      "label": "摆长"
+    },
+    {
+      "op": "slider",
+      "name": "theta0",
+      "min": 0,
+      "max": 1.57,
+      "step": 0.01,
+      "value": 0.5236,
+      "unit": "rad",
+      "label": "初角"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 10,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "eval",
+      "cmd": "O = (0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "omega0 = sqrt(g/L)"
+    },
+    {
+      "op": "eval",
+      "cmd": "theta = theta0*cos(omega0*t)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = O + (L*sin(theta), -L*cos(theta))"
+    },
+    {
+      "op": "eval",
+      "cmd": "rod = Segment(O,P)"
+    },
+    {
+      "op": "eval",
+      "cmd": "bob = Circle(P, 0.04)"
+    },
+    {
+      "op": "eval",
+      "cmd": "dtheta = -theta0*omega0*sin(omega0*t)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Pv = P + (0.2*L*dtheta*cos(theta), 0.2*L*dtheta*sin(theta))"
+    },
+    {
+      "op": "vector",
+      "name": "velArrow",
+      "from": "P",
+      "to": "Pv",
+      "color": "#1e88e5",
+      "label": "v"
+    },
+    {
+      "op": "physicsTrace",
+      "target": "P",
+      "mode": "trail"
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m"
+    },
+    {
+      "op": "view",
+      "xmin": -1.5,
+      "xmax": 1.5,
+      "ymin": -1.5,
+      "ymax": 0.5
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 0.5,
+      "on": true,
+      "repeat": "increasing"
+    },
+    {
+      "op": "style",
+      "target": "rod",
+      "color": "#6d4c41",
+      "thickness": 3
+    },
+    {
+      "op": "style",
+      "target": "bob",
+      "color": "#e53935",
+      "thickness": 2
+    },
+    {
+      "op": "style",
+      "target": "O",
+      "color": "#000000",
+      "thickness": 2
+    }
+  ]
+}

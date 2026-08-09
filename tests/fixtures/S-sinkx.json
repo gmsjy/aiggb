@@ -1,0 +1,17 @@
+{
+  "explanation": "创建滑块 k (1~5)，并绘制函数 y = sin(k·x)，拖动滑块可观察周期变化。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "k",
+      "min": 1,
+      "max": 5,
+      "step": 0.1,
+      "value": 1
+    },
+    {
+      "op": "eval",
+      "cmd": "f(x)=sin(k*x)"
+    }
+  ]
+}

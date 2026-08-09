@@ -1,0 +1,34 @@
+{
+  "explanation": "以A、B为一条棱构造等边三角形底面，生成棱长为3的正四面体。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "A=(0,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B=(3,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "C=(1.5, 3*sqrt(3)/2, 0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "tetra = Tetrahedron(A, B, C)"
+    },
+    {
+      "op": "style",
+      "target": "tetra",
+      "color": "#90CAF9",
+      "opacity": 0.3
+    },
+    {
+      "op": "view",
+      "xmin": -2,
+      "xmax": 5,
+      "ymin": -2,
+      "ymax": 5
+    }
+  ]
+}

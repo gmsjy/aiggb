@@ -1,0 +1,100 @@
+{
+  "explanation": "横波演示：振幅A、波数k、角频率ω可调，波形随时间传播，x₀处质点上下振动。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "amp",
+      "min": 0.1,
+      "max": 3,
+      "step": 0.1,
+      "value": 1,
+      "label": "A"
+    },
+    {
+      "op": "slider",
+      "name": "k",
+      "min": 0.5,
+      "max": 5,
+      "step": 0.1,
+      "value": 1,
+      "label": "k"
+    },
+    {
+      "op": "slider",
+      "name": "omega",
+      "min": 0.5,
+      "max": 5,
+      "step": 0.1,
+      "value": 1,
+      "label": "ω"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 20,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "t"
+    },
+    {
+      "op": "slider",
+      "name": "x0",
+      "min": 0,
+      "max": 10,
+      "step": 0.1,
+      "value": 2,
+      "unit": "m",
+      "label": "x₀"
+    },
+    {
+      "op": "eval",
+      "cmd": "f(x) = amp*sin(k*x - omega*t)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Q = (x0, 0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (x0, f(x0))"
+    },
+    {
+      "op": "eval",
+      "cmd": "seg = Segment(Q, P)"
+    },
+    {
+      "op": "style",
+      "target": "f",
+      "color": "#1e88e5",
+      "thickness": 3
+    },
+    {
+      "op": "style",
+      "target": "seg",
+      "color": "#fb8c00",
+      "thickness": 2,
+      "dashed": true
+    },
+    {
+      "op": "trace",
+      "target": "P",
+      "on": true
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 0.5,
+      "on": true,
+      "repeat": "increasing"
+    },
+    {
+      "op": "view",
+      "xmin": -1,
+      "xmax": 13,
+      "ymin": -3.5,
+      "ymax": 3.5
+    }
+  ]
+}

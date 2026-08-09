@@ -1,0 +1,65 @@
+{
+  "explanation": "默认做沿 x 轴正方向的匀速直线运动，速率 v=5 用滑块可调。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "v",
+      "min": 1,
+      "max": 20,
+      "step": 0.5,
+      "value": 5,
+      "unit": "m/s",
+      "label": "速率"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 12,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (v*t, 0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Ptip = P + (v, 0)"
+    },
+    {
+      "op": "vector",
+      "name": "vArrow",
+      "from": "P",
+      "to": "Ptip",
+      "color": "#43a047",
+      "label": "v"
+    },
+    {
+      "op": "physicsTrace",
+      "target": "P",
+      "mode": "trail"
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m"
+    },
+    {
+      "op": "view",
+      "xmin": -2,
+      "xmax": 62,
+      "ymin": -6,
+      "ymax": 6
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 0.5,
+      "on": true,
+      "repeat": "increasing"
+    }
+  ]
+}

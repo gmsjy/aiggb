@@ -1,0 +1,39 @@
+{
+  "explanation": "绘制可调边长的半透明正方体，默认边长3，可拖动滑块调整。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "a",
+      "min": 1,
+      "max": 6,
+      "step": 0.1,
+      "value": 3,
+      "label": "边长"
+    },
+    {
+      "op": "eval",
+      "cmd": "A=(0,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B=(a,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "cube=Cube(A,B)"
+    },
+    {
+      "op": "style",
+      "target": "cube",
+      "color": "#90CAF9",
+      "opacity": 0.3
+    },
+    {
+      "op": "view",
+      "xmin": -2,
+      "xmax": 8,
+      "ymin": -3,
+      "ymax": 5
+    }
+  ]
+}

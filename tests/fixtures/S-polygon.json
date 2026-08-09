@@ -1,0 +1,50 @@
+{
+  "explanation": "已按 A(0,0)、B(4,0)、C(2,3) 创建三角形，并设置样式。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "A = (0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B = (4,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "C = (2,3)"
+    },
+    {
+      "op": "eval",
+      "cmd": "tri = Polygon(A,B,C)"
+    },
+    {
+      "op": "style",
+      "target": "tri",
+      "color": "#64B5F6",
+      "thickness": 2,
+      "opacity": 0.5
+    },
+    {
+      "op": "style",
+      "target": "A",
+      "color": "#e53935"
+    },
+    {
+      "op": "style",
+      "target": "B",
+      "color": "#e53935"
+    },
+    {
+      "op": "style",
+      "target": "C",
+      "color": "#e53935"
+    },
+    {
+      "op": "view",
+      "xmin": -1,
+      "xmax": 5,
+      "ymin": -1,
+      "ymax": 4
+    }
+  ]
+}

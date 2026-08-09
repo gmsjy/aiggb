@@ -1,0 +1,11 @@
+{
+  "explanation": "已将圆设为红色虚线",
+  "commands": [
+    {
+      "op": "style",
+      "target": "circ",
+      "color": "#FF0000",
+      "dashed": true
+    }
+  ]
+}

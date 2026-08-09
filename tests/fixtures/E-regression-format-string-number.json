@@ -1,0 +1,92 @@
+{
+  "explanation": "振幅 a=2 的简谐振动，显示位移-时间正弦曲线及动点轨迹，参数可调。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "a",
+      "min": 0.5,
+      "max": 5,
+      "step": 0.1,
+      "value": 2,
+      "unit": "m",
+      "label": "振幅"
+    },
+    {
+      "op": "slider",
+      "name": "omega",
+      "min": 0.5,
+      "max": 5,
+      "step": 0.1,
+      "value": 1,
+      "unit": "rad/s",
+      "label": "角频率"
+    },
+    {
+      "op": "slider",
+      "name": "phi",
+      "min": 0,
+      "max": 6.2832,
+      "step": 0.01,
+      "value": 0,
+      "unit": "rad",
+      "label": "初相"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 10,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "eval",
+      "cmd": "h(x) = a*sin(omega*x + phi)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (t, h(t))"
+    },
+    {
+      "op": "style",
+      "target": "h",
+      "color": "#1e88e5",
+      "thickness": 3
+    },
+    {
+      "op": "style",
+      "target": "P",
+      "color": "#e53935"
+    },
+    {
+      "op": "eval",
+      "cmd": "SetPointSize(P, 5)"
+    },
+    {
+      "op": "physicsTrace",
+      "target": "P",
+      "mode": "trail"
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "s",
+      "yUnit": "m"
+    },
+    {
+      "op": "view",
+      "xmin": -0.5,
+      "xmax": 10.5,
+      "ymin": -6,
+      "ymax": 6
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 0.5,
+      "on": true,
+      "repeat": "increasing"
+    }
+  ]
+}

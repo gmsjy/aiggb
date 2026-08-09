@@ -1,0 +1,44 @@
+{
+  "explanation": "已通过三点 A(0,0)、B(3,0)、C(1,2) 作外接圆并标出圆心 O。",
+  "commands": [
+    {
+      "op": "eval",
+      "cmd": "A = (0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B = (3,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "C = (1,2)"
+    },
+    {
+      "op": "eval",
+      "cmd": "c = Circle(A,B,C)"
+    },
+    {
+      "op": "eval",
+      "cmd": "O = Center(c)"
+    },
+    {
+      "op": "style",
+      "target": "c",
+      "color": "#1565C0",
+      "thickness": 3
+    },
+    {
+      "op": "style",
+      "target": "O",
+      "color": "#E53935",
+      "visible": true
+    },
+    {
+      "op": "view",
+      "xmin": -1,
+      "xmax": 4,
+      "ymin": -1,
+      "ymax": 3
+    }
+  ]
+}

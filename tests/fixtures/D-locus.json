@@ -1,0 +1,46 @@
+{
+  "explanation": "用滑块 t 控制圆上点 P 的角度，开启轨迹以描绘圆；半径 r 可调。",
+  "commands": [
+    {
+      "op": "slider",
+      "name": "r",
+      "min": 1,
+      "max": 5,
+      "step": 0.1,
+      "value": 2,
+      "label": "半径"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 6.283185307179586,
+      "step": 0.01,
+      "value": 0,
+      "label": "角度"
+    },
+    {
+      "op": "eval",
+      "cmd": "c = Circle((0,0), r)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P = (r*cos(t), r*sin(t))"
+    },
+    {
+      "op": "trace",
+      "target": "P",
+      "on": true
+    },
+    {
+      "op": "style",
+      "target": "P",
+      "color": "#e53935",
+      "thickness": 3
+    },
+    {
+      "op": "eval",
+      "cmd": "SetPointSize(P, 5)"
+    }
+  ]
+}
