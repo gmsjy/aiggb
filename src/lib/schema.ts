@@ -30,6 +30,12 @@ const FORBIDDEN_CMD_RE = new RegExp(
   "i"
 );
 
+/** 展示型文本（caption/label/unit）的危险片段检测：防 prompt 注入经标注字段落地 */
+const DANGEROUS_TEXT_RE = /<script|javascript:|on\w+=/i;
+function withTextSafety(s: z.ZodString): z.ZodEffects<z.ZodString> {
+  return s.refine(v => !DANGEROUS_TEXT_RE.test(v), "文本含有危险片段");
+}
+
 const SafeCmd = z
   .string()
   .min(1)
@@ -110,8 +116,8 @@ export const Command = z.discriminatedUnion("op", [
     max: NumLike,
     step: NumLike.refine(n => n > 0, "step 必须 > 0"),
     value: NumLike,
-    unit: z.string().max(8).optional(),
-    label: z.string().max(40).optional()
+    unit: withTextSafety(z.string().max(8)).optional(),
+    label: withTextSafety(z.string().max(40)).optional()
   }),
 
   z.object({
@@ -143,7 +149,7 @@ export const Command = z.discriminatedUnion("op", [
     axesUnit: z.tuple([z.string().max(8), z.string().max(8)]).optional()
   }),
 
-  z.object({ op: z.literal("caption"), target: Identifier, text: z.string().max(120) }),
+  z.object({ op: z.literal("caption"), target: Identifier, text: withTextSafety(z.string().max(120)) }),
   z.object({ op: z.literal("delete"), target: Identifier }),
   z.object({ op: z.literal("reset") }),
 
@@ -154,7 +160,7 @@ export const Command = z.discriminatedUnion("op", [
     from: CoordExpr,
     to: CoordExpr,
     color: Color.optional(),
-    label: z.string().max(40).optional()
+    label: withTextSafety(z.string().max(40)).optional()
   }),
 
   z.object({
@@ -172,7 +178,7 @@ export const Command = z.discriminatedUnion("op", [
               "forceDiagram.vec 必须写成坐标/矢量字面量 (dx, dy) 形式，不要引用未声明对象"
             ),
           color: Color.optional(),
-          label: z.string().max(40).optional()
+          label: withTextSafety(z.string().max(40)).optional()
         })
       )
       .min(1)
@@ -188,10 +194,10 @@ export const Command = z.discriminatedUnion("op", [
 
   z.object({
     op: z.literal("unitAxes"),
-    xUnit: z.string().max(8),
-    yUnit: z.string().max(8),
-    xLabel: z.string().max(20).optional(),
-    yLabel: z.string().max(20).optional()
+    xUnit: withTextSafety(z.string().max(8)),
+    yUnit: withTextSafety(z.string().max(8)),
+    xLabel: withTextSafety(z.string().max(20)).optional(),
+    yLabel: withTextSafety(z.string().max(20)).optional()
   }),
 
   z.object({

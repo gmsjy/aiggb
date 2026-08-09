@@ -45,6 +45,8 @@ interface TestCase {
   input: string;
   domain: "general" | "physics";
   context?: { existingObjects?: string[] };
+  /** 强制画布模式（默认：highschool 用 3d，其余 2d） */
+  mode?: "2d" | "3d";
   expected: CaseExpectation;
 }
 
@@ -60,6 +62,8 @@ interface CaseResult {
 
 const MODE = (process.env.TEST_MODE ?? "replay") as "replay" | "record" | "smoke";
 const CATEGORY_FILTER = process.env.TEST_CATEGORY;
+/** 精确用例 id 过滤（逗号分隔），用于选择性重录失败用例 */
+const ID_FILTER = process.env.TEST_IDS?.split(",").map(s => s.trim()).filter(Boolean);
 
 async function main() {
   const cases: TestCase[] = JSON.parse(readFileSync(CASES_FILE, "utf8")).cases;
@@ -111,6 +115,9 @@ async function main() {
 }
 
 function filterCases(cases: TestCase[]): TestCase[] {
+  if (ID_FILTER?.length) {
+    return cases.filter(c => ID_FILTER.includes(c.id));
+  }
   if (MODE === "smoke") {
     return cases.filter(c => c.category === "static" || c.category === "clarify").slice(0, 5);
   }
@@ -118,6 +125,14 @@ function filterCases(cases: TestCase[]): TestCase[] {
     return cases.filter(c => c.category === CATEGORY_FILTER);
   }
   return cases;
+}
+
+/** 按 GGB 命名约定推断对象类型——注入 context 符号表，减少模型对已有对象语义的猜测 */
+function ggbTypeHint(name: string): string {
+  if (/^[A-Z]$/.test(name)) return "Point";
+  if (/^[uvw]$/.test(name)) return "Vector";
+  if (/^[fgh]$/.test(name)) return "Function";
+  return "数值/滑块";
 }
 
 async function runOne(tc: TestCase): Promise<CaseResult> {
@@ -170,19 +185,20 @@ async function callAndRecord(tc: TestCase) {
     model: DEEPSEEK_MODEL,
     temperature: TEST_TEMPERATURE
   };
-  // ★ highschool 用例跑在 3D 画布：显式传 appMode="3d"，避免 2D prompt 禁用 3D 命令
-  const appMode: "2d" | "3d" = tc.category === "highschool" ? "3d" : "2d";
+  // ★ 画布模式：用例可显式指定 mode；默认 highschool 用 3D，其余 2D
+  const appMode: "2d" | "3d" = tc.mode ?? (tc.category === "highschool" ? "3d" : "2d");
   const systemPrompt = buildSystemPrompt(tc.domain, appMode);
   // 注入 context：已存在对象作为对话历史
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: systemPrompt }
   ];
   if (tc.context?.existingObjects?.length) {
-    const objList = tc.context.existingObjects.join(", ");
+    // ★ 符号表形式注入：对象名 + 类型提示，让模型在多轮修改中直接引用已有对象
+    const symbolTable = tc.context.existingObjects.map(n => `${n}(${ggbTypeHint(n)})`).join("，");
     messages.push({
       role: "assistant",
       content: JSON.stringify({
-        explanation: `已创建对象：${objList}`,
+        explanation: `画布上已创建对象（符号表）：${symbolTable}。后续修改请直接引用这些对象名。`,
         commands: tc.context.existingObjects.map(name => ({ op: "eval" as const, cmd: `${name} = ...` }))
       })
     });

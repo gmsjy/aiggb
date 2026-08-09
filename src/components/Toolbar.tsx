@@ -16,7 +16,7 @@ import {
   Box
 } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
-import { executeCommands, exportGGB, exportPNG } from "../lib/ggbBridge";
+import { executeCommands, exportGGB, exportPNG, resetTmpIds } from "../lib/ggbBridge";
 import { abortCurrentRun } from "../lib/runControl";
 
 interface BeforeInstallPromptEvent extends Event {
@@ -81,6 +81,7 @@ export function Toolbar({ onOpenSettings, onOpenGallery }: Props) {
       abortCurrentRun();
       // ★ 先 newConstruction 保底清空当前画布（2D 模式下 setAppName 同值不会触发重建）
       ggbApi.newConstruction();
+      resetTmpIds();
       setAppName("classic");  // 重置回平面模式（3D→2D 时由重建清空）
       clearMessages();
     }
@@ -92,6 +93,7 @@ export function Toolbar({ onOpenSettings, onOpenGallery }: Props) {
     abortCurrentRun();
     undoLastTurn();
     ggbApi.newConstruction();
+    resetTmpIds();
     // ★ 完整重放剩余轮次的所有 op（eval/slider/vector/forceDiagram/animate/...），
     //   而非只重放 eval——否则滑块/矢量等会丢失，构造与历史不一致
     const after = useAppStore.getState().messages;

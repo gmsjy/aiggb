@@ -10,6 +10,7 @@
  */
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../store/useAppStore";
+import { resetTmpIds } from "../lib/ggbBridge";
 import type { GGBAppletApi } from "../types/ggb";
 
 const CONTAINER_ID = "ggb-container";
@@ -65,6 +66,7 @@ export function GGBCanvas() {
           preventFocus: true,
           appletOnLoad: (api: GGBAppletApi) => {
             if (!active) return; // 已切换模式，忽略过期 applet 的回调
+            resetTmpIds(); // 新画布：临时对象名从头开始
             setGGBApi(api);
             injectingRef.current = false;
             console.log("[AiGGB] " + mode + " loaded");

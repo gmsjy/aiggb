@@ -49,6 +49,11 @@ interface AppState extends PersistedState {
   ggbApi: GGBAppletApi | null;
   ggbAppName: "classic" | "3d";
   messages: ChatTurn[];
+  /**
+   * 已成功执行的底层 GGB 命令日志（按轮追加）。
+   * 用于修复回路全失败回滚时、快照不可用情况下的兜底重建（newConstruction + 重放）。
+   */
+  constructionLog: string[];
   isThinking: boolean;
 
   // setters
@@ -69,6 +74,13 @@ interface AppState extends PersistedState {
 let _uid = 0;
 const uid = () => `m-${Date.now()}-${_uid++}`;
 
+/** 从消息历史重建构造日志（撤销后日志须与剩余轮次一致） */
+function logFromMessages(msgs: ChatTurn[]): string[] {
+  return msgs.flatMap(m =>
+    m.role === "assistant" ? m.payload.results.filter(r => r.ok).flatMap(r => r.expanded) : []
+  );
+}
+
 export const useAppStore = create<AppState>()(
   persist(
     set => ({
@@ -78,6 +90,7 @@ export const useAppStore = create<AppState>()(
       ggbApi: null,
       ggbAppName: "classic",
       messages: [],
+      constructionLog: [],
       isThinking: false,
 
       setConfig: c => set({ config: c }),
@@ -100,6 +113,7 @@ export const useAppStore = create<AppState>()(
               ]
             };
           }
+          const logAdd = results.filter(r => r.ok).flatMap(r => r.expanded);
           return {
             messages: [
               ...state.messages,
@@ -108,11 +122,12 @@ export const useAppStore = create<AppState>()(
                 role: "assistant",
                 payload: { explanation: resp.explanation, commands: resp.commands, results, ask: resp.ask, self_check: (resp as Record<string,unknown>).self_check as string | undefined }
               }
-            ]
+            ],
+            constructionLog: logAdd.length > 0 ? [...state.constructionLog, ...logAdd] : state.constructionLog
           };
         }),
 
-      clearMessages: () => set({ messages: [] }),
+      clearMessages: () => set({ messages: [], constructionLog: [] }),
 
       undoLastTurn: () =>
         set(state => {
@@ -127,7 +142,8 @@ export const useAppStore = create<AppState>()(
               break;
             }
           }
-          return { messages: state.messages.slice(0, start) };
+          const remaining = state.messages.slice(0, start);
+          return { messages: remaining, constructionLog: logFromMessages(remaining) };
         })
     }),
     {

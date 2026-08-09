@@ -14,6 +14,11 @@ function genTmpId(prefix: string): string {
   return `${prefix}${_tmpSeq++}`;
 }
 
+/** 重置临时对象计数器——画布清空 / applet 重建时调用，避免长会话下临时名无限膨胀 */
+export function resetTmpIds(): void {
+  _tmpSeq = 0;
+}
+
 export interface ExecResult {
   ok: boolean;
   command: Command;
@@ -138,6 +143,7 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
 
       case "reset": {
         api.newConstruction();
+        resetTmpIds();
         return { ok: true, command: cmd, expanded };
       }
 

@@ -74,6 +74,9 @@ export class MockGGB implements Pick<GGBAppletApi,
         }
       }
       this.objects.set(name, { name, type, expr: rhs });
+      // ★ Cube(A,B[,C]) 在真实 GGB 中会自动生成其余顶点（D/E/F/G/H），
+      //   模型引用这些顶点（如 Plane(A,C,F)）是合法行为，mock 需同步注册
+      this.registerCubeVertices(name, rhs);
       return true;
     }
 
@@ -169,6 +172,19 @@ export class MockGGB implements Pick<GGBAppletApi,
   newConstruction = () => this.objects.clear();
 
   getAllObjectNames = () => Array.from(this.objects.keys());
+
+  /** Cube(A,B[,C]) 派生顶点注册：两点式注册 C..H，三点式注册 D..H（已给点跳过） */
+  private registerCubeVertices(name: string, rhs: string): void {
+    const m = /^Cube\s*\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)(?:\s*,\s*([A-Za-z_]\w*))?\s*\)/.exec(rhs);
+    if (!m) return;
+    const given = new Set([m[1], m[2], m[3]].filter(Boolean));
+    const derive = m[3] ? ["D", "E", "F", "G", "H"] : ["C", "D", "E", "F", "G", "H"];
+    for (const v of derive) {
+      if (!given.has(v) && !this.objects.has(v)) {
+        this.objects.set(v, { name: v, type: "Point" });
+      }
+    }
+  }
 
   // 预注入已存在对象（用例 context 用）
   seed(existing: Array<{ name: string; type?: GGBType }>) {

@@ -1,5 +1,5 @@
 {
-  "explanation": "已生成三角形ABC，AB=3，BC=4，CA=5，其中角B为直角。",
+  "explanation": "由AB=3，BC=4，CA=5，取A(0,0)，B(3,0)，C(3,4)构成直角三角形，并标注三边长度。",
   "commands": [
     {
       "op": "eval",
@@ -15,37 +15,61 @@
     },
     {
       "op": "eval",
-      "cmd": "segAB = Segment(A,B)"
+      "cmd": "tri = Polygon(A,B,C)"
     },
     {
       "op": "eval",
-      "cmd": "segBC = Segment(B,C)"
+      "cmd": "sAB = Segment(A,B)"
     },
     {
       "op": "eval",
-      "cmd": "segCA = Segment(C,A)"
+      "cmd": "sBC = Segment(B,C)"
     },
     {
-      "op": "caption",
-      "target": "segAB",
-      "text": "AB = 3"
+      "op": "eval",
+      "cmd": "sCA = Segment(C,A)"
     },
     {
-      "op": "caption",
-      "target": "segBC",
-      "text": "BC = 4"
+      "op": "eval",
+      "cmd": "SetCaption(sAB, \"3\")"
     },
     {
-      "op": "caption",
-      "target": "segCA",
-      "text": "CA = 5"
+      "op": "eval",
+      "cmd": "SetCaption(sBC, \"4\")"
     },
     {
-      "op": "view",
-      "xmin": -0.5,
-      "xmax": 4,
-      "ymin": -0.5,
-      "ymax": 5
+      "op": "eval",
+      "cmd": "SetCaption(sCA, \"5\")"
+    },
+    {
+      "op": "eval",
+      "cmd": "ShowLabel(sAB, true)"
+    },
+    {
+      "op": "eval",
+      "cmd": "ShowLabel(sBC, true)"
+    },
+    {
+      "op": "eval",
+      "cmd": "ShowLabel(sCA, true)"
+    },
+    {
+      "op": "style",
+      "target": "sAB",
+      "color": "#000000",
+      "thickness": 2
+    },
+    {
+      "op": "style",
+      "target": "sBC",
+      "color": "#000000",
+      "thickness": 2
+    },
+    {
+      "op": "style",
+      "target": "sCA",
+      "color": "#000000",
+      "thickness": 2
     }
   ]
 }

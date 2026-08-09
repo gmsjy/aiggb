@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
+    "test:unit": "node --test --import tsx tests/specCache.test.ts tests/pipeline.test.ts",
     "test:replay": "tsx tests/runner.ts",
     "test:record": "cross-env TEST_MODE=record tsx tests/runner.ts",
     "test:smoke": "cross-env TEST_MODE=smoke tsx tests/runner.ts",

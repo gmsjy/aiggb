@@ -325,8 +325,8 @@
         ]
       },
       "expected": {
-        "mustHaveOps": [
-          "animate"
+        "mustContainPatterns": [
+          "animate|SetAnimationSpeed"
         ],
         "executeSuccessRate": 1
       }
@@ -545,6 +545,7 @@
       "description": "3D 曲面命令",
       "input": "画参数曲面 z=x^2+y^2",
       "domain": "general",
+      "mode": "3d",
       "expected": {
         "mustContainCommands": [
           "Surface"

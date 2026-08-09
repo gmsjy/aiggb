@@ -1,5 +1,5 @@
 {
-  "explanation": "将 t 的动画速度设为 2 倍",
+  "explanation": "已将滑块 t 的动画速度设为 2（从默认 1 倍变为 2 倍）。",
   "commands": [
     {
       "op": "eval",

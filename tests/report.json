@@ -1,16 +1,16 @@
 {
   "mode": "replay",
-  "timestamp": 1786278711811,
-  "pass": 59,
+  "timestamp": 1786283493369,
+  "pass": 63,
   "total": 63,
-  "rate": 93.65079365079364,
+  "rate": 100,
   "results": [
     {
       "id": "S-circle",
       "category": "static",
       "pass": true,
       "failures": [],
-      "latencyMs": 5
+      "latencyMs": 4
     },
     {
       "id": "S-sinkx",
@@ -24,28 +24,28 @@
       "category": "static",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "S-ellipse",
       "category": "static",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "D-cycloid",
       "category": "dynamic",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "D-rotation",
       "category": "dynamic",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "D-locus",
@@ -59,7 +59,7 @@
       "category": "dynamic",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "P-projectile",
@@ -94,7 +94,7 @@
       "category": "physics",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "M-color-undo",
@@ -113,10 +113,8 @@
     {
       "id": "M-change-speed",
       "category": "modify",
-      "pass": false,
-      "failures": [
-        "缺少 op: animate"
-      ],
+      "pass": true,
+      "failures": [],
       "latencyMs": 0
     },
     {
@@ -152,21 +150,21 @@
       "category": "regression",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "E-regression-sequence-list",
       "category": "regression",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "E-regression-nsolve-2d",
       "category": "regression",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "E-regression-format-string-number",
@@ -180,7 +178,7 @@
       "category": "regression",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "E-regression-naming-v",
@@ -194,7 +192,7 @@
       "category": "regression",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "E-regression-code-fence",
@@ -208,7 +206,7 @@
       "category": "regression",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "B-setlineopacity",
@@ -222,23 +220,21 @@
       "category": "boundary",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "B-3d-surface",
       "category": "boundary",
-      "pass": false,
-      "failures": [
-        "缺少 GGB 命令: Surface"
-      ],
-      "latencyMs": 0
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
     },
     {
       "id": "B-nested-sequence",
       "category": "boundary",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "C-multi-turn",
@@ -259,28 +255,28 @@
       "category": "adversarial",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "A-export-gif",
       "category": "adversarial",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "A-opacity-trap",
       "category": "adversarial",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "E-edge-very-fast",
       "category": "edge",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "E-edge-empty",
@@ -327,11 +323,9 @@
     {
       "id": "L-homework-style",
       "category": "language",
-      "pass": false,
-      "failures": [
-        "缺少 GGB 命令: Polygon"
-      ],
-      "latencyMs": 0
+      "pass": true,
+      "failures": [],
+      "latencyMs": 1
     },
     {
       "id": "L-mixed-lang",
@@ -357,10 +351,8 @@
     {
       "id": "H-cube-section",
       "category": "highschool",
-      "pass": false,
-      "failures": [
-        "执行成功率 88% < 100%; 失败: eval: GGB evalCommand 返回 false"
-      ],
+      "pass": true,
+      "failures": [],
       "latencyMs": 1
     },
     {
@@ -375,28 +367,28 @@
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "H-spatial-vector",
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "H-helix",
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "H-pyramid",
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "H-cross-product",
@@ -410,7 +402,7 @@
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "H-regr-setcolor-int",
@@ -431,7 +423,7 @@
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "H-regr-noaxesratio",
@@ -445,7 +437,7 @@
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "H-regr-no-setview",
