@@ -122,6 +122,16 @@ Schema 校验失败 → `chatWithFormatRetry`（≤2 次格式重试，raw + det
 - `.env` 放测试密钥：`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`（默认 v4-flash）、`DEEPSEEK_BASE_URL`
 - 模型：日常 flash（快）、复杂/3D 场景 pro；两阶段 Phase 1 用 flash，Phase 2 用主模型
 
+## GeoGebra 库本地化（自托管）
+
+- **GGB 引擎已随构建打包**（`public/ggb/`，~22MB），**完全离线，不依赖 CDN**：
+  - `index.html` 引 `./ggb/apps/deployggb.js`（非 CDN）
+  - `GGBCanvas.tsx` 2D/3D 均用 `./ggb/apps/{version}/web3d/` codebase（版本与 deployggb 内嵌一致）
+  - `deployggb.js` 内 CDN 前缀已替换为相对路径 `./ggb/`
+- **结构**：`public/ggb/apps/{version}/`（web3d 主引擎 + deferred fragment + css + properties + fonts + icons）
+- **更新 GGB 版本**：跑 `npx tsx tests/download-ggb.ts`（解析 deployggb 内嵌版本 → 下载配套整套 → 替换前缀 → 清理旧版本目录），再 `npm run build`
+- PWA：workbox `maximumFileSizeToCacheInBytes` 已提至 30MB，GGB 引擎进预缓存，完全离线可用；`runtimeCaching` 仅保留 AI 请求 NetworkOnly（不再缓存 CDN）
+
 ## 开发约定
 
 - `npm run dev` 开发（端口 5173），`npm run build` 生产（PWA 预缓存）

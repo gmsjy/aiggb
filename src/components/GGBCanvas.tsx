@@ -74,9 +74,9 @@ export function GGBCanvas() {
         },
         true
       );
-      // 3D app 需要 web3d 代码库
+      // 3D app 需要 web3d 代码库（本地化，版本与 deployggb 一致）
       if (mode === "3d" && typeof (applet as unknown as { setHTML5Codebase?: (url: string) => void }).setHTML5Codebase === "function") {
-        (applet as unknown as { setHTML5Codebase: (url: string) => void }).setHTML5Codebase("https://www.geogebra.org/apps/latest/web3d/");
+        (applet as unknown as { setHTML5Codebase: (url: string) => void }).setHTML5Codebase("./ggb/apps/5.4.920.0/web3d/");
       }
       applet.inject(CONTAINER_ID);
     };
