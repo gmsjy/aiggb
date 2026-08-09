@@ -4,6 +4,28 @@
 
 ---
 
+## 演示
+
+以下动图由 AiGGB 实际生成（真实 GeoGebra 渲染，非模拟）：
+
+<div align="center">
+
+| 物理 · 斜抛运动 | 物理 · 单摆 |
+|---|---|
+| ![斜抛运动](docs/demos/P-projectile.gif) | ![单摆](docs/demos/P-pendulum.gif) |
+
+| 物理 · 弹簧振子 | 物理 · 横波传播 |
+|---|---|
+| ![弹簧振子](docs/demos/P-spring.gif) | ![横波传播](docs/demos/P-wave.gif) |
+
+| 数学 · 摆线 | 数学 · 旋转变换 |
+|---|---|
+| ![摆线](docs/demos/D-cycloid.gif) | ![旋转变换](docs/demos/D-rotation.gif) |
+
+</div>
+
+---
+
 ## 快速开始
 
 ```bash

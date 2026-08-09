@@ -2,15 +2,17 @@
 <html lang="zh">
 <head><meta charset="UTF-8"><title>AiGGB Visual Test</title>
 <style>
-  body{margin:0;background:#fff;display:flex;justify-content:center;align-items:center;height:100vh}
-  #ggb{width:1000px;height:700px}
+  /* 画布最大化：铺满视口，完整反映演示效果 */
+  body{margin:0;background:#fff;overflow:hidden}
+  #ggb{width:100vw;height:100vh}
 </style>
 <script src="https://www.geogebra.org/apps/deployggb.js"></script>
 </head>
 <body>
 <div id="ggb"></div>
 <script>
-// 接收来自 Playwright 的命令列表，逐条执行后信号完成
+// 接收来自 Playwright 的命令列表，逐条执行后信号完成。
+// ★ 完整实现全部 op（镜像 ggbBridge.ts），保证动画真实运行、画布完整渲染。
 const params = new URLSearchParams(location.search);
 const commandsJson = params.get("cmds");
 if (!commandsJson) {
@@ -25,37 +27,127 @@ if (!commandsJson) {
     showToolBar: false, showAlgebraInput: false, showMenuBar: false,
     showResetIcon: false, enableLabelDrags: false, enableShiftDragZoom: true,
     enableRightClick: false, errorDialogsActive: false, useBrowserForJS: true,
-    language: "zh", preventFocus: true
+    language: "zh", preventFocus: true,
+    appletOnLoad: api => { window.__ggbApplet__ = api; }, // 显式挂载，不依赖 GGB 自动全局
+    scaleContainerClass: "ggb-container-scale"
   }, true);
 
   applet.setHTML5Codebase("https://www.geogebra.org/apps/latest/web3d/");
   applet.inject("ggb");
 
-  // GGB 加载完成后执行命令
+  // ── op 执行器（镜像 src/lib/ggbBridge.ts）──
+  const hexToRgb = hex => {
+    const m = hex.replace(/^#/, "");
+    return [parseInt(m.slice(0,2),16), parseInt(m.slice(2,4),16), parseInt(m.slice(4,6),16)];
+  };
+
+  let tmpSeq = 0;
+  const tmpId = p => `${p}${tmpSeq++}`;
+  const isCoordLiteral = s => /^\s*\(/.test(s) && /\)\s*$/.test(s);
+
+  function executeOne(api, cmd) {
+    try {
+      switch (cmd.op) {
+        case "eval": return api.evalCommand(cmd.cmd);
+        case "slider": {
+          const ok = api.evalCommand(`${cmd.name} = Slider(${cmd.min}, ${cmd.max}, ${cmd.step}, 1, 150, false, true, false, false)`);
+          if (!ok) return false;
+          api.evalCommand(`SetValue(${cmd.name}, ${cmd.value})`);
+          const cap = cmd.label ? (cmd.unit ? `${cmd.label} = %v ${cmd.unit}` : `${cmd.label} = %v`) : (cmd.unit ? `${cmd.name} = %v ${cmd.unit}` : "");
+          if (cap) { api.setCaption(cmd.name, cap); api.setLabelStyle(cmd.name, 3); }
+          return true;
+        }
+        case "animate": {
+          if (!api.exists(cmd.target)) return false;
+          if (cmd.speed !== undefined) api.setAnimationSpeed(cmd.target, cmd.speed);
+          if (cmd.repeat) {
+            const map = { oscillating: 0, increasing: 1, once: 3 };
+            api.evalCommand(`SetAnimationType(${cmd.target}, ${map[cmd.repeat]})`);
+          }
+          api.setAnimating(cmd.target, cmd.on);
+          if (cmd.on) api.startAnimation(); else api.stopAnimation();
+          return true;
+        }
+        case "trace": {
+          if (!api.exists(cmd.target)) return false;
+          api.setTrace(cmd.target, cmd.on); return true;
+        }
+        case "style": {
+          if (cmd.color) { const [r,g,b]=hexToRgb(cmd.color); api.setColor(cmd.target,r,g,b); }
+          if (cmd.thickness !== undefined) api.setLineThickness(cmd.target, cmd.thickness);
+          if (cmd.visible !== undefined) api.setVisible(cmd.target, cmd.visible);
+          if (cmd.opacity !== undefined) api.setFilling(cmd.target, cmd.opacity);
+          if (cmd.dashed) api.setLineStyle(cmd.target, 1);
+          return true;
+        }
+        case "view": {
+          api.setCoordSystem(cmd.xmin, cmd.xmax, cmd.ymin, cmd.ymax);
+          if (cmd.axesUnit && api.setAxisUnits) api.setAxisUnits(1, cmd.axesUnit[0], cmd.axesUnit[1], "");
+          return true;
+        }
+        case "caption": { api.setCaption(cmd.target, cmd.text); api.setLabelStyle(cmd.target, 3); return true; }
+        case "delete": { api.deleteObject(cmd.target); return true; }
+        case "reset": { api.newConstruction(); return true; }
+        case "vector": {
+          if (!(isCoordLiteral(cmd.from) || api.exists(cmd.from))) return false;
+          const ok = api.evalCommand(`${cmd.name} = Vector(${cmd.from}, ${cmd.to})`);
+          if (!ok) return false;
+          if (cmd.color) { const [r,g,b]=hexToRgb(cmd.color); api.setColor(cmd.name,r,g,b); }
+          api.setLineThickness(cmd.name, 4);
+          if (cmd.label) { api.setCaption(cmd.name, cmd.label); api.setLabelStyle(cmd.name, 3); }
+          return true;
+        }
+        case "forceDiagram": {
+          if (!(isCoordLiteral(cmd.at) || api.exists(cmd.at))) return false;
+          let allOk = true;
+          for (let fi = 0; fi < cmd.forces.length; fi++) {
+            const f = cmd.forces[fi];
+            const t = `_fv${fi}`;
+            if (!api.evalCommand(`${t} = Vector((0,0), ${f.vec})`)) { allOk = false; continue; }
+            if (!api.evalCommand(`${f.name} = Vector(${cmd.at}, ${cmd.at} + ${t})`)) { allOk = false; continue; }
+            if (f.color) { const [r,g,b]=hexToRgb(f.color); api.setColor(f.name,r,g,b); }
+            api.setLineThickness(f.name, 4);
+            if (f.label) { api.setCaption(f.name, f.label); api.setLabelStyle(f.name, 3); }
+            api.setVisible(t, false);
+          }
+          return allOk;
+        }
+        case "physicsTrace": { api.setTrace(cmd.target, true); return true; }
+        case "unitAxes": {
+          const xl = cmd.xLabel ? `${cmd.xLabel}/${cmd.xUnit}` : `/${cmd.xUnit}`;
+          const yl = cmd.yLabel ? `${cmd.yLabel}/${cmd.yUnit}` : `/${cmd.yUnit}`;
+          api.setAxisLabels(1, xl, yl, "");
+          return true;
+        }
+        case "constants": {
+          const vals = { g:9.8, c:3e8, e:1.6e-19, eps0:8.854e-12, mu0:1.2566e-6, k_e:8.99e9, Grav:6.6743e-11, h:6.626e-34, k_B:1.381e-23 };
+          for (const n of cmd.names) {
+            if (!(n in vals)) continue;
+            if (api.exists(n)) continue;
+            if (!api.evalCommand(`${n} = ${vals[n]}`)) return false;
+            api.setVisible(n, false);
+          }
+          return true;
+        }
+        default: return false;
+      }
+    } catch(e) { return false; }
+  }
+
+  // GGB 加载完成后执行全部命令
   window.__ggbApplet__ = undefined;
   const waitForAPI = setInterval(() => {
-    const api = window.ggbApplet;
+    const api = window.__ggbApplet__;
     if (!api || !api.evalCommand) return;
     clearInterval(waitForAPI);
 
-    // 逐条执行 eval 命令
-    const evalCmds = commands.filter(c => c.op === "eval");
-    const otherCmds = commands.filter(c => c.op !== "eval");
     let ok = 0, fail = 0;
-    for (const c of evalCmds) {
-      if (api.evalCommand(c.cmd)) ok++; else fail++;
+    const failedIdx = [];
+    for (let i = 0; i < commands.length; i++) {
+      if (executeOne(api, commands[i])) ok++; else { fail++; failedIdx.push(i); }
     }
-    // 执行其他 op（简化：只处理 style/trace/view/animate）
-    for (const c of otherCmds) {
-      try {
-        if (c.op === "style" && c.color) { const [r,g,b]=[(parseInt(c.color.slice(1,3),16)),(parseInt(c.color.slice(3,5),16)),(parseInt(c.color.slice(5,7),16))]; api.setColor(c.target,r,g,b); if(c.thickness)api.setLineThickness(c.target,c.thickness); }
-        if (c.op === "trace" || c.op === "physicsTrace") api.setTrace(c.target, c.on ?? true);
-        if (c.op === "view") api.setCoordSystem(c.xmin, c.xmax, c.ymin, c.ymax);
-        if (c.op === "animate" && c.on) { api.setAnimating(c.target,true); api.startAnimation(); }
-      } catch(e) {}
-    }
-    // 信号完成
-    document.title = "DONE:" + ok + "/" + (ok+fail);
+    // 信号完成（带失败索引便于调试）
+    document.title = "DONE:" + ok + "/" + (ok+fail) + " fail:" + failedIdx.join(",");
   }, 200);
 }
 </script>
