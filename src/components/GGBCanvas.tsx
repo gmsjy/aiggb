@@ -31,33 +31,59 @@ export function GGBCanvas() {
     let active = true; // 本代次是否仍有效
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
+    const webglCleanups: Array<() => void> = []; // WebGL 事件监听清理函数
     const mode = ggbAppName; // 固定本代次的目标模式
 
-    const inject = (w: number, h: number) => {
-      if (!active) return; // 已卸载 / 已切换到新模式
+    const inject = (w: number, h: number, force = false) => {
+      if (!active) {
+        console.log("[AiGGB:DIAG] inject() called but active=false, skipping");
+        return; // 已卸载 / 已切换到新模式
+      }
       if (!window.GGBApplet) {
-        retryTimer = setTimeout(() => inject(w, h), RETRY_INTERVAL);
+        console.log("[AiGGB:DIAG] deployggb not loaded yet, retrying in", RETRY_INTERVAL, "ms");
+        retryTimer = setTimeout(() => inject(w, h, force), RETRY_INTERVAL);
         return;
       }
-      if (injectingRef.current) return;
+      if (injectingRef.current) {
+        console.log("[AiGGB:DIAG] inject() called but already injecting, skipping");
+        return;
+      }
 
       // ★ 防御：已有的 applet 含对象时不重建（避免销毁用户可见的绘图）。
       //    GeoGebra HTML5 applet 内部会自适应容器尺寸变化。
+      //    force=true 时跳过此检查（用于心跳恢复/scene重建）。
       const curApi = useAppStore.getState().ggbApi;
-      if (curApi) {
+      if (curApi && !force) {
         try {
-          if (curApi.getObjectNumber() > 0) {
+          const objCount = curApi.getObjectNumber();
+          console.log("[AiGGB:DIAG] inject() — getObjectNumber()=", objCount, "mode=", mode);
+          if (objCount > 0) {
             console.log("[AiGGB] inject: skip rebuild (canvas has objects, GeoGebra handles resize internally)");
             try { curApi.refreshViews(); } catch { /* 忽略 */ }
             return;
           }
-        } catch { /* API 不可用则走重建 */ }
+        } catch (err) {
+          // ★ getObjectNumber() 可能在 3D 渲染忙碌时抛出异常；
+          //    此时不应销毁画布——保留现有 applet，仅尝试触发重绘恢复。
+          console.warn("[AiGGB:DIAG] inject: getObjectNumber() THREW — 不销毁画布，尝试 refreshViews");
+          console.warn("[AiGGB:DIAG] getObjectNumber error:", err);
+          try { curApi.refreshViews(); } catch { /* 忽略 */ }
+          return;
+        }
       }
+
+      // ★ 走到了这里 = 即将销毁重建！
+      console.warn("[AiGGB:DIAG] inject() 即将执行 applet 重建 (mode=" + mode + ", " + w + "x" + h +
+        (force ? ", FORCE" : "") + ")");
 
       injectingRef.current = true;
 
-      // ★ 销毁旧 applet
+      // ★ 销毁旧 applet（DIAGNOSTIC：这是画布消失的唯一 DOM 销毁点）
+      console.warn("[AiGGB:DIAG] ★★★ containerEl.innerHTML = '' — 即将销毁 GGB applet DOM ★★★");
+      console.warn("[AiGGB:DIAG] call stack:", new Error("DIAGNOSTIC STACK").stack);
+      console.warn("[AiGGB:DIAG] 此时 ggbAppName=", mode, " active=", active, " containerEl children:", containerEl.children.length);
       containerEl.innerHTML = "";
+      console.warn("[AiGGB:DIAG] applet 已销毁，containerEl children 剩余:", containerEl.children.length);
 
       console.log("[AiGGB] injecting applet:", mode, w, "×", h);
 
@@ -87,6 +113,27 @@ export function GGBCanvas() {
             applyCanvasConfig(api, curDomain, mode === "3d" ? "3d" : "2d");
             injectingRef.current = false;
             console.log("[AiGGB] " + mode + " loaded");
+
+            // ★ 3D 模式：监听 WebGL context 丢失/恢复（3D 渲染崩溃时画布可能白屏）
+            if (mode === "3d") {
+              const onContextLost = (e: Event) => {
+                e.preventDefault(); // 告知浏览器我们想处理恢复
+                console.warn("[AiGGB] WebGL context lost — 3D 渲染可能白屏，等待恢复…");
+              };
+              const onContextRestored = () => {
+                console.log("[AiGGB] WebGL context restored — 触发重绘");
+                if (!active) return;
+                try { api.refreshViews(); } catch { /* 忽略 */ }
+                try { api.setRepaintingActive(true); } catch { /* 忽略 */ }
+              };
+              containerEl.addEventListener("webglcontextlost", onContextLost, true);
+              containerEl.addEventListener("webglcontextrestored", onContextRestored, true);
+              // 清理在 effect cleanup 中注册（见下方 push）
+              webglCleanups.push(() => {
+                containerEl.removeEventListener("webglcontextlost", onContextLost, true);
+                containerEl.removeEventListener("webglcontextrestored", onContextRestored, true);
+              });
+            }
           }
         },
         true
@@ -119,14 +166,21 @@ export function GGBCanvas() {
         const curApi = useAppStore.getState().ggbApi;
         if (curApi) {
           try {
-            if (curApi.getObjectNumber() > 0) {
+            const objCount = curApi.getObjectNumber();
+            console.log("[AiGGB:DIAG] ResizeObserver — getObjectNumber()=", objCount, "size=", w, "x", h);
+            if (objCount > 0) {
               console.log("[AiGGB] ResizeObserver: skip rebuild (canvas has objects, GeoGebra handles resize internally)");
               // 通知 GeoGebra 触发重绘以适应新容器尺寸
               try { curApi.refreshViews(); } catch { /* 忽略 */ }
               return;
             }
-          } catch { /* API 不可用则走重建 */ }
+          } catch (err) {
+            // ★ DIAGNOSTIC: 记录异常详情
+            console.warn("[AiGGB:DIAG] ResizeObserver — getObjectNumber() THREW, 走重建路径 (可能触发画布消失!)");
+            console.warn("[AiGGB:DIAG] ResizeObserver getObjectNumber error:", err);
+          }
         }
+        console.warn("[AiGGB:DIAG] ResizeObserver 触发 inject() — size=", w, "x", h, " hasApi=", !!curApi);
         if (rebuildTimer !== null) clearTimeout(rebuildTimer);
         rebuildTimer = setTimeout(() => {
           rebuildTimer = null;
@@ -136,13 +190,157 @@ export function GGBCanvas() {
     });
     ro.observe(containerEl);
 
+    // ★★★ DIAGNOSTIC: MutationObserver 监控画布容器 DOM 变化 ★★★
+    //    任何子元素增删 + 属性变化都会记录，用于定位画布DOM是否被谁移除了
+    const domMo = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        if (m.type === "childList") {
+          const removed = m.removedNodes.length;
+          const added = m.addedNodes.length;
+          if (removed > 0 || added > 0) {
+            console.warn(`[AiGGB:DIAG] GGB 容器 DOM 变化: +${added} -${removed}`,
+              "target:", (m.target as Element).id || m.target);
+            m.removedNodes.forEach((n, i) => {
+              const el = n as Element;
+              const info = el.tagName ? `${el.tagName}${el.id ? "#"+el.id : ""}${el.className ? "."+String(el.className).split(" ").join(".") : ""}` : String(n);
+              console.warn(`[AiGGB:DIAG]   移除[${i}]:`, info.slice(0, 200));
+            });
+            // ★ 也记录添加了哪些节点（判断 GGB 是否重建了渲染容器）
+            m.addedNodes.forEach((n, i) => {
+              const el = n as Element;
+              const info = el.tagName ? `${el.tagName}${el.id ? "#"+el.id : ""}${el.className ? "."+String(el.className).split(" ").join(".") : ""}` : String(n);
+              const childCanvasCount = el.tagName ? el.querySelectorAll("canvas").length : 0;
+              console.warn(`[AiGGB:DIAG]   添加[${i}]:`, info.slice(0, 200), `含 ${childCanvasCount} 个 canvas`);
+            });
+          }
+        }
+        if (m.type === "attributes" && m.target instanceof Element) {
+          const el = m.target as Element;
+          // 只关心 canvas 元素的属性变化和 style/class 变化
+          if (el.tagName === "CANVAS" || el.tagName === "DIV" && (m.attributeName === "style" || m.attributeName === "class" || m.attributeName === "hidden")) {
+            console.warn(`[AiGGB:DIAG] 属性变化: ${el.tagName}${el.id ? "#"+el.id : ""} ${m.attributeName}=${JSON.stringify(el.getAttribute(m.attributeName!))}`);
+          }
+        }
+      }
+    });
+    domMo.observe(containerEl, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class", "hidden", "width", "height"] });
+
+    // ★★★ 心跳监控 + 自动恢复 ★★★
+    let canvasCount = 0;
+    let recoveryInProgress = false; // 恢复进行中不重复计数
+    let dockGlassPaneSeen = false;  // DockGlassPane 出现 → 跳过软恢复直接硬重建
+    const heartbeat = setInterval(() => {
+      const canvases = containerEl.querySelectorAll("canvas");
+      const newCount = canvases.length;
+      const hasDockGlassPane = containerEl.querySelector(".DockGlassPane") !== null;
+
+      if (newCount !== canvasCount) {
+        const sizes = newCount > 0 ? Array.from(canvases).map(c => `${c.width}x${c.height}`).join(",") : "(无canvas)";
+        console.warn(`[AiGGB:DIAG] 心跳: canvas ${canvasCount}→${newCount}` +
+          (hasDockGlassPane ? " ⚠DockGlassPane!" : ""), sizes);
+        canvasCount = newCount;
+      }
+
+      // canvas 恢复 → 重置一切
+      if (newCount > 0 && dockGlassPaneSeen) {
+        console.log(`[AiGGB:DIAG] ✅ canvas 已恢复 (${newCount} 个)`);
+        dockGlassPaneSeen = false;
+        recoveryInProgress = false;
+        return;
+      }
+
+      const api = useAppStore.getState().ggbApi;
+      if (!api) return;
+
+      let objCount = 0;
+      try { objCount = api.getObjectNumber(); } catch { return; }
+
+      // 正常空画布 → 无需恢复
+      if (objCount === 0 && newCount === 0) {
+        dockGlassPaneSeen = false;
+        recoveryInProgress = false;
+        return;
+      }
+
+      // 有对象但无 canvas + DockGlassPane → 立即硬重建（AG→3d 软恢复本身也触发闪烁，跳过）
+      if (objCount > 0 && newCount === 0 && hasDockGlassPane && !recoveryInProgress && !dockGlassPaneSeen) {
+        recoveryInProgress = true;
+        dockGlassPaneSeen = true;
+        console.error(`[AiGGB:DIAG] ⚠ DockGlassPane 导致画布消失 (${objCount}对象) → 保存快照并重建 applet`);
+
+        // 用 CSS 隐藏容器，避免销毁/重建过程中的闪烁
+        containerEl.style.visibility = "hidden";
+
+        let snapshot: string | null = null;
+        const doRebuild = () => {
+          if (!containerEl) return;
+          const rect = containerEl.getBoundingClientRect();
+          inject(Math.floor(rect.width), Math.floor(rect.height), true); // force
+          // 重建后恢复快照
+          if (snapshot) {
+            const tryRestore = () => {
+              const newApi = useAppStore.getState().ggbApi;
+              if (newApi) {
+                try {
+                  newApi.setBase64(snapshot!, () => {
+                    console.log("[AiGGB:DIAG] ✅ applet 重建完成，快照已恢复");
+                    containerEl.style.visibility = ""; // 恢复可见
+                    recoveryInProgress = false;
+                  });
+                } catch (err) {
+                  console.warn("[AiGGB:DIAG] 快照恢复失败:", err);
+                  containerEl.style.visibility = "";
+                  recoveryInProgress = false;
+                }
+              } else {
+                setTimeout(tryRestore, 100);
+              }
+            };
+            setTimeout(tryRestore, 500);
+          } else {
+            // 无快照：等 appletOnLoad 后显示
+            setTimeout(() => {
+              containerEl.style.visibility = "";
+              recoveryInProgress = false;
+            }, 1500);
+          }
+        };
+
+        try {
+          api.getBase64((data: string) => {
+            snapshot = data ?? null;
+            if (snapshot) console.log("[AiGGB:DIAG] 快照已保存，长度:", snapshot.length);
+            doRebuild();
+          });
+          setTimeout(() => { if (snapshot === null) doRebuild(); }, 3000);
+        } catch { doRebuild(); }
+        return;
+      }
+
+      // 有对象但无 canvas (非 DockGlassPane) → 常规软恢复
+      if (objCount > 0 && newCount === 0 && !hasDockGlassPane && !recoveryInProgress) {
+        recoveryInProgress = true;
+        console.warn(`[AiGGB:DIAG] ⚠ 画布消失 (${objCount}对象, 非DockGlassPane) → 尝试 refreshViews`);
+        try { api.refreshViews(); } catch {}
+        setTimeout(() => {
+          try { api.setRepaintingActive(true); } catch {}
+          try { api.setPerspective(mode === "3d" ? "3d" : "AG"); } catch {}
+          recoveryInProgress = false;
+        }, 300);
+      }
+    }, 2000);
+
     return () => {
+      console.log("[AiGGB:DIAG] effect cleanup — 即将取消 ggbApi + 清理监听器 (mode=", mode, ")");
       active = false;              // 作废本代次：pending retry/rebuild/inject 全部失效
       if (retryTimer !== null) clearTimeout(retryTimer);
       if (rebuildTimer !== null) clearTimeout(rebuildTimer);
       ro.disconnect();
+      domMo.disconnect();
+      clearInterval(heartbeat);
       setGGBApi(null);
       injectingRef.current = false; // 复位，确保下一代能正常注入
+      for (const fn of webglCleanups) fn(); // 清理 WebGL 事件监听
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ggbAppName]); // ★ ggbAppName 变化时销毁重建

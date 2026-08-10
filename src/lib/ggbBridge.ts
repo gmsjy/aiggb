@@ -35,16 +35,43 @@ export interface ExecResult {
 }
 
 /** 把所有命令逐条执行，失败不停。批量操作期间暂停重绘以提升性能。 */
-export function executeCommands(api: GGBAppletApi, commands: Command[]): ExecResult[] {
+export function executeCommands(api: GGBAppletApi, commands: Command[], appMode?: "2d" | "3d"): ExecResult[] {
   // ★ 批量执行：暂停重绘 → 逐条执行 → 恢复重绘
-  if (commands.length > 3) {
+  //    ⚠ 3D 模式禁用 batch：GGB web3d 在 setRepaintingActive(true) 后可能触发内部
+  //       布局重组使 3D 视图被 DockGlassPane 替换 → canvas 全部消失（GGB 内部 bug）
+  const useBatch = commands.length > 3 && appMode !== "3d";
+  // DIAGNOSTIC: 记录 batch 前后的 canvas 数量（仅浏览器）
+  const inBrowser = typeof document !== "undefined";
+  const canvasBefore = inBrowser
+    ? (document.getElementById("ggb-container")?.querySelectorAll("canvas")?.length ?? -1)
+    : -1;
+  console.log("[AiGGB:DIAG] executeCommands: 开始执行", commands.length, "条命令, batch=", useBatch,
+    canvasBefore >= 0 ? `canvas=${canvasBefore}` : "");
+  if (useBatch) {
+    console.log("[AiGGB:DIAG] setRepaintingActive(false) — 暂停重绘");
     api.setRepaintingActive(false);
   }
   try {
-    return commands.map(cmd => executeOne(api, cmd));
+    return commands.map((cmd, i) => {
+      const r = executeOne(api, cmd);
+      if (!r.ok) {
+        console.warn(`[AiGGB:DIAG] executeCommands [${i}]: ❌ ${cmd.op} 执行失败 —`, r.error);
+      }
+      return r;
+    });
   } finally {
-    if (commands.length > 3) {
+    if (useBatch) {
+      console.log("[AiGGB:DIAG] setRepaintingActive(true) — 恢复重绘 (可能触发大量 GPU 渲染)");
       api.setRepaintingActive(true);
+      // ★ DIAGNOSTIC: setRepaintingActive(true) 是已知的 canvas 消失触发点
+      const canvasAfter = inBrowser
+        ? (document.getElementById("ggb-container")?.querySelectorAll("canvas")?.length ?? -1)
+        : -1;
+      if (canvasAfter === 0 && canvasBefore > 0) {
+        console.error(`[AiGGB:DIAG] ⚠⚠⚠ setRepaintingActive(true) 后 canvas 从 ${canvasBefore} → 0！GGB 内部渲染容器重建失败！`);
+      } else if (canvasBefore >= 0) {
+        console.log(`[AiGGB:DIAG] setRepaintingActive(true) 后 canvas=${canvasAfter} (之前=${canvasBefore})`);
+      }
     }
   }
 }
@@ -164,6 +191,7 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
       }
 
       case "reset": {
+        console.warn("[AiGGB:DIAG] ★ newConstruction() — 清空画布所有对象!");
         api.newConstruction();
         resetTmpIds();
         return { ok: true, command: cmd, expanded };
@@ -334,6 +362,7 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
       }
     }
   } catch (err) {
+    console.error(`[AiGGB:DIAG] executeOne 抛出异常 (${cmd.op}):`, err instanceof Error ? err.message : String(err));
     return {
       ok: false,
       command: cmd,
@@ -455,6 +484,7 @@ export function exportPDF(api: GGBAppletApi, scale = 1): Promise<string> {
  */
 export function getRichSnapshot(api: GGBAppletApi): string {
   const names = api.getAllObjectNames();
+  console.log("[AiGGB:DIAG] getRichSnapshot —", names.length, "个对象:", names.slice(0, 10).join(","), names.length > 10 ? `...(${names.length - 10} more)` : "");
   if (names.length === 0) return "(空画布)";
 
   const lines: string[] = [];

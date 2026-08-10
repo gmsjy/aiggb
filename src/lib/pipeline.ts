@@ -236,8 +236,16 @@ async function runPhase2(finalSpec: string, deps: PipelineDeps): Promise<void> {
 /** 满足度评估 + 不满足时修复（最多 1 次） */
 async function evaluateAndRepair(finalSpec: string, deps: PipelineDeps): Promise<void> {
   const api = deps.getApi();
-  if (!api) return;
+  if (!api) {
+    console.log("[AiGGB:DIAG] evaluateAndRepair: api is null, skip");
+    return;
+  }
 
+  console.log("[AiGGB:DIAG] evaluateAndRepair: 开始满足度评估");
+  // ★ 等待浏览器下一帧，确保 3D 渲染管线空闲（避免刚恢复重绘时立即大量 API 读取导致 WebGL 压力）
+  if (typeof requestAnimationFrame !== "undefined") {
+    await new Promise<void>(r => requestAnimationFrame(() => r()));
+  }
   const snapshot = getRichSnapshot(api);
 
   const evalFn = deps.evalSatisfactionImpl ??
@@ -324,22 +332,28 @@ async function executeAndRepair(
   let ragRepairNote = applyRagCorrection(response);
   const snapshot = await takeSnapshot(api);
 
-  let results = executeCommands(api, response.commands);
+  console.log("[AiGGB:DIAG] executeAndRepair: 执行", response.commands.length, "条命令");
+  let results = executeCommands(api, response.commands, deps.appMode);
   deps.appendAIResponse(response, results);
 
   let attempts = 0;
   while (attempts < MAX_REPAIR) {
     const failures = collectFailures(results);
+    console.log(`[AiGGB:DIAG] executeAndRepair: 第${attempts}次执行 — ${results.length - failures.length}成功 / ${failures.length}失败`);
     if (failures.length === 0) break;
     attempts++;
 
     // 全部失败 → 回滚：快照优先，快照不可用则 newConstruction + 重放构造日志
     if (attempts === 1 && failures.length === results.length) {
+      console.warn("[AiGGB:DIAG] executeAndRepair: ★ 全部命令失败，尝试回滚...");
       const restored = snapshot !== null && (await restoreSnapshot(api, snapshot));
       if (!restored) {
+        console.warn("[AiGGB:DIAG] executeAndRepair: ★ 快照不可用 → newConstruction() + 重放日志");
         api.newConstruction();
         resetTmpIds();
         replayConstructionLog(api, deps.getConstructionLog());
+      } else {
+        console.log("[AiGGB:DIAG] executeAndRepair: 快照恢复成功");
       }
     }
 
@@ -362,7 +376,7 @@ async function executeAndRepair(
     const repairNote = applyRagCorrection(response);
     if (repairNote) ragRepairNote = repairNote;
 
-    results = executeCommands(deps.getApi() ?? api, response.commands);
+    results = executeCommands(deps.getApi() ?? api, response.commands, deps.appMode);
     deps.appendAIResponse(response, results);
   }
 }
@@ -666,6 +680,10 @@ async function evaluateAgentResult(result: AgentLoopResult, deps: PipelineDeps):
   const api = deps.getApi();
   if (!api) return;
 
+  // ★ 等待浏览器下一帧，确保 3D 渲染管线空闲
+  if (typeof requestAnimationFrame !== "undefined") {
+    await new Promise<void>(r => requestAnimationFrame(() => r()));
+  }
   const snapshot = getRichSnapshot(api);
 
   const evalFn = deps.evalSatisfactionImpl ??

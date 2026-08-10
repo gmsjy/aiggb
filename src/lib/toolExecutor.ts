@@ -310,7 +310,13 @@ function dispatch(
       }
       if (perspective === "3d") {
         api.enable3D(true);
-        api.setPerspective("3d");
+        // ★ 检测当前是否已是 3D 视图——重复 setPerspective("3d") 可能触发
+        //    GGB 内部 DockGlassPane 接管视图过度、导致 3D iframe 被销毁。
+        //    仅在非 3D 时才切换透视，避免无意义触发 GGB 内部布局 bug。
+        const already3D = api.getPerspectiveXML?.()?.includes("3D");
+        if (!already3D) {
+          api.setPerspective("3d");
+        }
         changes.push("3D 透视");
       }
       return changes.length ? `视图已更新：${changes.join("，")}` : "视图未更改（无有效参数）";
