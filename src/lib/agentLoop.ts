@@ -238,7 +238,7 @@ export async function runAgentLoop(
     // 先执行安全工具
     const toolNames = [...safeCalls, ...dangerousCalls].map(tc => tc.function.name);
     deps.onThinking?.(`执行工具：${toolNames.join(", ")}`);
-    const safeResults = executeSafeTools(api, safeCalls);
+    const safeResults = executeSafeTools(api, safeCalls, deps.appMode);
     for (const r of safeResults) {
       messages.push(r);
     }
@@ -281,14 +281,15 @@ export async function runAgentLoop(
 
 function executeSafeTools(
   api: GGBAppletApi,
-  calls: ToolCallDelta[]
+  calls: ToolCallDelta[],
+  appMode?: "2d" | "3d"
 ): ToolResult[] {
   const requests: ToolCallRequest[] = calls.map(tc => ({
     id: tc.id,
     name: tc.function.name,
     arguments: safeParseJSON(tc.function.arguments, tc.function.name)
   }));
-  return executeToolCalls(api, requests);
+  return executeToolCalls(api, requests, appMode);
 }
 
 /** 信任激活后直接执行危险工具，无需确认 */

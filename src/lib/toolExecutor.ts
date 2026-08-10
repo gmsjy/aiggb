@@ -76,16 +76,19 @@ export function executeToolCall(
 /** 批量执行工具调用 */
 export function executeToolCalls(
   api: GGBAppletApi,
-  calls: ToolCallRequest[]
+  calls: ToolCallRequest[],
+  appMode?: "2d" | "3d"
 ): ToolResult[] {
-  // 批量执行暂停重绘
-  if (calls.length > 2) {
+  // ★ 3D 模式禁用 batch：GGB web3d 在 setRepaintingActive(true) 后可能触发内部
+  //    布局重组使 3D 视图被 DockGlassPane 替换 → canvas 全部消失（GGB 内部 bug）
+  const useBatch = calls.length > 2 && appMode !== "3d";
+  if (useBatch) {
     api.setRepaintingActive(false);
   }
   try {
     return calls.map(c => executeToolCall(api, c));
   } finally {
-    if (calls.length > 2) {
+    if (useBatch) {
       api.setRepaintingActive(true);
     }
   }
