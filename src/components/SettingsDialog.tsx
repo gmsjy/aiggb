@@ -30,11 +30,21 @@ export function SettingsDialog({ onClose }: Props) {
   const [testing, setTesting] = useState<boolean>(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  // ★ 角色专用模型（可选，留空则回退到主力模型）
+  const [lightModel, setLightModel] = useState<string>(existing?.lightModel ?? existing?.flashModel ?? "");
+  const [agentModel, setAgentModel] = useState<string>(existing?.agentModel ?? "");
+
   const preset = findProvider(providerId);
 
   /** 用户是否主动切到"自定义模型"输入模式 */
   const [customMode, setCustomMode] = useState<boolean>(
     () => !!(preset && preset.models.length > 0 && !preset.models.includes(model))
+  );
+  const [lightCustomMode, setLightCustomMode] = useState<boolean>(
+    () => !!(preset && preset.models.length > 0 && lightModel !== "" && !preset.models.includes(lightModel))
+  );
+  const [agentCustomMode, setAgentCustomMode] = useState<boolean>(
+    () => !!(preset && preset.models.length > 0 && agentModel !== "" && !preset.models.includes(agentModel))
   );
 
   const onProviderChange = (id: string) => {
@@ -44,6 +54,9 @@ export function SettingsDialog({ onClose }: Props) {
       if (p.baseURL) setBaseURL(p.baseURL);
       setModel(p.models[0] ?? "");
       setCustomMode(false);
+      setLightCustomMode(false);
+      setAgentCustomMode(false);
+      // 切换 provider 时不自动重置 lightModel/agentModel——用户可能想保留自定义值
     }
   };
 
@@ -52,7 +65,9 @@ export function SettingsDialog({ onClose }: Props) {
     baseURL: baseURL.trim(),
     apiKey: apiKey.trim(),
     model: model.trim(),
-    temperature
+    temperature,
+    lightModel: lightModel.trim() || undefined,
+    agentModel: agentModel.trim() || undefined,
   });
 
   const onTest = async () => {
@@ -159,7 +174,7 @@ export function SettingsDialog({ onClose }: Props) {
           </label>
 
           <label>
-            <span>Model</span>
+            <span>主力模型 (编译/修复)</span>
             {preset && preset.models.length > 0 ? (
               <>
                 <select
@@ -198,6 +213,90 @@ export function SettingsDialog({ onClose }: Props) {
               />
             )}
           </label>
+
+          <details className="form-details">
+            <summary>高级：角色专用模型（可选）</summary>
+            <label>
+              <span>轻量模型 (精炼/评估)</span>
+              {preset && preset.models.length > 0 ? (
+                <>
+                  <select
+                    value={lightCustomMode ? "__custom__" : lightModel}
+                    onChange={e => {
+                      const v = e.target.value;
+                      if (v === "__custom__") { setLightCustomMode(true); return; }
+                      setLightCustomMode(false);
+                      setLightModel(v);
+                    }}
+                  >
+                    <option value="">跟随主力模型</option>
+                    {preset.models.map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                    <option value="__custom__">— 自定义 —</option>
+                  </select>
+                  {lightCustomMode && (
+                    <input
+                      type="text"
+                      value={lightModel}
+                      placeholder="输入自定义模型名"
+                      onChange={e => setLightModel(e.target.value)}
+                      autoFocus
+                      style={{ marginTop: 4 }}
+                    />
+                  )}
+                </>
+              ) : (
+                <input
+                  type="text"
+                  value={lightModel}
+                  onChange={e => setLightModel(e.target.value)}
+                  placeholder="留空则使用主力模型"
+                />
+              )}
+              <small className="hint">用于 Phase 1 规格精炼和满足度评估。便宜快速的模型即可。</small>
+            </label>
+            <label>
+              <span>Agent 模型 (对话代理)</span>
+              {preset && preset.models.length > 0 ? (
+                <>
+                  <select
+                    value={agentCustomMode ? "__custom__" : agentModel}
+                    onChange={e => {
+                      const v = e.target.value;
+                      if (v === "__custom__") { setAgentCustomMode(true); return; }
+                      setAgentCustomMode(false);
+                      setAgentModel(v);
+                    }}
+                  >
+                    <option value="">跟随主力模型</option>
+                    {preset.models.map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                    <option value="__custom__">— 自定义 —</option>
+                  </select>
+                  {agentCustomMode && (
+                    <input
+                      type="text"
+                      value={agentModel}
+                      placeholder="输入自定义模型名"
+                      onChange={e => setAgentModel(e.target.value)}
+                      autoFocus
+                      style={{ marginTop: 4 }}
+                    />
+                  )}
+                </>
+              ) : (
+                <input
+                  type="text"
+                  value={agentModel}
+                  onChange={e => setAgentModel(e.target.value)}
+                  placeholder="留空则使用主力模型"
+                />
+              )}
+              <small className="hint">用于 Agent 模式的 ReAct 循环。需支持 Function Calling。</small>
+            </label>
+          </details>
 
           <label className="row">
             <span>Temperature</span>

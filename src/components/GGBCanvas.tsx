@@ -10,7 +10,7 @@
  */
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../store/useAppStore";
-import { resetTmpIds } from "../lib/ggbBridge";
+import { resetTmpIds, applyCanvasConfig } from "../lib/ggbBridge";
 import type { GGBAppletApi } from "../types/ggb";
 
 const CONTAINER_ID = "ggb-container";
@@ -40,6 +40,20 @@ export function GGBCanvas() {
         return;
       }
       if (injectingRef.current) return;
+
+      // ★ 防御：已有的 applet 含对象时不重建（避免销毁用户可见的绘图）。
+      //    GeoGebra HTML5 applet 内部会自适应容器尺寸变化。
+      const curApi = useAppStore.getState().ggbApi;
+      if (curApi) {
+        try {
+          if (curApi.getObjectNumber() > 0) {
+            console.log("[AiGGB] inject: skip rebuild (canvas has objects, GeoGebra handles resize internally)");
+            try { curApi.refreshViews(); } catch { /* 忽略 */ }
+            return;
+          }
+        } catch { /* API 不可用则走重建 */ }
+      }
+
       injectingRef.current = true;
 
       // ★ 销毁旧 applet
@@ -68,6 +82,9 @@ export function GGBCanvas() {
             if (!active) return; // 已切换模式，忽略过期 applet 的回调
             resetTmpIds(); // 新画布：临时对象名从头开始
             setGGBApi(api);
+            // ★ Phase 1.2: 画布就绪时应用领域级配置
+            const curDomain = useAppStore.getState().domain;
+            applyCanvasConfig(api, curDomain, mode === "3d" ? "3d" : "2d");
             injectingRef.current = false;
             console.log("[AiGGB] " + mode + " loaded");
           }
@@ -97,6 +114,19 @@ export function GGBCanvas() {
         const last = lastSizeRef.current;
         if (Math.abs(w - last.w) < 40 && Math.abs(h - last.h) < 40) continue;
         lastSizeRef.current = { w, h };
+        // ★ 如果画布已有对象，跳过重建以免清空用户可见的绘图。
+        //    GeoGebra 内部有自适应 resize 逻辑；只有空画布（初始/刚切模式）才重建。
+        const curApi = useAppStore.getState().ggbApi;
+        if (curApi) {
+          try {
+            if (curApi.getObjectNumber() > 0) {
+              console.log("[AiGGB] ResizeObserver: skip rebuild (canvas has objects, GeoGebra handles resize internally)");
+              // 通知 GeoGebra 触发重绘以适应新容器尺寸
+              try { curApi.refreshViews(); } catch { /* 忽略 */ }
+              return;
+            }
+          } catch { /* API 不可用则走重建 */ }
+        }
         if (rebuildTimer !== null) clearTimeout(rebuildTimer);
         rebuildTimer = setTimeout(() => {
           rebuildTimer = null;

@@ -12,8 +12,10 @@ import { useEffect, useRef, useState } from "react";
 import { Send, Loader2, X } from "lucide-react";
 import { useAppStore, newMessageId } from "../store/useAppStore";
 import { AISchemaError } from "../lib/aiClient";
-import { runPipeline, type PipelineDeps, type ReviewHandle } from "../lib/pipeline";
-import { abortCurrentRun, beginRun, endRun, wasAborted } from "../lib/runControl";
+import { resolveModel } from "../lib/aiClient";
+import { runPipeline, runAgentPipeline, type PipelineDeps, type ReviewHandle } from "../lib/pipeline";
+import { abortCurrentRun, beginRun, endRun, wasAborted, onRunCancelled } from "../lib/runControl";
+import type { ConfirmationRequest, ConfirmationDecision } from "../lib/agentLoop";
 import { MessageBubble } from "./MessageBubble";
 
 export function ChatPanel() {
@@ -28,12 +30,19 @@ export function ChatPanel() {
 
   const config = useAppStore(s => s.config);
   const domain = useAppStore(s => s.domain);
+  const agentMode = useAppStore(s => s.agentMode);
   const messages = useAppStore(s => s.messages);
   const ggbApi = useAppStore(s => s.ggbApi);
   const setThinking = useAppStore(s => s.setThinking);
   const isThinking = useAppStore(s => s.isThinking);
   const appendMessage = useAppStore(s => s.appendMessage);
   const clearMessages = useAppStore(s => s.clearMessages);
+
+  // Agent mode: confirmation dialog state
+  const [confirmDialog, setConfirmDialog] = useState<{
+    requests: ConfirmationRequest[];
+    resolve: (decisions: ConfirmationDecision[]) => void;
+  } | null>(null);
 
   // 自动滚到底部
   useEffect(() => {
@@ -76,6 +85,29 @@ export function ChatPanel() {
     return () => {
       window.removeEventListener("aiggb:spec-confirm", onConfirm);
       window.removeEventListener("aiggb:spec-retry", onRetry);
+    };
+  }, []);
+
+  // ★ 取消/组件卸载时清理 confirmDialog，避免 Promise 悬挂
+  useEffect(() => {
+    const unsub = onRunCancelled(() => {
+      setConfirmDialog(d => {
+        if (d) {
+          // 全部拒绝以释放 agent loop 等待
+          d.resolve(d.requests.map(r => ({ action: "deny" as const, toolCallId: r.toolCallId })));
+        }
+        return null;
+      });
+    });
+    return () => {
+      unsub();
+      // 卸载时也清理
+      setConfirmDialog(d => {
+        if (d) {
+          d.resolve(d.requests.map(r => ({ action: "deny" as const, toolCallId: r.toolCallId })));
+        }
+        return null;
+      });
     };
   }, []);
 
@@ -139,14 +171,30 @@ export function ChatPanel() {
         removeMessage: id =>
           useAppStore.setState(s => ({ messages: s.messages.filter(m => m.id !== id) })),
         setThinking,
-        newMessageId
+        newMessageId,
+        heavyModel: resolveModel(config!, "heavy"),
+        lightModel: resolveModel(config!, "light"),
       };
-      // runPipeline 直到整个流程结束才 resolve，锁在此 finally 统一释放
-      await runPipeline(userText, deps, {
-        onReview: handle => {
-          reviewHandleRef.current = handle;
-        }
-      });
+      // ★ Agent mode vs Two-stage pipeline
+      if (useAppStore.getState().agentMode) {
+        await runAgentPipeline(userText, deps, {
+          onReview: handle => {
+            reviewHandleRef.current = handle;
+          },
+          onConfirm: async (requests) => {
+            // 暂停 agent loop，等待用户确认
+            return new Promise<ConfirmationDecision[]>(resolve => {
+              setConfirmDialog({ requests, resolve });
+            });
+          }
+        });
+      } else {
+        await runPipeline(userText, deps, {
+          onReview: handle => {
+            reviewHandleRef.current = handle;
+          }
+        });
+      }
     } catch (err) {
       if (!wasAborted()) {
         appendMessage({ id: newMessageId(), role: "error", content: describeError(err) });
@@ -192,9 +240,68 @@ export function ChatPanel() {
         {messages.map(m => (
           <MessageBubble key={m.id} turn={m} />
         ))}
+        {/* Agent mode: dangerous tool confirmation dialog */}
+        {confirmDialog && (
+          <div className="confirm-overlay">
+            <div className="confirm-dialog">
+              <h4>⚠ 工具调用确认</h4>
+              <p className="confirm-hint">AI 请求执行以下操作。部分操作可能修改画布：</p>
+              <ul className="confirm-list">
+                {confirmDialog.requests.map((req, i) => (
+                  <li key={i}>
+                    <code>{req.toolName}</code>
+                    <span>{req.description}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="confirm-actions">
+                <button
+                  className="confirm-deny"
+                  onClick={() => {
+                    const decisions = confirmDialog.requests.map(r => ({
+                      action: "deny" as const, toolCallId: r.toolCallId
+                    }));
+                    confirmDialog.resolve(decisions);
+                    setConfirmDialog(null);
+                  }}
+                >
+                  全部拒绝
+                </button>
+                <button
+                  className="confirm-approve"
+                  onClick={() => {
+                    const decisions = confirmDialog.requests.map(r => ({
+                      action: "approve" as const, toolCallId: r.toolCallId
+                    }));
+                    confirmDialog.resolve(decisions);
+                    setConfirmDialog(null);
+                  }}
+                >
+                  全部允许
+                </button>
+                <button
+                  className="confirm-trust"
+                  onClick={() => {
+                    const decisions: ConfirmationDecision[] = [
+                      { action: "approve_all" },
+                      ...confirmDialog.requests.slice(1).map(r => ({
+                        action: "approve" as const, toolCallId: r.toolCallId
+                      }))
+                    ];
+                    confirmDialog.resolve(decisions);
+                    setConfirmDialog(null);
+                  }}
+                >
+                  信任此会话（后续自动批准）
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {isThinking && (
           <div className="thinking">
-            <Loader2 size={14} className="spin" /> AI 思考中…
+            <Loader2 size={14} className="spin" />
+            {agentMode ? " Agent 构造中…（可观察右侧脚本面板）" : " AI 思考中…"}
             <button
               className="thinking-cancel"
               onClick={() => abortCurrentRun()}

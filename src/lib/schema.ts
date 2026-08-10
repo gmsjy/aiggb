@@ -137,7 +137,9 @@ export const Command = z.discriminatedUnion("op", [
     thickness: IntLike.refine(n => n >= 1 && n <= 13, "thickness 应在 1–13 之间").optional(),
     visible: BoolLike.optional(),
     opacity: NumLike.refine(n => n >= 0 && n <= 1, "opacity 应在 0–1 之间").optional(),
-    dashed: BoolLike.optional()
+    dashed: BoolLike.optional(),
+    pointSize: IntLike.refine(n => n >= 1 && n <= 9, "pointSize 应在 1–9 之间").optional(),
+    pointStyle: IntLike.refine(n => n >= -1 && n <= 9, "pointStyle 应在 -1~9 之间").optional()
   }),
 
   z.object({

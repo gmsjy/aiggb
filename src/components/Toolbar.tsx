@@ -16,7 +16,7 @@ import {
   Box
 } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
-import { executeCommands, exportGGB, exportPNG, resetTmpIds } from "../lib/ggbBridge";
+import { executeCommands, exportGGB, exportPNG, resetTmpIds, applyCanvasConfig } from "../lib/ggbBridge";
 import { abortCurrentRun } from "../lib/runControl";
 
 interface BeforeInstallPromptEvent extends Event {
@@ -35,6 +35,8 @@ export function Toolbar({ onOpenSettings, onOpenGallery }: Props) {
   const setAppName = useAppStore(s => s.setAppName);
   const domain = useAppStore(s => s.domain);
   const setDomain = useAppStore(s => s.setDomain);
+  const agentMode = useAppStore(s => s.agentMode);
+  const setAgentMode = useAppStore(s => s.setAgentMode);
   const messages = useAppStore(s => s.messages);
   const clearMessages = useAppStore(s => s.clearMessages);
   const undoLastTurn = useAppStore(s => s.undoLastTurn);
@@ -43,6 +45,11 @@ export function Toolbar({ onOpenSettings, onOpenGallery }: Props) {
   const switchDomain = (d: typeof domain) => {
     if (d === domain) return;
     setDomain(d);
+    // ★ Phase 1.2: 领域切换时应用画布级配置
+    const api = useAppStore.getState().ggbApi;
+    if (api) {
+      applyCanvasConfig(api, d, ggbAppName === "3d" ? "3d" : "2d");
+    }
     const msg =
       d === "physics"
         ? "已切换 ⚛ 物理模式 — 启用矢量箭头、物理常量、受力分析等专项支持"
@@ -172,6 +179,16 @@ export function Toolbar({ onOpenSettings, onOpenGallery }: Props) {
           title={ggbAppName === "3d" ? "当前 3D 模式 · 点击切回平面" : "当前平面模式 · 点击切换到 3D"}
         >
           <Box size={14} /> {ggbAppName === "3d" ? "3D" : "平面"}
+        </button>
+
+        <button
+          className={agentMode ? "active agent-on" : ""}
+          onClick={() => setAgentMode(!agentMode)}
+          title={agentMode
+            ? "当前：代理模式（逐步构造）— 点击切换回两阶段模式"
+            : "当前：两阶段模式 — 点击切换为代理模式（逐步构造+实时反馈）"}
+        >
+          🤖 {agentMode ? "代理" : "两阶段"}
         </button>
 
         <button onClick={onOpenGallery} title="物理 / 数学模板">

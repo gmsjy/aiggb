@@ -1,40 +1,133 @@
 /**
  * GeoGebra Applet 全局类型补丁
- * 仅声明本工具实际用到的方法，未覆盖完整 SDK。
+ * 基于 GeoGebra Apps API 官方参考 (v5.0+) 声明本工具使用的方法。
  */
 
 export interface GGBAppletApi {
+  // ── 创建对象 ──
   evalCommand: (cmd: string) => boolean;
   evalCommandCAS?: (cmd: string) => string;
+  evalCommandGetLabels?: (cmd: string) => string;
+  evalLaTeX?: (input: string) => boolean;
+
+  // ── 通用对象状态 ──
   setVisible: (label: string, visible: boolean) => void;
   setColor: (label: string, r: number, g: number, b: number) => void;
   setLineThickness: (label: string, thickness: number) => void;
   setLineStyle: (label: string, style: number) => void;
+  setPointStyle: (label: string, style: number) => void;
+  setPointSize: (label: string, size: number) => void;
   setFilling: (label: string, opacity: number) => void;
   setCaption: (label: string, caption: string) => void;
   setLabelStyle: (label: string, style: number) => void;
   setLabelVisible: (label: string, visible: boolean) => void;
-  setCoordSystem: (xmin: number, xmax: number, ymin: number, ymax: number) => void;
-  setAxisLabels: (view: number, xLabel: string, yLabel: string, zLabel: string) => void;
-  setAxisUnits?: (view: number, xUnit: string, yUnit: string, zUnit: string) => void;
-  setPerspective?: (perspective: string) => void;
-  enable3D?: (enable: boolean) => void;
-  getPerspectiveXML?: () => string;
+  setFixed: (label: string, fixed: boolean, selectionAllowed?: boolean) => void;
+  setTrace: (label: string, flag: boolean) => void;
+  setLayer: (label: string, layer: number) => void;
+  setLayerVisible: (layer: number, visible: boolean) => void;
+  setDisplayStyle: (label: string, style: string) => void;
+  setValue: (label: string, value: number) => void;
+  setTextValue: (label: string, value: string) => void;
+  setCoords: (label: string, x: number, y: number, z?: number) => void;
+  deleteObject: (label: string) => void;
+  renameObject: (oldName: string, newName: string) => boolean;
+  setAuxiliary: (label: string, auxiliary: boolean) => void;
+
+  // ── 自动动画 ──
   setAnimating: (label: string, animate: boolean) => void;
   setAnimationSpeed: (label: string, speed: number) => void;
   startAnimation: () => void;
   stopAnimation: () => void;
-  setTrace: (label: string, flag: boolean) => void;
-  deleteObject: (label: string) => void;
+  isAnimationRunning: () => boolean;
+
+  // ── 获取对象状态 ──
+  getXcoord: (label: string) => number;
+  getYcoord: (label: string) => number;
+  getZcoord: (label: string) => number;
+  getValue: (label: string) => number;
+  getColor: (label: string) => string;
+  getVisible: (label: string, view?: number) => boolean;
+  getValueString: (label: string, useLocalizedInput?: boolean) => string;
+  getDefinitionString: (label: string) => string;
+  getCommandString: (label: string, useLocalizedInput?: boolean) => string;
+  getLaTeXString: (label: string) => string;
+  getObjectType: (label: string) => string;
+  exists: (label: string) => boolean;
+  isDefined: (label: string) => boolean;
+  isIndependent: (label: string) => boolean;
+  isMoveable: (label: string) => boolean;
+  getAllObjectNames: (type?: string) => string[];
+  getObjectNumber: () => number;
+  getObjectName: (i: number) => string;
+  getLayer: (label: string) => number;
+  getLineStyle: (label: string) => number;
+  getLineThickness: (label: string) => number;
+  getPointStyle: (label: string) => number;
+  getPointSize: (label: string) => number;
+  getFilling: (label: string) => number;
+  getCaption: (label: string, substitutePlaceholders?: boolean) => string;
+  getLabelStyle: (label: string) => number;
+  getLabelVisible: (label: string) => boolean;
+
+  // ── 构造 / UI ──
+  setCoordSystem: (xmin: number, xmax: number, ymin: number, ymax: number) => void;
+  setCoordSystem3D?: (xmin: number, xmax: number, ymin: number, ymax: number, zmin: number, zmax: number, yVertical: boolean) => void;
+  setAxesVisible: (xAxis: boolean, yAxis: boolean, zAxis?: boolean) => void;
+  setAxisLabels: (view: number, xLabel: string, yLabel: string, zLabel: string) => void;
+  setAxisUnits: (view: number, xUnit: string, yUnit: string, zUnit: string) => void;
+  setAxisSteps: (view: number, xStep: number, yStep: number, zStep: number) => void;
+  setGridVisible: (flag: boolean) => void;
+  getGridVisible: (view?: number) => boolean;
+  setPerspective: (perspective: string) => void;
+  getPerspectiveXML: () => string;
+  enable3D: (enable: boolean) => void;
+  enableRightClick: (enable: boolean) => void;
+  enableLabelDrags: (enable: boolean) => void;
+  enableShiftDragZoom: (enable: boolean) => void;
+  enableCAS: (enable: boolean) => void;
+  setRepaintingActive: (flag: boolean) => void;
+  setErrorDialogsActive: (flag: boolean) => void;
+  setOnTheFlyPointCreationActive: (flag: boolean) => void;
+  setPointCapture: (view: number, mode: number) => void;
+  setRounding: (round: string) => void;
+  hideCursorWhenDragging: (flag: boolean) => void;
+  setMode: (mode: number) => void;
+  getMode: () => number;
+  refreshViews: () => void;
+  showAllObjects: () => void;
+  setUndoPoint: () => void;
+  undo: () => void;
+  redo: () => void;
+  showToolBar: (show: boolean) => void;
+  showMenuBar: (show: boolean) => void;
+  showAlgebraInput: (show: boolean) => void;
+  showResetIcon: (show: boolean) => void;
+
+  // ── 事件监听器 ──
+  registerAddListener: (fn: (label: string) => void) => void;
+  registerRemoveListener: (fn: (label: string) => void) => void;
+  registerUpdateListener: (fn: (label: string) => void) => void;
+  registerObjectUpdateListener: (label: string, fn: () => void) => void;
+  registerClickListener: (label: string, fn: () => void) => void;
+  registerClientListener: (fn: (event: Record<string, unknown>) => void) => void;
+  unregisterAddListener: (fn: (label: string) => void) => void;
+  unregisterRemoveListener: (fn: (label: string) => void) => void;
+  unregisterUpdateListener: (fn: (label: string) => void) => void;
+  unregisterObjectUpdateListener: (label: string) => void;
+  unregisterClickListener: (label: string) => void;
+  unregisterClientListener: (fn: (event: Record<string, unknown>) => void) => void;
+
+  // ── 文件 / 导出 ──
   reset: () => void;
   newConstruction: () => void;
   getBase64: (callback?: (data: string) => void) => string | void;
   setBase64: (base64: string, callback?: () => void) => void;
   getPNGBase64: (exportScale: number, transparent: boolean, dpi: number) => string;
-  getAllObjectNames: () => string[];
-  exists: (label: string) => boolean;
-  registerAddListener?: (fn: (label: string) => void) => void;
-  registerRemoveListener?: (fn: (label: string) => void) => void;
+  getScreenshotBase64: (callback: (data: string) => void) => void;
+  writePNGtoFile: (filename: string, exportScale: number, transparent: boolean, dpi: number) => boolean;
+  exportSVG: (callback: ((svg: string) => void) | string) => void;
+  exportPDF: (scale: number, callback: ((pdf: string) => void) | string, sliderLabel?: string) => void;
+  openFile: (url: string) => void;
 }
 
 export interface GGBAppletParameters {

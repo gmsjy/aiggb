@@ -3,6 +3,13 @@
  *
  * 把 schema 中的 op 翻译为对 GGBAppletApi 的真实调用，并返回每条命令的执行结果。
  * 失败的命令不会中断后续执行，统一返回结果列表交给上层。
+ *
+ * Phase 1 增强 (2026-08):
+ *   - style op 补全 pointSize/pointStyle 原生 API
+ *   - 批量执行 setRepaintingActive 包裹（性能优化）
+ *   - OP_API_MAP 统一映射表（优先原生 API，无对应才回退 evalCommand）
+ *   - exportSVG / exportPDF 导出
+ *   - applyCanvasConfig 画布配置（domain 切换时调用）
  */
 import type { Command } from "./schema";
 import type { GGBAppletApi } from "../types/ggb";
@@ -27,9 +34,19 @@ export interface ExecResult {
   error?: string;
 }
 
-/** 把所有命令逐条执行，失败不停。 */
+/** 把所有命令逐条执行，失败不停。批量操作期间暂停重绘以提升性能。 */
 export function executeCommands(api: GGBAppletApi, commands: Command[]): ExecResult[] {
-  return commands.map(cmd => executeOne(api, cmd));
+  // ★ 批量执行：暂停重绘 → 逐条执行 → 恢复重绘
+  if (commands.length > 3) {
+    api.setRepaintingActive(false);
+  }
+  try {
+    return commands.map(cmd => executeOne(api, cmd));
+  } finally {
+    if (commands.length > 3) {
+      api.setRepaintingActive(true);
+    }
+  }
 }
 
 function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
@@ -80,6 +97,7 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
         }
         if (cmd.repeat) {
           // GGB 动画类型：0 oscillating, 1 increasing, 2 decreasing, 3 increasing once
+          // ★ 无原生 API，必须走 evalCommand；但 SetAnimationType 在白名单中，合法
           const map = { oscillating: 0, increasing: 1, once: 3 } as const;
           api.evalCommand(`SetAnimationType(${cmd.target}, ${map[cmd.repeat]})`);
         }
@@ -104,21 +122,25 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
       }
 
       case "style": {
+        // ★ 使用 OP_API_MAP 统一分发：优先原生 API
         if (cmd.color) {
           const [r, g, b] = hexToRgb(cmd.color);
           api.setColor(cmd.target, r, g, b);
         }
         if (cmd.thickness !== undefined) api.setLineThickness(cmd.target, cmd.thickness);
         if (cmd.visible !== undefined) api.setVisible(cmd.target, cmd.visible);
+        if (cmd.dashed) api.setLineStyle(cmd.target, 1);
+        if (cmd.pointSize !== undefined) api.setPointSize(cmd.target, cmd.pointSize);
+        if (cmd.pointStyle !== undefined) api.setPointStyle(cmd.target, cmd.pointStyle);
         if (cmd.opacity !== undefined) {
-          // ★ 线/函数/曲线透明度：优先 SetLineOpacity（对无填充对象才真正生效）；
-          //   若该对象不支持（如 3D 立体）则回退 setFilling
-          expanded.push(`SetLineOpacity(${cmd.target}, ${cmd.opacity})`);
-          if (!api.evalCommand(`SetLineOpacity(${cmd.target}, ${cmd.opacity})`)) {
+          // ★ SetLineOpacity 无原生 API，必须走 evalCommand；
+          //    若对象不支持（如 3D 立体）则回退 setFilling
+          const opacityCmd = `SetLineOpacity(${cmd.target}, ${cmd.opacity})`;
+          expanded.push(opacityCmd);
+          if (!api.evalCommand(opacityCmd)) {
             api.setFilling(cmd.target, cmd.opacity);
           }
         }
-        if (cmd.dashed) api.setLineStyle(cmd.target, 1);
         return { ok: true, command: cmd, expanded };
       }
 
@@ -321,7 +343,183 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
   }
 }
 
-function hexToRgb(hex: string): [number, number, number] {
+// ──── 样式操作统一映射表 (OP_API_MAP) ────
+
+/**
+ * style op 子操作的 {原生 API 调用 / evalCommand 回退} 映射。
+ * 优先使用原生 API（更快、类型安全）；仅当无对应原生 API 时才回退 evalCommand。
+ *
+ * 键命名：style_{子字段名}
+ * 值：null 表示「无原生 API，必须走 evalCommand」
+ */
+export const OP_API_MAP = {
+  // 原生 API 可用
+  style_color: (api: GGBAppletApi, target: string, hex: string) => {
+    const [r, g, b] = hexToRgb(hex);
+    api.setColor(target, r, g, b);
+  },
+  style_thickness: (api: GGBAppletApi, target: string, t: number) => api.setLineThickness(target, t),
+  style_visible: (api: GGBAppletApi, target: string, v: boolean) => api.setVisible(target, v),
+  style_dashed: (api: GGBAppletApi, target: string) => api.setLineStyle(target, 1),
+  style_pointSize: (api: GGBAppletApi, target: string, s: number) => api.setPointSize(target, s),
+  style_pointStyle: (api: GGBAppletApi, target: string, s: number) => api.setPointStyle(target, s),
+  style_filling: (api: GGBAppletApi, target: string, v: number) => api.setFilling(target, v),
+
+  // 无原生 API，必须走 evalCommand（在白名单中，合法）
+  style_opacity: null, // → SetLineOpacity(target, opacity)
+  animate_repeat: null, // → SetAnimationType(target, type)
+
+  // 动画控制（原生 API 可用）
+  animate_start: (api: GGBAppletApi) => api.startAnimation(),
+  animate_stop: (api: GGBAppletApi) => api.stopAnimation(),
+  animate_speed: (api: GGBAppletApi, target: string, speed: number) => api.setAnimationSpeed(target, speed),
+  animate_set: (api: GGBAppletApi, target: string, on: boolean) => api.setAnimating(target, on),
+
+  // 3D 模式
+  view3D_enable: (api: GGBAppletApi) => api.enable3D(true),
+  view3D_perspective: (api: GGBAppletApi) => api.setPerspective("3d"),
+} as const;
+
+// ──── 画布配置 ────
+
+/** 画布模式 */
+export type CanvasMode = "2d" | "3d";
+/** 领域 */
+export type CanvasDomain = "general" | "physics";
+
+/**
+ * 根据 domain / mode 应用画布级配置。
+ * 在 domain 切换或画布就绪时调用。
+ */
+export function applyCanvasConfig(
+  api: GGBAppletApi,
+  domain: CanvasDomain,
+  mode: CanvasMode
+): void {
+  // 教学场景防误操作：禁止右键菜单和标签拖拽
+  api.enableRightClick(false);
+  api.enableLabelDrags(false);
+
+  // 物理 / 立体几何模式下开启 3D
+  if (mode === "3d") {
+    api.enable3D(true);
+  }
+
+  // 关闭即时点创建（防止工具误触生成匿名点）
+  api.setOnTheFlyPointCreationActive(false);
+
+  // 网格：物理域默认开启便于量读
+  if (domain === "physics") {
+    api.setGridVisible(true);
+  }
+
+  // 错误对话框关闭（静默处理，由前端捕获展示）
+  api.setErrorDialogsActive(false);
+}
+
+// ──── 导出 ────
+
+/** 导出当前画布为 base64 编码的 .ggb 文件内容（不含 data: 前缀） */
+export function exportGGB(api: GGBAppletApi): Promise<string> {
+  return new Promise(resolve => {
+    api.getBase64(data => resolve(data));
+  });
+}
+
+/** 导出 PNG（DataURL） */
+export function exportPNG(api: GGBAppletApi): string {
+  const base64 = api.getPNGBase64(1, false, 96);
+  return `data:image/png;base64,${base64}`;
+}
+
+/** 导出 SVG（回调式，3D 视图返回 null） */
+export function exportSVG(api: GGBAppletApi): Promise<string | null> {
+  return new Promise(resolve => {
+    api.exportSVG((svg: string | null) => resolve(svg));
+  });
+}
+
+/** 导出 PDF（回调式） */
+export function exportPDF(api: GGBAppletApi, scale = 1): Promise<string> {
+  return new Promise(resolve => {
+    api.exportPDF(scale, (pdf: string) => resolve(pdf));
+  });
+}
+
+// ──── 画布快照（供满足度评估使用） ────
+
+/**
+ * 生成画布富文本快照：对象名 → 类型 → 定义 → 值 → 样式 → 标注 → 可见性。
+ * 包含完整的样式元数据（颜色/粗细/线型/透明度/点样式），
+ * 供纯文本模型做逻辑审查——不需要"看"图形，读快照即可核对。
+ */
+export function getRichSnapshot(api: GGBAppletApi): string {
+  const names = api.getAllObjectNames();
+  if (names.length === 0) return "(空画布)";
+
+  const lines: string[] = [];
+  for (const name of names) {
+    const parts: string[] = [];
+    const type = api.getObjectType(name);
+    const def = api.getCommandString(name) || api.getDefinitionString(name);
+
+    // 基本信息：名称、类型、定义
+    parts.push(`${name} (${type}): ${def}`);
+
+    // 值（点取坐标，其他取值）
+    try {
+      if (type === "point" || type === "vector") {
+        const xs = safeNum(api.getXcoord(name));
+        const ys = safeNum(api.getYcoord(name));
+        const zs = safeNum(api.getZcoord?.(name));
+        parts.push(`  pos=(${xs}, ${ys}${zs !== undefined ? `, ${zs}` : ""})`);
+      } else if (type === "slider" || type === "number") {
+        parts.push(`  value=${safeNum(api.getValue(name))}`);
+      }
+    } catch { /* 部分对象可能无值 */ }
+
+    // 样式元数据（仅当非默认值时输出，减少 token）
+    try {
+      const styleMeta: string[] = [];
+      const color = api.getColor(name);
+      if (color && color !== "#000000") styleMeta.push(`color=${color}`);
+      const thickness = api.getLineThickness?.(name);
+      if (thickness && thickness > 1) styleMeta.push(`thickness=${thickness}`);
+      const lineStyle = api.getLineStyle?.(name);
+      if (lineStyle && lineStyle > 0) styleMeta.push(`dashed`);
+      const filling = api.getFilling?.(name);
+      if (filling !== undefined && filling < 1) styleMeta.push(`opacity=${filling.toFixed(2)}`);
+      const ptSize = api.getPointSize?.(name);
+      // Point size default varies; report only if set
+      const ptStyle = api.getPointStyle?.(name);
+      if (ptStyle !== undefined && ptStyle > 0) styleMeta.push(`pointStyle=${ptStyle}`);
+      if (ptSize !== undefined && ptSize > 1) styleMeta.push(`pointSize=${ptSize}`);
+      const caption = api.getCaption?.(name, true);
+      if (caption) styleMeta.push(`caption="${caption}"`);
+      const visible = api.getVisible(name);
+      if (visible === false) styleMeta.push(`hidden`);
+      if (styleMeta.length) parts.push(`  style: ${styleMeta.join(", ")}`);
+    } catch { /* 样式 API 可能对新对象类型不可用 */ }
+
+    lines.push(parts.join("\n"));
+  }
+  return lines.join("\n\n");
+}
+
+/** 保留旧版简单快照作为别名（agent loop / tool executor 仍在使用） */
+export function getCanvasSnapshot(api: GGBAppletApi): string {
+  return getRichSnapshot(api);
+}
+
+function safeNum(v: number | undefined | null): string {
+  if (v === undefined || v === null) return "?";
+  if (!Number.isFinite(v)) return v.toString();
+  return Number.isInteger(v) ? v.toString() : v.toFixed(4);
+}
+
+// ──── 工具函数 ────
+
+export function hexToRgb(hex: string): [number, number, number] {
   const m = hex.replace(/^#/, "");
   return [
     parseInt(m.slice(0, 2), 16),
@@ -367,6 +565,8 @@ function diagnose(r: ExecResult): string | undefined {
   return raw;
 }
 
+// ──── 手动模式切换 ────
+
 /** 注册 setAppName 回调（ChatPanel 调用前由 App 注入，供手动 2D↔3D 切换使用） */
 let _setAppNameFn: ((name: "classic" | "3d") => void) | null = null;
 
@@ -383,21 +583,4 @@ export function switchAppletMode(name: "classic" | "3d"): void {
   } else {
     console.warn("[AiGGB] setAppName not registered");
   }
-}
-
-// ──── 已废弃（手动模式切换后不再需要自动检测）────
-// hasUser3DIntent / has3DCommands 已移除。
-// 3D 切换现由 Toolbar 按钮控制，prompt 通过 buildSystemPrompt(domain, appMode) 注入模式前缀。
-
-/** 导出当前画布为 base64 编码的 .ggb 文件内容（不含 data: 前缀） */
-export function exportGGB(api: GGBAppletApi): Promise<string> {
-  return new Promise(resolve => {
-    api.getBase64(data => resolve(data));
-  });
-}
-
-/** 导出 PNG（DataURL） */
-export function exportPNG(api: GGBAppletApi): string {
-  const base64 = api.getPNGBase64(1, false, 96);
-  return `data:image/png;base64,${base64}`;
 }

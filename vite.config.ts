@@ -6,6 +6,52 @@ export default defineConfig({
   base: "./", // 相对路径：兼容 GitHub Pages 子路径部署（https://gmsjy.github.io/aiggb/）
   plugins: [
     react(),
+    // GeoGebra GWT 资源路径修正：web3d.nocache.js 可能从根路径加载
+    // *.cache.js / deferredjs / clear.cache.gif，重写到 public/GeoGebra/HTML5/5.0/web3d/
+    {
+      name: "geogebra-gwt-assets",
+      configureServer(server) {
+        // Chrome 127+ 禁止 unload handler，GeoGebra 内部用到，加 header 允许
+        server.middlewares.use((_req, res, next) => {
+          res.setHeader("Permissions-Policy", "unload=*");
+          next();
+        });
+        const GGB_WEB3D = "/GeoGebra/HTML5/5.0/web3d";
+        const GGB_5_0 = "/GeoGebra/HTML5/5.0"; // CSS 在 5.0/css/ 与 web3d 同级共享
+        // GeoGebra web3d 子目录：GWT 编译后从 moduleBase 加载的资源树
+        const GGB_SUBDIRS = ["js", "fonts", "html", "img", "deferredjs"];
+        server.middlewares.use((_req, _res, next) => {
+          const req = _req as unknown as { url?: string };
+          const u = req.url;
+          if (!u) return next();
+          // *.cache.js / clear.cache.gif：GWT 编译产物
+          if (/^\/[A-Z0-9]{32}\.cache\.js$/.test(u) || u === "/clear.cache.gif") {
+            req.url = GGB_WEB3D + u;
+          }
+          // deferredjs/<hash>/<n>.cache.js：GWT 代码分片
+          else if (/^\/deferredjs\/[A-Z0-9]{32}\/\d+\.cache\.js$/.test(u)) {
+            req.url = GGB_WEB3D + u;
+          }
+          // GWT leftover fragments: web3d-0.js, web3d-1.js, ...
+          else if (/^\/web3d-\d+\.js$/.test(u)) {
+            req.url = GGB_WEB3D + u;
+          }
+          // sworker-locked.js: GeoGebra service worker（3D 模块可能注册）
+          else if (u === "/sworker-locked.js") {
+            req.url = GGB_WEB3D + u;
+          }
+          // css/：共享样式在 5.0/css/（与 web3d 同级，不在 web3d 内）
+          else if (u.startsWith("/css/")) {
+            req.url = GGB_5_0 + u;
+          }
+          // js/ fonts/ html/ img/：GeoGebra web3d 目录内资源
+          else if (GGB_SUBDIRS.some(d => u!.startsWith("/" + d + "/"))) {
+            req.url = GGB_WEB3D + u;
+          }
+          next();
+        });
+      },
+    },
     VitePWA({
       registerType: "prompt",
       injectRegister: "auto",

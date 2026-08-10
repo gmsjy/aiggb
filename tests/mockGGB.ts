@@ -24,8 +24,17 @@ export class MockGGB implements Pick<GGBAppletApi,
   | "setFilling" | "setCaption" | "setLabelStyle" | "setLabelVisible" | "setCoordSystem"
   | "setAxisLabels" | "setAnimating" | "setAnimationSpeed" | "startAnimation" | "stopAnimation"
   | "setTrace" | "deleteObject" | "reset" | "newConstruction" | "getAllObjectNames"
+  | "setRepaintingActive" | "setPointSize" | "setPointStyle"
+  | "setOnTheFlyPointCreationActive" | "enableRightClick" | "enableLabelDrags"
+  | "enable3D" | "setGridVisible" | "setErrorDialogsActive"
+  | "getColor" | "getVisible" | "getLineThickness" | "getLineStyle"
+  | "getFilling" | "getPointSize" | "getPointStyle" | "getCaption"
+  | "getXcoord" | "getYcoord" | "getZcoord" | "getValue" | "getValueString"
+  | "getDefinitionString" | "getCommandString" | "getObjectType" | "isDefined"
 > {
   private objects = new Map<string, GGBObject>();
+  /** 简单样式存储：对象名 → 部分样式属性 */
+  private styles = new Map<string, Record<string, unknown>>();
   errors: string[] = [];
 
   // —— 主入口 ——
@@ -142,12 +151,16 @@ export class MockGGB implements Pick<GGBAppletApi,
   // —— GGBAppletApi 实现 ——
   exists = (name: string) => this.objects.has(name);
 
-  setVisible = () => {};
-  setColor = () => {};
-  setLineThickness = () => {};
-  setLineStyle = () => {};
-  setFilling = () => {};
-  setCaption = () => {};
+  // Style setters —— 记录到 styles map 供 getter 查询
+  setVisible = (name: string, v: boolean) => { this.styles.set(name, { ...this.styles.get(name), visible: v }); };
+  setColor = (name: string, r: number, g: number, b: number) => {
+    const hex = "#" + [r, g, b].map(c => c.toString(16).padStart(2, "0")).join("");
+    getOrCreateStyle(this.styles, name).color = hex;
+  };
+  setLineThickness = (name: string, t: number) => { getOrCreateStyle(this.styles, name).thickness = t; };
+  setLineStyle = (name: string, s: number) => { getOrCreateStyle(this.styles, name).lineStyle = s; };
+  setFilling = (name: string, f: number) => { getOrCreateStyle(this.styles, name).filling = f; };
+  setCaption = (name: string, c: string) => { getOrCreateStyle(this.styles, name).caption = c; };
   setLabelStyle = () => {};
   setLabelVisible = () => {};
   setCoordSystem = () => {};
@@ -163,6 +176,36 @@ export class MockGGB implements Pick<GGBAppletApi,
       this.errors.push(`setTrace: 对象 ${label} 不存在`);
     }
   };
+
+  // Phase 1 新增 API
+  setRepaintingActive = () => {};
+  setPointSize = (name: string, s: number) => { getOrCreateStyle(this.styles, name).pointSize = s; };
+  setPointStyle = (name: string, s: number) => { getOrCreateStyle(this.styles, name).pointStyle = s; };
+  setOnTheFlyPointCreationActive = () => {};
+  enableRightClick = () => {};
+  enableLabelDrags = () => {};
+  enable3D = () => {};
+  setGridVisible = () => {};
+  setErrorDialogsActive = () => {};
+
+  // —— Getter（供 getRichSnapshot / getCanvasSnapshot 使用） ——
+  getColor = (name: string) => String(this.styles.get(name)?.color ?? "#000000");
+  getVisible = () => true;
+  getLineThickness = (name: string) => Number(this.styles.get(name)?.thickness ?? 1);
+  getLineStyle = (name: string) => Number(this.styles.get(name)?.lineStyle ?? 0);
+  getFilling = (name: string) => Number(this.styles.get(name)?.filling ?? 1);
+  getPointSize = (name: string) => Number(this.styles.get(name)?.pointSize ?? 1);
+  getPointStyle = (name: string) => Number(this.styles.get(name)?.pointStyle ?? 0);
+  getCaption = (name: string) => String(this.styles.get(name)?.caption ?? "");
+  getXcoord = () => 0;
+  getYcoord = () => 0;
+  getZcoord = () => 0;
+  getValue = () => 0;
+  getValueString = () => "0";
+  getDefinitionString = (name: string) => this.objects.get(name)?.expr ?? "";
+  getCommandString = (name: string) => this.objects.get(name)?.expr ?? "";
+  getObjectType = (name: string) => this.objects.get(name)?.type ?? "Other";
+  isDefined = (name: string) => this.objects.has(name);
 
   deleteObject = (label: string) => {
     this.objects.delete(label);
@@ -192,4 +235,17 @@ export class MockGGB implements Pick<GGBAppletApi,
       this.objects.set(o.name, { name: o.name, type: o.type ?? "Other" });
     }
   }
+}
+
+/** 获取或创建对象的样式记录 */
+function getOrCreateStyle(
+  styles: Map<string, Record<string, unknown>>,
+  name: string
+): Record<string, unknown> {
+  let s = styles.get(name);
+  if (!s) {
+    s = {};
+    styles.set(name, s);
+  }
+  return s;
 }

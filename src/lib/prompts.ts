@@ -49,7 +49,7 @@ function buildPromptBase(appMode: "2d" | "3d", domain: Domain, phase: "full" | "
     "- animate { target, speed?, on, repeat? }   repeat ∈ oscillating/increasing/once",
     "- physicsTrace { target, mode, fade? }  ← ⚛ 物理域追踪用此 op，通用域可用 trace",
     "- trace { target, on }",
-    "- style { target, color?, thickness?, visible?, opacity?, dashed? }",
+    "- style { target, color?, thickness?, visible?, opacity?, dashed?, pointSize?, pointStyle? }",
     "- view { xmin, xmax, ymin, ymax, axesUnit? }",
     "- caption { target, text }",
     "- delete { target }",

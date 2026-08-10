@@ -13,10 +13,11 @@ import {
   chatRaw as defaultChatRaw,
   AIError,
   AISchemaError,
+  resolveModel,
   type AIConfig,
   type ChatMessage
 } from "./aiClient";
-import { collectFailures, executeCommands, resetTmpIds, type ExecResult } from "./ggbBridge";
+import { collectFailures, executeCommands, resetTmpIds, getRichSnapshot, type ExecResult } from "./ggbBridge";
 import {
   buildSystemPrompt,
   buildCompilePrompt,
@@ -31,6 +32,14 @@ import { lookupCachedSpec, storeCachedSpec } from "./specCache";
 import type { AIResponse } from "./schema";
 import type { GGBAppletApi } from "../types/ggb";
 import type { ChatTurn } from "../store/useAppStore";
+import {
+  runAgentLoop,
+  registerConfirmationHandler,
+  unregisterConfirmationHandler,
+  type AgentLoopResult,
+  type ConfirmationRequest,
+  type ConfirmationDecision
+} from "./agentLoop";
 
 export const MAX_REPAIR = 2;
 export const MAX_FORMAT_RETRY = 2;
@@ -69,11 +78,19 @@ export interface PipelineDeps {
   /** 测试可注入脚本网关，替换真实调用 */
   chatImpl?: typeof defaultChat;
   chatRawImpl?: typeof defaultChatRaw;
+  /** 满足度评估注入（测试可 mock） */
+  evalSatisfactionImpl?: typeof import("./satisfactionEval").evaluateSatisfaction;
+  /** 解析后的轻量模型名（用于精炼/评估） */
+  lightModel: string;
+  /** 解析后的主力模型名（用于编译/修复/降级） */
+  heavyModel: string;
 }
 
 export interface PipelineCallbacks {
   /** Phase 1 产出规格后调用；UI 展示确认气泡并持有 handle 以回传决定 */
   onReview(handle: ReviewHandle, reviewId: string): void;
+  /** 工具调用代理模式：dangerous 工具需用户确认 */
+  onConfirm?(requests: ConfirmationRequest[]): Promise<ConfirmationDecision[]>;
 }
 
 /**
@@ -149,7 +166,7 @@ async function refineSpec(userText: string, deps: PipelineDeps): Promise<Refined
     { role: "system", content: buildRefinePrompt(deps.domain) },
     { role: "user", content: userText }
   ];
-  const rawSpec = await chatRawFn(deps.config, phase1Messages, deps.signal, deps.config.flashModel);
+  const rawSpec = await chatRawFn(deps.config, phase1Messages, deps.signal, deps.lightModel);
   const spec = parseRefinedSpec(rawSpec);
   if (spec && !spec.ask) {
     storeCachedSpec(userText, deps.domain, deps.appMode, existingObjs, spec);
@@ -208,8 +225,62 @@ async function runPhase2(finalSpec: string, deps: PipelineDeps): Promise<void> {
     const chatFn = deps.chatImpl ?? defaultChat;
     const response = await chatWithFormatRetry(chatFn, deps, phase2Messages);
     await executeAndRepair(response, finalSpec, deps);
+
+    // ★ 满足度评估：对精炼规格 + 画布快照做逻辑审查
+    await evaluateAndRepair(finalSpec, deps);
   } finally {
     deps.setThinking(false);
+  }
+}
+
+/** 满足度评估 + 不满足时修复（最多 1 次） */
+async function evaluateAndRepair(finalSpec: string, deps: PipelineDeps): Promise<void> {
+  const api = deps.getApi();
+  if (!api) return;
+
+  const snapshot = getRichSnapshot(api);
+
+  const evalFn = deps.evalSatisfactionImpl ??
+    ((await import("./satisfactionEval")).evaluateSatisfaction as typeof import("./satisfactionEval").evaluateSatisfaction);
+
+  let evalResult;
+  try {
+    evalResult = await evalFn(deps.config, finalSpec, snapshot, deps.signal, deps.lightModel);
+  } catch (err) {
+    if (deps.signal.aborted) throw err;
+    console.warn("[Pipeline] 满足度评估失败，跳过", err);
+    return;
+  }
+
+  // 满足 → 完成；不满足 → 追加 issues 消息 + 1 次修复
+  if (evalResult.satisfied) return;
+
+  // 追加评估失败消息
+  deps.appendMessage({
+    id: deps.newMessageId(),
+    role: "error",
+    content: `⚠ 审查发现 ${evalResult.issues.length} 个问题：\n${evalResult.issues.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n\n${evalResult.summary}`
+  });
+
+  // 1 次修复尝试：将 issues + 精炼规格 + 画布快照发给 AI 修正
+  try {
+    const { buildSatisfactionRepairPrompt } = await import("./satisfactionEval");
+    const repairMsg = buildSatisfactionRepairPrompt(finalSpec, evalResult.issues, snapshot);
+
+    const chatFn = deps.chatImpl ?? defaultChat;
+    const repairResponse = await chatWithFormatRetry(chatFn, deps, [
+      { role: "user", content: repairMsg }
+    ]);
+
+    // 执行修正命令（不做递归评估，避免无限循环）
+    await executeAndRepair(repairResponse, finalSpec, deps);
+  } catch (err) {
+    if (deps.signal.aborted) throw err;
+    deps.appendMessage({
+      id: deps.newMessageId(),
+      role: "error",
+      content: `自动修复失败：${err instanceof Error ? err.message : String(err)}`
+    });
   }
 }
 
@@ -325,7 +396,7 @@ async function chatWithFormatRetry(
   let conv = msgs;
   for (let i = 0; i <= MAX_FORMAT_RETRY; i++) {
     try {
-      return await chatFn(deps.config, conv, deps.signal);
+      return await chatFn(deps.config, conv, deps.signal, deps.heavyModel);
     } catch (err) {
       if (err instanceof AISchemaError && i < MAX_FORMAT_RETRY) {
         deps.appendMessage({
@@ -443,4 +514,182 @@ export function collectHistory(messages: ChatTurn[], windowSize: number): ChatMe
     }
   }
   return collapsed.slice(-windowSize * 2);
+}
+
+// ──── Agent Mode（工具调用代理） ────
+
+/**
+ * 工具调用代理模式入口 —— 替代两阶段流水线。
+ * 通过 Function Calling + ReAct 循环逐步构造图形。
+ *
+ * 与 runPipeline 的区别：
+ *   - 无 Phase 1/2 分阶段，AI 在单次对话中完成全流程
+ *   - AI 主动调用工具（create_point/list_objects/eval_raw...）
+ *   - 每步工具调用结果实时反馈，AI 即时调整
+ *   - dangerous 工具需用户确认（通过 onConfirm 回调）
+ */
+export async function runAgentPipeline(
+  userText: string,
+  deps: PipelineDeps,
+  cb: PipelineCallbacks
+): Promise<void> {
+  // 注册确认处理器
+  if (cb.onConfirm) {
+    registerConfirmationHandler(cb.onConfirm);
+  }
+
+  const api = deps.getApi();
+  if (!api) {
+    deps.appendMessage({
+      id: deps.newMessageId(),
+      role: "error",
+      content: "GeoGebra 画布尚未就绪，请稍候"
+    });
+    return;
+  }
+
+  let result: AgentLoopResult | null = null;
+  try {
+    result = await runAgentLoop(userText, {
+      config: deps.config,
+      domain: deps.domain,
+      appMode: deps.appMode,
+      signal: deps.signal,
+      getApi: deps.getApi,
+      getMessages: deps.getMessages,
+      agentModel: resolveModel(deps.config, "agent"),
+    });
+  } catch (err) {
+    if (deps.signal.aborted) throw err;
+
+    // ★ 部分结果：即使异常也有已执行的操作摘要
+    const partialMsg = result
+      ? `代理模式部分完成（${result.iterations} 步），但遇到错误`
+      : "代理模式执行失败";
+    deps.appendMessage({
+      id: deps.newMessageId(),
+      role: "error",
+      content: err instanceof Error
+        ? `${partialMsg}：${err.message}`
+        : partialMsg
+    });
+    return;
+  } finally {
+    unregisterConfirmationHandler();
+  }
+
+  // ★ 构建 agent 结果摘要消息
+  const summary = buildAgentSummary(result);
+  const agentCommands = result.messages
+    .filter(m => m.role === "assistant" && m.tool_calls)
+    .flatMap(m =>
+      (m.tool_calls ?? []).map(tc => ({
+        op: "eval" as const,
+        cmd: summarizeToolCall(tc.function.name, tc.function.arguments)
+      }))
+    );
+
+  // ★ constructionLog 不追加 agent 伪命令（避免 undo 重放时出错）
+  // 直接 append assistant 消息（绕过 appendAIResponse 的 constructionLog 写入）
+  deps.appendMessage({
+    id: deps.newMessageId(),
+    role: "assistant",
+    payload: {
+      explanation: summary,
+      commands: agentCommands,
+      results: [], // agent 模式的执行结果在对话流中，不做逐条 ExecResult
+    }
+  });
+
+  deps.setThinking(false);
+
+  // ★ 满足度评估（Phase 3.1）：审查画布
+  try {
+    await evaluateAgentResult(result, deps);
+  } catch (err) {
+    if (deps.signal.aborted) throw err;
+    console.warn("[Pipeline] agent 满足度评估跳过", err);
+  }
+}
+
+/** 从 AgentLoopResult 构建人类可读摘要 */
+function buildAgentSummary(result: AgentLoopResult): string {
+  const parts: string[] = [result.finalText];
+
+  if (result.iterations > 1) {
+    parts.push(`（共 ${result.iterations} 步工具调用）`);
+  }
+  if (result.deniedTools.length > 0) {
+    parts.push(`已拒绝：${result.deniedTools.join("、")}`);
+  }
+
+  return parts.join("\n");
+}
+
+/** 将单次工具调用转换为人类可读的摘要（用于 ScriptPanel / 消息展示） */
+function summarizeToolCall(name: string, argsJson: string): string {
+  try {
+    const args = JSON.parse(argsJson) as Record<string, unknown>;
+    switch (name) {
+      case "eval_raw":
+        return `🔧 ${String(args.command ?? "").slice(0, 80)}`;
+      case "eval_sequence":
+        return `📋 Sequence ${args.name ?? "?"}`;
+      case "delete_object":
+        return `🗑 删除 ${args.target}`;
+      case "clear_canvas":
+        return "🗑 清空画布";
+      case "create_function":
+        return `f(x) ${args.name ?? "?"} = ${String(args.expression ?? "").slice(0, 50)}`;
+      case "create_parametric":
+        return `📈 参数曲线 ${args.name ?? "?"}`;
+      case "create_point":
+        return `📍 ${args.name ?? "?"}(${args.x ?? "?"}, ${args.y ?? "?"})`;
+      case "create_slider":
+        return `🎚 ${args.name ?? "?"} ${args.min ?? 0}~${args.max ?? 1}`;
+      case "create_vector":
+        return `➡ ${args.name ?? "?"} ${args.from ?? ""}→${args.to ?? ""}`;
+      case "set_animation":
+        return `▶ ${args.action ?? "?"} ${args.target ?? ""}`;
+      case "set_view":
+        return "🔍 视窗调整";
+      default:
+        return `🔧 ${name}`;
+    }
+  } catch {
+    return `🔧 ${name}`;
+  }
+}
+
+/** 对 agent 模式执行完的结果做满足度评估（复用 evaluateAndRepair 的核心逻辑） */
+async function evaluateAgentResult(result: AgentLoopResult, deps: PipelineDeps): Promise<void> {
+  const api = deps.getApi();
+  if (!api) return;
+
+  const snapshot = getRichSnapshot(api);
+
+  const evalFn = deps.evalSatisfactionImpl ??
+    ((await import("./satisfactionEval")).evaluateSatisfaction as typeof import("./satisfactionEval").evaluateSatisfaction);
+
+  // agent 模式没有精炼规格，用 finalText 作为审查基准
+  const specForEval = result.finalText || "用户原始需求";
+
+  let evalResult;
+  try {
+    evalResult = await evalFn(deps.config, specForEval, snapshot, deps.signal, deps.lightModel);
+  } catch (err) {
+    if (deps.signal.aborted) throw err;
+    console.warn("[Pipeline] agent 满足度评估失败，跳过", err);
+    return;
+  }
+
+  if (evalResult.satisfied) return;
+
+  deps.appendMessage({
+    id: deps.newMessageId(),
+    role: "error",
+    content: `⚠ 审查发现 ${evalResult.issues.length} 个问题：\n${evalResult.issues.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n\n${evalResult.summary}`
+  });
+
+  // agent 模式不自动修复（AI 已经在循环中尝试了），仅报告
 }

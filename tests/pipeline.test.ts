@@ -86,7 +86,9 @@ function makeHarness(opts: HarnessOpts = {}) {
       if (opts.raw instanceof Error) throw opts.raw;
       if (opts.raw === undefined) throw new Error("未提供 chatRaw 脚本");
       return opts.raw;
-    }
+    },
+    lightModel: "m",   // resolves to config.model
+    heavyModel: "m",   // resolves to config.model
   };
 
   return { deps, controller, messages, mock, chatCalls, get rawCalls() { return rawCalls; } };
@@ -226,4 +228,97 @@ test("模板缓存命中 → Phase 1 不发 chatRaw 请求", async () => {
   assert.equal(handle!.spec, tpl.prompt);
   handle!.confirm(handle!.spec);
   await p;
+});
+
+// ── 满足度评估相关测试 ──
+
+test("无 lightModel — 评估仍运行（回退到 model）", async () => {
+  const h = makeHarness({
+    raw: JSON.stringify({ spec: "绘制一个边长 2 的正方形 ABCD，标注顶点，开启 B 点轨迹。" }),
+    scripts: [evalResp(["A = (0,0)", "B = (2,0)", "C = (2,2)", "D = (0,2)", "poly = Polygon(A,B,C,D)"])]
+  });
+  // lightModel 为 "m"（回退到 model），评估应正常调用并返回 satisfied
+  h.deps.evalSatisfactionImpl = async () => ({ satisfied: true, issues: [], summary: "正常" });
+  let handle: ReviewHandle | null = null;
+  const p = runPipeline("画正方形", h.deps, { onReview: hd => (handle = hd) });
+  await waitUntil(() => handle !== null);
+  handle!.confirm(handle!.spec);
+  await p;
+  // 正常完成，无非 assistant 以外的消息
+  assert.equal(h.messages.length, 2, "只有 spec-review + assistant");
+  assert.equal(h.messages[1].role, "assistant");
+});
+
+test("评估 satisfied=true → 不追加错误消息", async () => {
+  const h = makeHarness({
+    raw: JSON.stringify({ spec: "绘制圆心在原点、半径可调 r 的圆，设置红色样式，开轨迹。" }),
+    scripts: [evalResp(["O = (0,0)", "c = Circle(O, 3)"])]
+  });
+  // 注入 lightModel 触发评估，mock 返回 satisfied
+  h.deps.config.lightModel = "flash-m";
+  let evalCalled = false;
+  h.deps.evalSatisfactionImpl = async () => {
+    evalCalled = true;
+    return { satisfied: true, issues: [], summary: "完全符合" };
+  };
+
+  let handle: ReviewHandle | null = null;
+  const p = runPipeline("画圆", h.deps, { onReview: hd => (handle = hd) });
+  await waitUntil(() => handle !== null);
+  handle!.confirm(handle!.spec);
+  await p;
+
+  assert.equal(evalCalled, true, "评估应被调用");
+  assert.equal(h.messages.length, 2, "只有 spec-review + assistant，无 error");
+  assert.equal(h.messages[1].role, "assistant");
+});
+
+test("评估 unsatisfied → 追加 error + 触发修复", async () => {
+  const h = makeHarness({
+    raw: JSON.stringify({ spec: "绘制红色虚线圆 c，圆心 O(0,0)，半径 3，开启轨迹。" }),
+    scripts: [
+      evalResp(["O = (0,0)", "c = Circle(O, 3)"]),                           // Phase 2 初版
+      evalResp(["SetLineStyle(c, 1)", "SetColor(c, 255, 0, 0)", "SetTrace(c, true)"]) // 修复
+    ]
+  });
+  h.deps.lightModel = "flash-m";
+  h.deps.evalSatisfactionImpl = async () => ({
+    satisfied: false,
+    issues: ["颜色不是红色", "缺少虚线样式", "轨迹未开启"],
+    summary: "样式与规格不符"
+  });
+
+  let handle: ReviewHandle | null = null;
+  const p = runPipeline("画红色虚线圆", h.deps, { onReview: hd => (handle = hd) });
+  await waitUntil(() => handle !== null);
+  handle!.confirm(handle!.spec);
+  await p;
+
+  // 应有 spec-review + assistant(初版) + error(评估) + assistant(修复)
+  const roles = h.messages.map(m => m.role);
+  assert.equal(roles.length, 4);
+  assert.equal(roles[0], "spec-review");
+  assert.equal(roles[1], "assistant");
+  assert.equal(roles[2], "error", "评估不满足应追加 error 消息");
+  assert.equal(roles[3], "assistant", "修复成功应追加 assistant");
+  assert.ok(h.messages[2].role === "error" && h.messages[2].content.includes("颜色不是红色"));
+});
+
+test("评估 API 异常 → 不阻断流程", async () => {
+  const h = makeHarness({
+    raw: JSON.stringify({ spec: "画一个单位圆。需要超过二十五个字符才能进入评估，所以多写一点描述。" }),
+    scripts: [evalResp(["O = (0,0)", "c = Circle(O, 1)"])]
+  });
+  h.deps.lightModel = "flash-m";
+  h.deps.evalSatisfactionImpl = async () => { throw new Error("评估网络超时"); };
+
+  let handle: ReviewHandle | null = null;
+  const p = runPipeline("画单位圆", h.deps, { onReview: hd => (handle = hd) });
+  await waitUntil(() => handle !== null);
+  handle!.confirm(handle!.spec);
+  await p;
+
+  // 评估失败但流程正常完成，只有 spec-review + assistant
+  assert.equal(h.messages.length, 2);
+  assert.equal(h.messages[1].role, "assistant");
 });

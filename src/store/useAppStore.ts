@@ -43,6 +43,8 @@ interface PersistedState {
   config: AIConfig | null;
   domain: Domain;
   privacyAcknowledged: boolean;
+  /** Feature Flag: true = 工具调用代理模式, false = 两阶段流水线（默认） */
+  agentMode: boolean;
 }
 
 interface AppState extends PersistedState {
@@ -64,6 +66,7 @@ interface AppState extends PersistedState {
   setGGBApi: (api: GGBAppletApi | null) => void;
   setThinking: (b: boolean) => void;
   setAppName: (name: "classic" | "3d") => void;
+  setAgentMode: (on: boolean) => void;
 
   appendMessage: (t: ChatTurn) => void;
   clearMessages: () => void;
@@ -87,6 +90,7 @@ export const useAppStore = create<AppState>()(
       config: null,
       domain: "general",
       privacyAcknowledged: false,
+      agentMode: false,
       ggbApi: null,
       ggbAppName: "classic",
       messages: [],
@@ -100,6 +104,7 @@ export const useAppStore = create<AppState>()(
       setGGBApi: api => set({ ggbApi: api }),
       setThinking: b => set({ isThinking: b }),
       setAppName: name => set({ ggbAppName: name }),
+      setAgentMode: on => set({ agentMode: on }),
 
       appendMessage: t => set(state => ({ messages: [...state.messages, t] })),
 
@@ -148,19 +153,27 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "aiggb_config",
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => localStorage),
       partialize: (state): PersistedState => ({
         config: state.config,
         domain: state.domain,
-        privacyAcknowledged: state.privacyAcknowledged
+        privacyAcknowledged: state.privacyAcknowledged,
+        agentMode: state.agentMode
       }),
       // v1→v2：移除 highschool 分类，旧值回归 general
+      // v2→v3：flashModel → lightModel
       migrate: (persisted, version) => {
         const s = (persisted ?? {}) as Record<string, unknown>;
         const out = { ...(persisted ?? {}) } as Partial<PersistedState>;
         if (version < 2 && s.domain === "highschool") {
           out.domain = "general";
+        }
+        if (version < 3 && out.config) {
+          const cfg = out.config as unknown as Record<string, unknown>;
+          if (typeof cfg.flashModel === "string" && cfg.flashModel.length > 0 && !cfg.lightModel) {
+            cfg.lightModel = cfg.flashModel;
+          }
         }
         return out as PersistedState;
       }
