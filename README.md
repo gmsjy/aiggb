@@ -38,12 +38,33 @@ npm run dev        # → http://localhost:5173
 | 设置项 | 值 |
 |---|---|
 | Provider | DeepSeek |
+| 精炼模型 (Flash) | `deepseek-v4-flash` |
 | API Key | `sk-...`（从 [platform.deepseek.com](https://platform.deepseek.com/api_keys) 获取） |
 | 模型 | `deepseek-v4-pro`（复杂动图）或 `deepseek-v4-flash`（日常） |
 
 点「测试连接」通过后保存，即可开始对话。
 
 > ⚠️ Key 明文存浏览器 localStorage，**勿在公共电脑使用**。随时在设置中清除。
+
+---
+
+## 运行模式
+
+AiGGB 提供两种执行模式，可在设置面板切换：
+
+### 两阶段管线（默认）
+
+```
+用户输入 → Phase 1 精炼 (flash) → 规格确认气泡 → Phase 2 编译 (pro) → 执行 + 自修复
+```
+
+1. **Phase 1**：flash 模型将用户意图展开为详细分节绘图规格
+2. **规格确认**：气泡展示规格，可编辑 / 重新生成 / 确认绘制
+3. **Phase 2**：主力模型将精炼规格编译为 GGB 命令 JSON（含自检）
+
+### Agent 模式（工具调用代理）
+
+AI 逐步调用工具（创建点/滑块/矢量/执行命令/查询对象…），每步获得执行反馈后即时调整。适合复杂构造场景。
 
 ---
 
@@ -193,7 +214,7 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o` / `gpt-4.1` |
 | Ollama 本地 | `http://localhost:11434/v1` | `qwen2.5:7b` 等 |
 
-> 日常推荐 `deepseek-v4-flash`（快、便宜）；复杂动图 + 3D 切 `deepseek-v4-pro`。
+> 日常推荐 `deepseek-v4-flash`（快、便宜）；复杂动图 + 3D 切 `deepseek-v4-pro`。Flash Model 用于 Phase 1 精炼和满足度评估（建议 v4-flash）。
 
 ---
 
@@ -215,18 +236,30 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
 
 ## 运行流程
 
-每一轮对话经过以下管线：
+### 两阶段管线
 
 ```
 用户输入
-  → AI 生成 JSON（System Prompt 根据 domain + 2D/3D 模式拼装）
-  → Schema 校验（Zod discriminatedUnion，黑名单/注入拦截）
-  → GGB 桥接逐条执行（op → evalCommand / setTrace / setColor …）
-  → 成功 ✓  → 显示结算
-  → 失败 ✗  → 核对检查角色分析错误 → 重新调用 AI（最多 2 次修复循环）
-            → 全部失败时快照回滚 + 重放历史命令
-            → 仍失败 → 红色标注 + 手动介入
+  → Phase 1 精炼 (flash)：意图→详细分节绘图规格
+  → 规格确认气泡（可编辑/重新生成/确认）
+  → Phase 2 编译 (pro)：规格→GGB 命令 JSON（含自检）
+  → RAG 命令纠正（Levenshtein 模糊匹配 + 臆造命令查表）
+  → GGB 桥接逐条执行（op→evalCommand/setTrace/setColor…）
+  → 满足度评估 (flash)：画布快照 vs 精炼规格逻辑审查
+    → 满足 ✓ → 完成
+    → 不满足 ✗ → 追加 issues → 1 次修复
+  → 执行失败 ✗ → Checker 角色分析错误 → 重试（最多 2 次）
+    → 全部失败 → 快照回滚 + 重放构造日志
 ```
+
+### 六层防漂移
+
+1. **提示层**：RAG 过滤的命令参考 + 臆造警告 + 五阶段流程 + Point/Vector 类型铁律
+2. **自检层**：Phase 2 强制 AI 输出 `self_check` 逐项核对
+3. **清洗层**：BOM 剥离 + Code Fence 清理
+4. **校验层**：Zod discriminatedUnion 校验（硬黑名单 + XSS/注入拦截）
+5. **纠正层**：RAG 命令后置纠正（Levenshtein ≤2 + 臆造映射 + 参数个数校验）
+6. **执行层**：Pre-check（animate/trace 目标存在）+ Point+Point 自动重写 + 修复回路
 
 ---
 
@@ -242,7 +275,7 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
 
 ## 技术栈
 
-React 19 · Vite 8 · TypeScript 5 · Zustand 5 · Zod 3 · GeoGebra deployggb.js · react-markdown + KaTeX · vite-plugin-pwa (Workbox) · lucide-react
+React 19 · Vite 8 · TypeScript 5 · Zustand 5 · Zod 3 · GeoGebra deployggb.js (5.4.927.1 local bundle) · react-markdown + KaTeX · vite-plugin-pwa (Workbox) · lucide-react
 
 ---
 
@@ -250,6 +283,7 @@ React 19 · Vite 8 · TypeScript 5 · Zustand 5 · Zod 3 · GeoGebra deployggb.j
 
 | 命令 | 说明 |
 |---|---|
+| `npm run test:unit` | 单测：pipeline 状态机 + specCache + satisfactionEval |
 | `npm run test:replay` | 离线回归（当前 59/63, 93.7%） |
 | `npm run test:record` | 在线全量 + 录制 fixtures（需 `.env` 配置 Key） |
 | `npm run test:drift` | 漂移监控 N=10 |
@@ -265,21 +299,31 @@ React 19 · Vite 8 · TypeScript 5 · Zustand 5 · Zod 3 · GeoGebra deployggb.j
 src/
 ├── main.tsx / App.tsx         入口 + 顶层布局
 ├── components/
-│   ├── ChatPanel.tsx           对话面板（send/runRound/修复回路/checker）
-│   ├── GGBCanvas.tsx           GeoGebra applet 嵌入（2D/3D 切换 + 防竞态）
+│   ├── ChatPanel.tsx           对话面板（输入/消息渲染/store 依赖注入）
+│   ├── GGBCanvas.tsx           GeoGebra applet 嵌入（2D/3D 切换 + ResizeObserver）
 │   ├── Toolbar.tsx             工具栏（domain 切换/2D-3D/清空/撤销/导出）
 │   ├── TemplateGallery.tsx     模板库（按 domain + 模式双重过滤）
 │   ├── ScriptPanel.tsx         实时脚本展示
 │   ├── SettingsDialog.tsx      API 配置
 │   └── MessageBubble.tsx / PWAUpdatePrompt.tsx
 ├── lib/
-│   ├── aiClient.ts             OpenAI 兼容客户端
-│   ├── ggbBridge.ts            op → GGB API 执行器
+│   ├── pipeline.ts             两阶段管线状态机（Phase 1→确认→Phase 2→修复）
+│   ├── agentLoop.ts            Agent 模式 ReAct 循环（工具调用代理）
+│   ├── aiClient.ts             OpenAI 兼容客户端（chat/chatRaw）
+│   ├── ggbBridge.ts            op→GGB API 执行器 + 画布快照
 │   ├── schema.ts               Zod 校验 + CoordExpr 注入防护
-│   ├── prompts.ts              System Prompt + Checker Prompt
-│   ├── commands.ts             GGB 命令白名单/黑名单（含安全拦截 JavaScript/Execute）
+│   ├── prompts.ts              System/Compile/Checker Prompt
+│   ├── refinePrompt.ts         Phase 1 精炼 Prompt
+│   ├── satisfactionEval.ts     满足度评估（flash 模型画布审查）
+│   ├── commandCorrect.ts       RAG 命令后置纠正
+│   ├── ggbKB.ts                命令知识库（~126 条 + 臆造映射）
+│   ├── tools.ts / toolExecutor.ts  Agent 工具定义与执行
+│   ├── commands.ts             GGB 命令白名单/黑名单
+│   ├── runControl.ts           单轮运行生命周期管理
+│   ├── specCache.ts            意图→规格缓存（模板精确匹配 + LRU）
+│   ├── specSchema.ts           Phase 1 输出校验
 │   ├── physics.ts              物理常量
-│   ├── templates.ts            18 条模板（物理 9 + 数学 9，含 3D）
+│   ├── templates.ts            16 条模板（按 domain + 模式过滤）
 │   └── providers.ts            AI 预置 provider
 ├── store/useAppStore.ts        Zustand (persist v2)
 ├── styles/                     CSS Variables + 全局样式
