@@ -74,9 +74,12 @@ export function GGBCanvas() {
         },
         true
       );
-      // 3D app 需要 web3d 代码库（本地化，版本与 deployggb 一致）
-      if (mode === "3d" && typeof (applet as unknown as { setHTML5Codebase?: (url: string) => void }).setHTML5Codebase === "function") {
-        (applet as unknown as { setHTML5Codebase: (url: string) => void }).setHTML5Codebase("./ggb/apps/5.4.920.0/web3d/");
+      // ★ 本地 codebase（官方 GeoGebra bundle 5.0）：完全离线。
+      //   2D/3D 恒用 web3d 模块（超集，含 2D 渲染）——codebase 恒定避免 deployggb 模块切换复用。
+      //   deployggb 对相对路径不生效（indexOf("//") 判断），须传完整 URL。
+      const codebaseUrl = new URL("./GeoGebra/HTML5/5.0/web3d/", window.location.href).href;
+      if (typeof (applet as unknown as { setHTML5Codebase?: (url: string) => void }).setHTML5Codebase === "function") {
+        (applet as unknown as { setHTML5Codebase: (url: string) => void }).setHTML5Codebase(codebaseUrl);
       }
       applet.inject(CONTAINER_ID);
     };

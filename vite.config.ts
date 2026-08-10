@@ -29,13 +29,22 @@ export default defineConfig({
         ]
       },
       workbox: {
+        // GGB 引擎（~116MB）不进 SW 预缓存（会导致 SW 巨大），走 runtimeCaching CacheFirst
         globPatterns: ["**/*.{js,css,html,svg,png,woff,woff2}"],
-        // ggb 主引擎 .cache.js 达 ~7.9MB，提高预缓存上限使其完整进 SW（完全离线）
-        maximumFileSizeToCacheInBytes: 30 * 1024 * 1024,
+        globIgnores: ["**/GeoGebra/**"],
         navigateFallback: "index.html",
         runtimeCaching: [
-          // GGB 库已本地化（./ggb/ 随构建打包），不再缓存 CDN；
-          // 仅保留 AI provider 请求不缓存策略
+          // 本地 GeoGebra 库：首次访问后缓存，离线可用
+          {
+            urlPattern: ({ url }) => /\/GeoGebra\//.test(url.pathname),
+            handler: "CacheFirst",
+            options: {
+              cacheName: "ggb-local",
+              expiration: { maxEntries: 80, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] }
+            }
+          },
+          // AI provider 请求不缓存（涉及密钥与即时性）
           {
             urlPattern: ({ url }) => /\/v1\/chat\/completions$/.test(url.pathname),
             handler: "NetworkOnly"

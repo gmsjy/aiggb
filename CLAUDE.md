@@ -122,15 +122,15 @@ Schema 校验失败 → `chatWithFormatRetry`（≤2 次格式重试，raw + det
 - `.env` 放测试密钥：`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`（默认 v4-flash）、`DEEPSEEK_BASE_URL`
 - 模型：日常 flash（快）、复杂/3D 场景 pro；两阶段 Phase 1 用 flash，Phase 2 用主模型
 
-## GeoGebra 库本地化（自托管）
+## GeoGebra 库本地化（自托管，官方 bundle）
 
-- **GGB 引擎已随构建打包**（`public/ggb/`，~22MB），**完全离线，不依赖 CDN**：
-  - `index.html` 引 `./ggb/apps/deployggb.js`（非 CDN）
-  - `GGBCanvas.tsx` 2D/3D 均用 `./ggb/apps/{version}/web3d/` codebase（版本与 deployggb 内嵌一致）
-  - `deployggb.js` 内 CDN 前缀已替换为相对路径 `./ggb/`
-- **结构**：`public/ggb/apps/{version}/`（web3d 主引擎 + deferred fragment + css + properties + fonts + icons）
-- **更新 GGB 版本**：跑 `npx tsx tests/download-ggb.ts`（解析 deployggb 内嵌版本 → 下载配套整套 → 替换前缀 → 清理旧版本目录），再 `npm run build`
-- PWA：workbox `maximumFileSizeToCacheInBytes` 已提至 30MB，GGB 引擎进预缓存，完全离线可用；`runtimeCaching` 仅保留 AI 请求 NetworkOnly（不再缓存 CDN）
+- **GeoGebra Math Apps Bundle 随构建打包**（`public/GeoGebra/`，~116MB），**完全离线，不依赖 CDN**：
+  - 结构遵循官方：`GeoGebra/deployggb.js` + `GeoGebra/HTML5/5.0/{web,web3d,webSimple,css}`（官方 bundle zip 解压后整体放入 `public/`）
+  - `index.html` 引 `./GeoGebra/deployggb.js`（非 CDN）
+  - `GGBCanvas.tsx` 对 2D/3D **恒用 `web3d` 模块**（超集含 2D 渲染），`setHTML5Codebase` 传完整 URL 指向 `./GeoGebra/HTML5/5.0/web3d/`。codebase 恒定避免 deployggb 模块切换时复用旧 codebase 的坑
+  - **deployggb 限制**：单页单 codebase，`setHTML5Codebase` 对相对路径不生效（`indexOf("//")` 判断），须传完整 URL；同版本 codebase 切模块（web→web3d）不会重载
+- **更新 GGB 版本**：从 GeoGebra 官方下载新版 Math Apps Bundle zip，解压覆盖 `public/GeoGebra/`，再 `npm run build`
+- PWA：workbox `globIgnores: ["**/GeoGebra/**"]` 排除 GGB 引擎（116MB 不进 precache），改走 `runtimeCaching` CacheFirst（`ggb-local` 缓存，首次访问后离线可用）；`runtimeCaching` 仅保留 AI 请求 NetworkOnly
 
 ## 开发约定
 
