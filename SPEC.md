@@ -1,9 +1,9 @@
 # AiGGB 规格书
 
 > **AI 驱动的 GeoGebra 动态图像生成器**
-> 版本：v1.5
-> 日期：2026-06-30
-> 状态：MVP 完成，已扩展 3D 几何与视觉回归测试，进入迭代优化
+> 版本：v1.6
+> 日期：2026-08-10
+> 状态：MVP 完成，已扩展 Agent 模式、3D 画布稳定性修复、3-Role 模型配置，进入迭代优化
 
 ---
 
@@ -143,16 +143,27 @@ e:\Project\AiGGB\
     │   ├── TemplateGallery.tsx ← 物理+数学模板卡片（含 3D）
     │   └── PWAUpdatePrompt.tsx ← SW 更新提示
     ├── lib\
-    │   ├── aiClient.ts      ← OpenAI 兼容适配器 + AIError/AISchemaError + ping
-    │   ├── ggbBridge.ts     ← op→GGB API 执行器 + 容错 + 诊断 + 3D 检测/切换/导出
+    │   ├── aiClient.ts      ← OpenAI 兼容适配器 + 3-role 模型解析 + AIError/AISchemaError + ping
+    │   ├── ggbBridge.ts     ← op→GGB API 执行器 + 容错 + 诊断 + 3D batch 禁用 + 3D 检测/切换/导出
+    │   ├── pipeline.ts      ← 两阶段流水线状态机（纯 TS，可 node 单测）
     │   ├── schema.ts        ← Zod discriminatedUnion + NumLike/BoolLike/IntLike + ask
     │   ├── prompts.ts       ← System Prompt（通用+物理域+3D 规则+白/黑名单+5阶段）
     │   ├── commands.ts      ← GGB 命令白名单（含 3D）+ 黑名单 + 5阶段流程
     │   ├── physics.ts       ← 物理常量库 + 配色
     │   ├── templates.ts     ← 16 个一键模板（物理 8 + 数学 8，含 2 个 3D）
+    │   ├── agentLoop.ts     ← ReAct Agent 工具调用循环（observe→plan→act）
+    │   ├── toolExecutor.ts  ← Agent 工具→GGB API 分发（含 3D DockGlassPane 防护 + RAG 纠正）
+    │   ├── tools.ts         ← 工具 Function Calling 定义（18 工具 + safe/dangerous 分级）
+    │   ├── satisfactionEval.ts ← 满足度评估（画布快照 vs 精炼规格逻辑审查）
+    │   ├── specCache.ts     ← 意图→规格缓存（LRU + TTL + 画布指纹键）
+    │   ├── specSchema.ts    ← Phase 1 输出校验
+    │   ├── refinePrompt.ts  ← Phase 1 精炼 prompt
+    │   ├── runControl.ts    ← 单轮运行生命周期（AbortSignal + 取消）
+    │   ├── ggbKB.ts         ← RAG 命令知识库（~126 条 + 臆造映射）
+    │   ├── commandCorrect.ts ← 后置命令纠正器（Levenshtein + 臆造查表）
     │   └── providers.ts     ← 6 预置 Provider + 自定义（含模型清单与 apiKeyUrl）
     ├── store\
-    │   └── useAppStore.ts   ← Zustand persist v2：config/domain/privacy/messages/ggbApi/ggbAppName
+    │   └── useAppStore.ts   ← Zustand persist v3：config/domain/privacy/messages/constructionLog/ggbApi/ggbAppName
     ├── types\
     │   └── ggb.d.ts         ← GGBAppletApi + GGBAppletParameters 类型补丁
     └── styles\
@@ -335,7 +346,7 @@ export default defineConfig({
 
 - 不开启 SSR
 - GGB SDK 通过 `<script defer>` 标签注入 `index.html`（不走 npm 包，因官方未发布 ESM 版本）；SW 把 `www.geogebra.org/apps/` 与 `cdn.geogebra.org/` 纳入 CacheFirst，安装后离线可用
-- 3D applet 通过 `setHTML5Codebase("https://www.geogebra.org/apps/latest/web3d/")` 加载 web3d 代码库，同样落入 CDN 缓存
+- 3D applet 通过 `setHTML5Codebase("./GeoGebra/HTML5/5.0/web3d/")` 加载 web3d 代码库，同样落入 CDN 缓存
 - AI 请求显式声明 `NetworkOnly`，避免 Workbox 误缓存敏感响应
 
 ---
@@ -718,6 +729,101 @@ GeoGebra 的 `classic`（2D）与 `3d` applet 是两套代码库，运行中无�
 - 同一会话内 2D→3D 单向不可逆（需新对话重置）。
 - 截面与展开图依赖 GGB 引擎能力，复杂多面体可能降级。
 - 3D 动画性能受 GGB web3d 限制，建议几何体数量 ≤ 几十个。
+
+### 4B.6 3D 画布稳定性 —— DockGlassPane 修复与恢复系统
+
+**根因**：GeoGebra web3d 内部使用 `DockGlassPane`（DIV 遮罩层）处理视图切换动画。当 `api.setPerspective("3d")` 在已有 3D 透视下重复调用，或 `api.setRepaintingActive(true)` 在 3D 模式下触发内部布局重组时，`DockGlassPane` 可能接管并替换 3D 视图 iframe，且过渡动画有时不完成 → iframe 永久消失 → 所有 canvas 归零。症状：画布突然空白但 GGB 工具栏（前进/后退箭头）仍存在。
+
+**三层防御体系**：
+
+| 层 | 文件 | 机制 |
+|---|---|---|
+| **预防 #1** | `toolExecutor.ts:set_view` (L314-323) | 调用 `api.setPerspective("3d")` 前先 `api.getPerspectiveXML()?.includes("3D")` 检测，已是 3D 则跳过——避免无意义触发 GGB 内部视图过渡 |
+| **预防 #2** | `ggbBridge.ts:executeCommands` (L42) | `appMode === "3d"` 时 `useBatch` 强制为 false，跳过 `setRepaintingActive(false/true)` 批量包裹——避免 3D 模式下的批量重绘触发内部布局重组 |
+| **预防 #3** | `toolExecutor.ts:executeToolCalls` (L84) | Agent 模式同理，`appMode === "3d"` 时跳过 `setRepaintingActive` 批量 |
+| **恢复** | `GGBCanvas.tsx` 心跳监控 | 2s 间隔检测 canvas 数量 + DockGlassPane DOM → 自动硬重建 applet |
+
+**心跳恢复流程**（`GGBCanvas.tsx`）：
+
+```
+setInterval(2s):
+  检测: objCount > 0 && canvasCount === 0 && DockGlassPane 存在
+    → containerEl.style.visibility = "hidden"     // 抑制闪烁
+    → api.getBase64(cb)                            // 保存画布快照（3s 超时兜底）
+    → inject(w, h, force=true)                     // 强制销毁 + 重建 applet
+    → api.setBase64(snapshot, () => {              // 恢复画布内容
+        containerEl.style.visibility = ""          // 恢复可见
+      })
+```
+
+关键设计决策：
+- **`force` 参数**：`inject(w, h, force)` 新增 `force` 参数（默认 false）。`force=true` 时跳过 `getObjectNumber() > 0` 的对象保留检查，直接销毁重建——因为此时画布已无法渲染，必须强制重建。
+- **DockGlassPane 专用路径**：检测到 DockGlassPane 直接走硬重建，不尝试软恢复（`refreshViews` + `setPerspective`），因为：软恢复自身也可能触发新 DockGlassPane；AG↔3d 视图切换本身产生可见闪烁。
+- **闪烁抑制**：重建期间容器 `visibility: hidden`，等待快照恢复完成后才恢复可见——用户看到的是"短暂停顿"而非"白屏闪烁"。
+- **`inject()` 防御性保护**：`getObjectNumber()` 可能在 3D 忙碌时抛出异常，此时不走销毁流程，仅尝试 `refreshViews()` 触发重绘。
+
+**诊断日志**（`GGBCanvas.tsx`）：所有画布监控日志使用 `[AiGGB:DIAG]` 前缀。包括：
+- 心跳 canvas 计数变化（`心跳: canvas 9→0 ⚠DockGlassPane!`）
+- MutationObserver DOM 增删（`GGB 容器 DOM 变化: +1 -0`）
+- `inject()` 调用栈与 `getObjectNumber()` 结果
+- `executeCommands` canvas 计数前后对比
+- `containerEl.innerHTML = ''` 销毁点（画布消失的唯一 DOM 操作点）
+
+---
+
+## 4C. Agent 模式（ReAct 工具调用）
+
+除两阶段流水线（Phase 1→确认→Phase 2→执行）外，系统还支持 **Agent 模式**：AI 通过 OpenAI Function Calling 逐步调用工具，每步观察执行结果再决定下一步，形成 observe→plan→act 循环。
+
+### 4C.1 架构
+
+```
+用户输入 → runAgentLoop()
+  → system prompt（含画布当前对象清单）
+  → agentChat（流式返回 tool_calls）
+  → [safe 工具直接执行] + [dangerous 工具等待确认]
+  → 观察结果注入下一轮
+  → 循环直到 AI 返回纯文本（或达到 MAX_AGENT_ITERATIONS=30）
+```
+
+关键文件：
+
+| 文件 | 职责 |
+|---|---|
+| `src/lib/agentLoop.ts` | 主循环：`runAgentLoop()` / `truncateHistory()` / 确认处理器注入 |
+| `src/lib/toolExecutor.ts` | 工具→GGB API 分发：`executeToolCall()` / `executeToolCalls()` |
+| `src/lib/tools.ts` | 工具定义：OpenAI JSON Schema + Zod 校验 + 安全分级 |
+
+### 4C.2 工具列表（18 个）
+
+| 工具 | 安全等级 | 说明 |
+|---|---|---|
+| `create_point` / `create_segment` / `create_circle` / `create_polygon` | safe | 基础几何构造 |
+| `create_slider` | safe | 创建滑块（含 unit/label/caption） |
+| `create_vector` | safe | 矢量箭头（自动 Point→Vector 重写） |
+| `create_function` / `create_parametric` | safe | 函数/参数曲线 |
+| `create_text` / `create_trace` | safe | 文本标注/轨迹 |
+| `physics_constants` / `set_unit_axes` | safe | 物理常量注入/坐标轴单位 |
+| `set_style` / `set_animation` / `set_view` | safe | 样式/动画/视窗 |
+| `get_object_info` / `list_objects` | safe | 画布查询（供 AI 了解当前状态） |
+| `delete_object` / `clear_canvas` | **dangerous** | 删除对象/清空画布 |
+| `eval_raw` / `eval_sequence` | **dangerous** | 执行任意 GGB 命令/批量序列 |
+
+### 4C.3 安全确认机制
+
+- **safe** 工具：无需确认，直接执行
+- **dangerous** 工具：UI 层弹出确认对话框，用户可选择：批准 / 拒绝 / **信任此会话**（后续所有 dangerous 工具自动通过）
+- 确认处理器通过 `registerConfirmationHandler(fn)` 注入（ChatPanel 在启动 agent loop 前注册）
+
+### 4C.4 3D 兼容（DockGlassPane 防护）
+
+Agent 模式的 `toolExecutor.ts` 同样包含 3D 防护：
+- `executeToolCalls` 在 `appMode === "3d"` 时禁用 `setRepaintingActive` 批量
+- `set_view` 工具调用 `setPerspective("3d")` 前检查 `getPerspectiveXML()`，已是 3D 则跳过
+
+### 4C.5 对话历史截断
+
+`truncateHistory(messages, windowSize)` 保留最近 N 条消息，并修复截断边界处的消息配对问题（孤立 tool/tool_calls 消息会被移除），确保 AI 始终收到完整可理解的上下文。
 
 ---
 
@@ -1179,7 +1285,8 @@ npm run test:hash        # 查看当前 prompt 指纹
 | M6 | 漂移监控：N=10 重复 + 四层指标 + prompt 版本管理 + 迭代驱动 | ✅ v1.3 |
 | M7 | 3D 几何支持：意图检测 + applet 单向升级 + 3D 白名单/铁律 + 2 个 3D 模板 + highschool 14 用例 | ✅ v1.4 |
 | M8 | 视觉回归测试（Playwright 截图）+ 模板库扩至 16 + 用例扩至 63×14 + store v2 迁移 | ✅ v1.5 |
-| M9 | 生产缺陷回流管道、在线 N=10 漂移基线、CI/CD 集成、3D→2D 主动降级 | 🔜 v1.6 |
+| M9 | Agent 模式（ReAct 工具调用回路）+ 3D 画布 DockGlassPane 修复与恢复系统 + 3-role 模型配置（主力/轻量/Agent）+ 满足度评估 | ✅ v1.6 |
+| M10 | 生产缺陷回流管道、在线 N=10 漂移基线、CI/CD 集成、3D→2D 主动降级 | 🔜 v1.7 |
 
 ---
 
@@ -1248,7 +1355,7 @@ new GGBApplet({
   appletOnLoad: api => setGGBApi(api)   // 写入 store
 }, true);
 // 3D 模式额外加载 web3d 代码库
-if (ggbAppName === "3d") applet.setHTML5Codebase("https://www.geogebra.org/apps/latest/web3d/");
+if (ggbAppName === "3d") applet.setHTML5Codebase("./GeoGebra/HTML5/5.0/web3d/");
 applet.inject("ggb-container");
 ```
 
