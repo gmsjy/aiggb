@@ -79,9 +79,11 @@ export function executeToolCalls(
   calls: ToolCallRequest[],
   appMode?: "2d" | "3d"
 ): ToolResult[] {
-  // ★ 3D 模式禁用 batch：GGB web3d 在 setRepaintingActive(true) 后可能触发内部
-  //    布局重组使 3D 视图被 DockGlassPane 替换 → canvas 全部消失（GGB 内部 bug）
-  const useBatch = calls.length > 2 && appMode !== "3d";
+  // ★ 批量执行：暂停重绘 → 逐条 → 恢复（2D/3D 统一）。
+  //    旧版曾对 3D 禁用 batch 防 DockGlassPane，升级到 5.4.927.1 后已不复发，
+  //    而禁用 batch 会导致代数区逐条重建闪烁（见 ggbBridge.executeCommands 注释）。
+  void appMode;
+  const useBatch = calls.length > 2;
   if (useBatch) {
     api.setRepaintingActive(false);
   }

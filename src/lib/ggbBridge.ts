@@ -36,10 +36,13 @@ export interface ExecResult {
 
 /** 把所有命令逐条执行，失败不停。批量操作期间暂停重绘以提升性能。 */
 export function executeCommands(api: GGBAppletApi, commands: Command[], appMode?: "2d" | "3d"): ExecResult[] {
-  // ★ 批量执行：暂停重绘 → 逐条执行 → 恢复重绘
-  //    ⚠ 3D 模式禁用 batch：GGB web3d 在 setRepaintingActive(true) 后可能触发内部
-  //       布局重组使 3D 视图被 DockGlassPane 替换 → canvas 全部消失（GGB 内部 bug）
-  const useBatch = commands.length > 3 && appMode !== "3d";
+  // ★ 批量执行：暂停重绘 → 逐条执行 → 恢复重绘（一次性渲染，避免逐条重绘闪烁）
+  //    历史：曾因旧 GGB 5.4.920 的 DockGlassPane 崩溃，对 3D 禁用 batch。
+  //    2026-08 升级到官方 5.4.927.1 bundle 后实测：3D batch 不再触发 DockGlassPane
+  //    （120 条 3D 命令压测 0 事件），且禁用 batch 会导致代数区 canvasDef 逐步重建闪烁。
+  //    故 2D/3D 统一启用 batch。
+  void appMode;
+  const useBatch = commands.length > 3;
   // DIAGNOSTIC: 记录 batch 前后的 canvas 数量（仅浏览器）
   const inBrowser = typeof document !== "undefined";
   const canvasBefore = inBrowser
