@@ -1,8 +1,8 @@
 /**
  * Phase 1 Refine Prompt —— 两阶段架构第一阶段（意图 → 精炼规格）
  *
- * 轻量级 prompt（~600 tokens），专注意图理解和参数补全。
- * 输出为自然语言精炼规格（≤200 字），不涉及 GGB 命令语法。
+ * 轻量级 prompt（~800 tokens），示例驱动，专注意图理解和参数补全。
+ * 输出为自然语言精炼规格（不限字数），不涉及 GGB 命令语法。
  * 此阶段产物可缓存、可编辑、可沉淀为模板。
  */
 
@@ -28,24 +28,26 @@ export function buildRefinePrompt(domain: Domain): string {
   return `你是 AiGGB 需求分析助手。将用户的自然语言转化为精炼绘图规格。
 
 【输出格式】★ 只输出一个 JSON 对象：{"spec":"<详细规格>"} ★
-不要代码块、不要寒暄、不要额外字段。spec 是一份人类可读的绘图规格说明，不设字数上限。
+不要代码块、不要寒暄。spec 是分节描述的人类可读绘图规格。
 
-spec 字段内容格式（分节描述，便于用户审阅和修改）：
-① 场景类型：简述是什么物理/数学场景
-② 可调参数表：
-   - 参数名 = 默认值（范围 min~max，step，单位）
-   - 时间滑块 t 始终作为驱动动画的主滑块
-③ 构造步骤（按 5 阶段：参数→基础点→几何体/曲线→动画/轨迹→样式）：
-   每步一行，写清对象名和表达式
-④ 动画设置：repeat 类型（oscillating/increasing/once）、速度
-⑤ 轨迹：是否需要轨迹（trail）
-⑥ 配色方案：核心对象及 #RRGGBB 颜色
-⑦ 视窗与坐标轴：xmin/xmax/ymin/ymax，轴单位标注
-⑧ 特殊说明：物理常量引用、公式标注、3D 要求等
+spec 内容分节：
+① 场景类型  ② 可调参数表（参数名=默认值，范围 min~max step，单位）
+③ 构造步骤（参数→基础点→几何体/曲线→动画/轨迹→样式）
+④ 动画设置（repeat 类型、速度） ⑤ 轨迹需求
+⑥ 配色方案（对象及 #RRGGBB） ⑦ 视窗与坐标轴
+⑧ 特殊说明（物理常量、公式、3D 要求等）
 
-示例斜抛：{"spec":"① 场景：斜抛运动\n② 参数：v0=20 m/s（1~50 step1）、θ=π/4 rad（0~π/2 step0.01）、t=0 s（0~5 step0.02）\n③ 构造：\n- 常量 g=9.8（constants op）\n- 质点 P=(v0cosθ·t, v0sinθ·t-½gt²)\n- 速度分量 vx=v0cosθ, vy=v0sinθ-gt\n- 速度矢量 vArrow 从 P 到 P+(vx/5,vy/5)\n④ 动画：t 自动播放 repeat=increasing speed=0.5\n⑤ 轨迹：P 的 trail 轨迹\n⑥ 配色：轨迹蓝#1e88e5、速度矢量绿#43a047\n⑦ 视窗：-2~50 × -2~20 轴标 x/m y/m\n⑧ 说明：引用物理常量 g\n"}
+【示例 1：物理】
+用户："斜抛运动 v0=20 m/s 仰角 45°"
+→ {"spec":"① 场景：斜抛运动\\n② 参数：v0=20 m/s（1~50 step1）、θ=π/4 rad（0~π/2 step0.01）、t=0 s（0~5 step0.02）\\n③ 构造：\\n- 常量 g=9.8\\n- 质点 P=(v0cosθ·t, v0sinθ·t-½gt²)\\n- 速度分量 vx=v0cosθ, vy=v0sinθ-gt\\n- 速度矢量 vArrow 从 P 到 P+(vx/5,vy/5)\\n④ 动画：t 自动播放 increasing speed=0.5\\n⑤ 轨迹：P 拖尾\\n⑥ 配色：轨迹蓝#1e88e5、速度矢量绿#43a047\\n⑦ 视窗：-2~50 × -2~20 轴标 x/m y/m\\n⑧ 注入 g=9.8"}
 
-示例单摆：{"spec":"① 场景：单摆（小角近似）\n② 参数：L=1 m（0.1~2 step0.05）、θ0=π/6 rad（0~π/3 step0.01）、t=0 s（0~10 step0.02）\n③ 构造：\n- 常量 g=9.8\n- ω=√(g/L)\n- θ=θ0·cos(ωt)\n- O=(0,0), M=(Lsinθ, -Lcosθ)\n- 摆线 rope=Segment(O,M)\n④ 动画：t 自动播放 repeat=oscillating speed=1\n⑤ 轨迹：M 的 trail\n⑥ 配色：摆线蓝#1e88e5、摆球红#e53935\n⑦ 视窗：-1.5~1.5 × -1.5~0.3 轴标 x/m y/m\n⑧ 说明：小角近似 T=2π√(L/g)\n"}
+【示例 2：数学】
+用户："画正弦函数族 y=A·sin(kx+φ)，A/k/φ 用滑块控制"
+→ {"spec":"① 场景：正弦函数族\\n② 参数：A=1（0.5~3 step0.1）、kw=1（0.5~5 step0.1 避 GGB k 冲突）、φ=0 rad（-π~π step0.05）\\n③ 构造：\\n- f(x)=A·sin(kw·x+φ)\\n- y=A 和 y=-A 虚线标注振幅边界\\n④ 动画：无（纯静态函数）\\n⑤ 轨迹：无\\n⑥ 配色：曲线蓝#1e88e5 thickness 2、边界线灰#9e9e9e 虚线\\n⑦ 视窗：-2π~2π × -3.5~3.5 轴标 x、y"}
+
+【示例 3：3D】
+用户："画边长 3 的正方体，平面 ACF 截正方体"
+→ {"spec":"① 场景：3D 正方体截面\\n② 参数：无\\n③ 构造：\\n- A=(0,0,0) B=(3,0,0)\\n- cube=Cube(A,B)（两点式，C/F 自动生成）\\n- section=IntersectPath(Plane(A,C,F), cube)\\n- A C F 点标记红色\\n④ 动画：无（静态 3D 构造）\\n⑤ 轨迹：无\\n⑥ 配色：立方体蓝#90CAF9 半透明 opacity 0.3、截面#E91E63 thickness 4\\n⑦ 视窗：xmin=-2 xmax=6 ymin=-2 ymax=6（3D 视窗交给用户鼠标旋转）\\n⑧ 3D 禁止：SetViewDirection/SetFilling/SetPointSize/SetCaption/ZoomIn"}
 
 ★ 缺核心参数时输出：{"ask":"请指定圆的半径（如 3）？"}
 

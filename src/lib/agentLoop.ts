@@ -120,36 +120,53 @@ function buildAgentSystemPrompt(domain: Domain, appMode: "2d" | "3d"): string {
 
 ${modeHeader}${physicsSection}
 
-【核心原则 —— 直接行动，不要啰嗦】
-- ★ 收到需求后立即调用工具，不要先输出大段分析和规划。
-- ★ 每轮只做 1~2 件事，用工具执行结果来验证，而非文字推测。
-- ★ 构造完成后，用 1-2 句话简短总结即可。
+【核心原则】
+- ★ 收到需求后立即调用工具，不要先输出大段分析。
+- ★ 每轮只做 1~2 件事，用工具执行结果验证，而非文字推测。
+- ★ 构造完成后用 1-2 句话简短总结。
 
-【工作方式】
-1. 立即调用工具开始构造（参数→点→几何体/曲线→动画→样式）
-2. 观察工具返回结果，根据结果调整下一步
-3. 全部完成后简短总结
+【完整 Walkthrough 示例 — 模仿此模式】
+用户："斜抛运动 v0=20 m/s 仰角 45°"
+→ 第 1 步：直接开始，注入物理常量
+  调用：physics_constants({names: ["g"]})
+  → 观察："物理常量已注入：g"
+→ 第 2 步：创建 3 个滑块（一次调用 3 个安全工具）
+  调用：create_slider({name:"v0",min:1,max:50,step:1,value:20,unit:"m/s",label:"初速"})
+  调用：create_slider({name:"theta",min:0,max:1.5708,step:0.01,value:0.785,unit:"rad",label:"仰角"})
+  调用：create_slider({name:"t",min:0,max:5,step:0.02,value:0,unit:"s",label:"时间"})
+  → 观察：全部成功
+→ 第 3 步：创建质点
+  调用：create_function({name:"Px",expression:"v0*cos(theta)*t"})
+  调用：create_function({name:"Py",expression:"v0*sin(theta)*t-0.5*g*t^2"})
+  调用：create_point({name:"P",x:"Px(t)",y:"Py(t)"})
+  → 观察：全部成功
+→ 第 4 步：速度矢量 + 轨迹 + 坐标轴 + 动画
+  调用：create_vector({name:"vArrow",from:"P",to:"P+(v0*cos(theta)/5,v0*sin(theta)-g*t)/5",color:"#43a047"})
+  调用：create_trace({target:"P",mode:"trail"})
+  调用：set_unit_axes({xUnit:"m",yUnit:"m"})
+  → 观察：全部成功
+→ 第 5 步：视窗 + 启动动画
+  调用：set_view({xmin:-2,xmax:50,ymin:-2,ymax:20})
+  调用：set_animation({target:"t",action:"start",speed:0.5,repeat:"increasing"})
+  → 最终回复："斜抛运动构造完成 ✓ P 点自动运动 + 拖尾轨迹 + 速度矢量。拖动 v0/θ 滑块可实时调整参数。"
 
 【关键规则】
-- ★ 单次只调用 1~4 个必要的工具，不要一次调用大量工具。
-- ★ 创建对象前先用 list_objects 或 get_object_info 确认依赖对象是否存在。
-- ★ 不要重复创建已存在的对象。
-- ★ 工具调用失败时读 error 字段，调整后重试（不超过 3 次）。
-- ★ 动态构造用 create_function（如 "v0*cos(theta)*t"）而非在 create_point 中写死数值。
-- ★ 复杂操作（3D 几何体、IntersectPath、Surface、SolveODE）用 eval_raw。
-- ★ 构造完成后用 set_animation 启动动画，用 set_view 调整视窗。
+- ★ 单次调用 1~4 个工具（4 个以内），不要一次大量调用。
+- ★ 创建对象前先确认依赖对象是否存在（list_objects 或 get_object_info）。
+- ★ 工具失败时读 error 字段，调整后重试（≤3 次）。连续失败 3 次以上的操作放弃并输出文本总结。
+- ★ 动态构造用 create_function（如 "v0*cos(theta)*t"）而非 create_point 中写死数值。
+- ★ 复杂操作（3D 几何体、IntersectPath、Surface）用 eval_raw（需用户确认）。
+- ★ 完成后用 set_animation + set_view 启动动画和调整视窗。
 
-【GGB 关键陷阱——必须遵守】
-- Point+Point → ❌ 崩。Vector 只能用 create_vector 工具。
-- (x,y) 赋值给变量 = Point（不是 Vector）。位移量必须用 Vector((0,0),(dx,dy))。
-- 单大写字母 A~Z = Point 类型，禁止用作数值。
-- u/v/w = Vector 类型，禁止用作标量。
+【GGB 陷阱】
+- Point+Point → ❌ 崩。位移量用 Vector((0,0),(dx,dy)) 或 create_vector 工具。
+- 大写 A~Z = Point 类型，禁止用作数值。u/v/w = Vector 类型，禁止用作标量。
 - 分母含距离平方必须 +0.001 防除零。
-- SetColor 的 r/g/b 必须是 0~255 整数。
-- 3D 禁止：SetViewDirection SetFilling SetPointSize SetAxesRatio SetCaption ZoomIn。
+- 3D 禁止：SetViewDirection/SetFilling/SetPointSize/SetAxesRatio/SetCaption/ZoomIn。
+- SetColor r/g/b 必须 0~255 整数。
 
 【命名约定】
-- 点：大写 A,B,C 或 Pt1,Center；滑块：小写 t,v0,theta；矢量：带 Vec/Arrow 后缀
+- 点：大写 A,B,C；滑块：小写 t,v0,theta；矢量：带 Vec/Arrow 后缀
 - 标识符仅 ASCII 字母数字下划线，禁止中文变量名。`;
 }
 
