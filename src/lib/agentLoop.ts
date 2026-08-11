@@ -35,6 +35,12 @@ import type { ChatTurn } from "../store/useAppStore";
 /** 最大工具调用迭代次数（防止无限循环） */
 export const MAX_AGENT_ITERATIONS = 30;
 
+/** 连续工具失败熔断阈值（连续 N 轮执行全失败即停止重试，避免无效轮转） */
+export const MAX_CONSECUTIVE_FAILURES = 3;
+
+/** 用户拒绝工具调用时返回给 AI 的错误文案（熔断统计据此排除"拒绝"场景） */
+const USER_DENIED_MSG = "用户拒绝了此操作";
+
 /** 对话历史保留窗口（消息条数） */
 const HISTORY_WINDOW = 40;
 
@@ -152,8 +158,9 @@ export async function runAgentLoop(
   userText: string,
   deps: AgentLoopDeps
 ): Promise<AgentLoopResult> {
-  const api = deps.getApi();
-  if (!api) {
+  // ★ 画布就绪检查 + 初始状态（用 initialApi，循环内每轮再重新获取最新句柄）
+  const initialApi = deps.getApi();
+  if (!initialApi) {
     throw new AIError("GeoGebra 画布尚未就绪");
   }
 
@@ -164,7 +171,7 @@ export async function runAgentLoop(
   deps.onThinking?.("正在分析需求…");
 
   // 当前画布状态
-  const initialObjs = api.getAllObjectNames();
+  const initialObjs = initialApi.getAllObjectNames();
   const canvasStatus = initialObjs.length > 0
     ? `\n[当前画布已有对象：${initialObjs.join(", ")}]`
     : "\n[当前画布为空]";
@@ -179,6 +186,8 @@ export async function runAgentLoop(
   let finalText = "";
   let iterations = 0;
   let approveAll = false; // ★ 信任会话标志，闭环内持久
+  let consecutiveFailures = 0; // ★ 连续工具执行失败计数（熔断）
+  let forceStop = false;      // ★ 熔断后禁止继续工具调用
 
   while (iterations < MAX_AGENT_ITERATIONS) {
     // 检查中断
@@ -193,13 +202,28 @@ export async function runAgentLoop(
     // 截断历史（保留 system + 最近 N 条）
     const truncated = truncateHistory(messages, HISTORY_WINDOW);
 
-    // 调用 AI
+    // ★ 每轮重新获取 api 句柄——长跑期间 DockGlassPane 心跳可能重建 applet，旧句柄失效
+    const api = deps.getApi();
+    if (!api) {
+      throw new AIError("GeoGebra 画布已重建，本轮运行中止");
+    }
+
+    // 调用 AI（流式：content 增量经 onThinking 实时展示）
     let response: AgentResponse;
     try {
-      response = await agentChat(deps.config, truncated, TOOL_DEFINITIONS, deps.signal, deps.agentModel);
+      response = await agentChat(
+        deps.config, truncated, TOOL_DEFINITIONS, deps.signal, deps.agentModel,
+        text => deps.onThinking?.(text)
+      );
     } catch (err) {
       if (err instanceof AIError) throw err;
       throw new AIError(`Agent 调用失败 (iter ${iterations})`, err);
+    }
+
+    // 熔断后 AI 若仍要调工具 → 直接中止
+    if (forceStop && response.toolCalls.length > 0) {
+      finalText = `连续 ${MAX_CONSECUTIVE_FAILURES} 轮工具调用失败，构造中止。`;
+      break;
     }
 
     // 情况 1：纯文本回复 → 结束
@@ -244,29 +268,56 @@ export async function runAgentLoop(
     }
 
     // 危险工具 → 确认（pass approveAll for session-level trust）
+    let dangerousResults: ToolResult[] = [];
+    const deniedBefore = deniedTools.length; // ★ 本轮被拒基线（全拒绝判定用）
     if (dangerousCalls.length > 0) {
       if (approveAll) {
         // 信任已激活，跳过确认直接执行
-        const autoResults = executeDangerousTools(api, dangerousCalls);
-        for (const r of autoResults) messages.push(r);
+        dangerousResults = executeDangerousTools(api, dangerousCalls);
       } else {
         deps.onThinking?.("等待确认…");
         const { results, newApproveAll } = await handleDangerousTools(
           api, dangerousCalls, deniedTools, approveAll
         );
         approveAll = newApproveAll;
-        for (const r of results) messages.push(r);
+        dangerousResults = results;
       }
+      for (const r of dangerousResults) messages.push(r);
     }
+    const deniedThisRound = deniedTools.length - deniedBefore;
 
-    // 检查是否所有工具都被拒绝 → 可能需要提前结束
+    // ★ 本轮全是危险工具且全部被拒 → 引导 AI 换安全工具
+    //    （用"本轮被拒数"而非累计 deniedTools.length，避免跨轮累积误触发）
     if (toolCalls.length > 0 &&
         dangerousCalls.length === toolCalls.length &&
-        deniedTools.length >= dangerousCalls.length) {
+        deniedThisRound >= dangerousCalls.length) {
       messages.push({
         role: "user",
         content: "以上工具调用均被用户拒绝。请尝试用其他安全工具完成构造，或直接回复说明无法继续。"
       });
+    }
+
+    // ★ 连续失败熔断：本轮所有实际执行全部失败（用户拒绝不计）→ 计数 +1，否则清零
+    const allResults = [...safeResults, ...dangerousResults];
+    const executed = allResults.map(r => {
+      try {
+        const p = JSON.parse(r.content) as { success?: boolean; error?: string };
+        return { denied: p.error === USER_DENIED_MSG, failed: p.success === false };
+      } catch {
+        return { denied: false, failed: true };
+      }
+    }).filter(s => !s.denied);
+
+    if (executed.length > 0) {
+      consecutiveFailures = executed.every(s => s.failed) ? consecutiveFailures + 1 : 0;
+    }
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      finalText = `连续 ${MAX_CONSECUTIVE_FAILURES} 轮工具调用失败，构造中止。`;
+      messages.push({
+        role: "user",
+        content: `检测到连续 ${MAX_CONSECUTIVE_FAILURES} 轮工具调用失败。请立即停止调用工具，用文字总结当前画布状态和失败原因。`
+      });
+      forceStop = true;
     }
   }
 
@@ -344,32 +395,50 @@ async function handleDangerousTools(
 
   const decisions = await _confirmFn(confirmRequests);
 
-  // 按决策分类执行
+  // ★ 按 toolCallId 匹配决策，而非按下标索引——UI 返回的决策顺序/条数可能与请求不一致，
+  //   按下标会导致 requests[i] 越界崩溃。
+  const decisionMap = new Map<string, ConfirmationDecision>();
+  let approveAllRequested = false;
+  for (const d of decisions) {
+    if (d.action === "approve_all") {
+      approveAllRequested = true;
+    } else {
+      decisionMap.set(d.toolCallId, d);
+    }
+  }
+
   const results: ToolResult[] = [];
   let newApproveAll = approveAll;
 
-  for (const [i, decision] of decisions.entries()) {
+  for (const req of requests) {
     if (newApproveAll) {
-      const r = executeToolCall(api, requests[i]);
-      results.push(r);
+      results.push(executeToolCall(api, req));
       continue;
     }
 
-    if (decision.action === "approve_all") {
+    const decision = decisionMap.get(req.id);
+    // 「信任此会话」：当前及后续请求全部放行（首个无显式决策的请求触发信任）
+    if (approveAllRequested && (!decision || decision.action !== "deny")) {
       newApproveAll = true;
-      const r = executeToolCall(api, requests[i]);
-      results.push(r);
-    } else if (decision.action === "approve") {
-      const r = executeToolCall(api, requests[i]);
-      results.push(r);
-    } else {
-      deniedTools.push(requests[i].name);
-      results.push({
-        tool_call_id: requests[i].id,
-        role: "tool",
-        content: JSON.stringify({ success: false, error: "用户拒绝了此操作" })
-      });
+      results.push(executeToolCall(api, req));
+      continue;
     }
+
+    if (!decision || decision.action === "deny") {
+      deniedTools.push(req.name);
+      results.push({
+        tool_call_id: req.id,
+        role: "tool",
+        content: JSON.stringify({
+          success: false,
+          error: decision ? USER_DENIED_MSG : "未收到确认决策"
+        })
+      });
+      continue;
+    }
+
+    // decision.action === "approve"
+    results.push(executeToolCall(api, req));
   }
 
   return { results, newApproveAll };
@@ -432,6 +501,7 @@ function convertHistory(turns: ChatTurn[]): AgentMessage[] {
         .filter(c => c.op === "eval")
         .map(c => (c as { cmd: string }).cmd)
         .filter(c => !c.startsWith("// [")) // 跳过伪命令注释
+        .map(c => c.replace(/^\p{Extended_Pictographic}\s*/u, "")) // 去掉 agent 摘要的 emoji 前缀（如 "📍 A(1,2)" → "A(1,2)"）
         .join("; ");
       const content = cmdText
         ? `${explanation}\n[已执行：${cmdText.slice(0, 200)}]`

@@ -144,7 +144,7 @@ e:\Project\AiGGB\
     │   └── PWAUpdatePrompt.tsx ← SW 更新提示
     ├── lib\
     │   ├── aiClient.ts      ← OpenAI 兼容适配器 + 3-role 模型解析 + AIError/AISchemaError + ping
-    │   ├── ggbBridge.ts     ← op→GGB API 执行器 + 容错 + 诊断 + 3D batch 禁用 + 3D 检测/切换/导出
+    │   ├── ggbBridge.ts     ← op→GGB API 执行器 + 容错 + 诊断 + 2D/3D batch 统一启用 + 3D 检测/切换/导出
     │   ├── pipeline.ts      ← 两阶段流水线状态机（纯 TS，可 node 单测）
     │   ├── schema.ts        ← Zod discriminatedUnion + NumLike/BoolLike/IntLike + ask
     │   ├── prompts.ts       ← System Prompt（通用+物理域+3D 规则+白/黑名单+5阶段）
@@ -739,8 +739,8 @@ GeoGebra 的 `classic`（2D）与 `3d` applet 是两套代码库，运行中无�
 | 层 | 文件 | 机制 |
 |---|---|---|
 | **预防 #1** | `toolExecutor.ts:set_view` (L314-323) | 调用 `api.setPerspective("3d")` 前先 `api.getPerspectiveXML()?.includes("3D")` 检测，已是 3D 则跳过——避免无意义触发 GGB 内部视图过渡 |
-| **预防 #2** | `ggbBridge.ts:executeCommands` (L42) | `appMode === "3d"` 时 `useBatch` 强制为 false，跳过 `setRepaintingActive(false/true)` 批量包裹——避免 3D 模式下的批量重绘触发内部布局重组 |
-| **预防 #3** | `toolExecutor.ts:executeToolCalls` (L84) | Agent 模式同理，`appMode === "3d"` 时跳过 `setRepaintingActive` 批量 |
+| **预防 #2** | `ggbBridge.ts:executeCommands` (L42) | `setRepaintingActive` 批量包裹 **2D/3D 统一启用**（2026-08 升级官方 5.4.927.1 后 DockGlassPane 不再因 batch 复发；禁用 batch 会导致代数区逐条重建闪烁）|
+| **预防 #3** | `toolExecutor.ts:executeToolCalls` (L84) | Agent 模式同样统一启用 batch；`setPerspective("3d")` 保留已 3D 则跳过的守卫 |
 | **恢复** | `GGBCanvas.tsx` 心跳监控 | 2s 间隔检测 canvas 数量 + DockGlassPane DOM → 自动硬重建 applet |
 
 **心跳恢复流程**（`GGBCanvas.tsx`）：
@@ -818,7 +818,7 @@ setInterval(2s):
 ### 4C.4 3D 兼容（DockGlassPane 防护）
 
 Agent 模式的 `toolExecutor.ts` 同样包含 3D 防护：
-- `executeToolCalls` 在 `appMode === "3d"` 时禁用 `setRepaintingActive` 批量
+- `executeToolCalls` 批量执行（`setRepaintingActive` 包裹）在 2D/3D 统一启用（升级官方 5.4.927.1 后 DockGlassPane 不再因 batch 复发）
 - `set_view` 工具调用 `setPerspective("3d")` 前检查 `getPerspectiveXML()`，已是 3D 则跳过
 
 ### 4C.5 对话历史截断

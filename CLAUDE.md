@@ -38,7 +38,7 @@
 
 | 文件 | 职责 | 关键导出 |
 |---|---|---|
-| `aiClient.ts` | OpenAI 兼容调用 | `chat(config, msgs, signal?, modelOverride?)` 返回 schema 校验后的 `AIResponse`；`chatRaw(...)` 返回纯文本（Phase 1 用）；`agentChat(...)` Agent 流式工具调用；`ping()` 连接测试；`AIConfig`（**3-role 模型**：`model` 主力 / `lightModel?` 轻量 / `agentModel?` Agent，`flashModel?` 已 deprecated）；`resolveLightModel`/`resolveAgentModel` 解析回退链；`ChatMessage`、`AIError`、`AISchemaError` |
+| `aiClient.ts` | OpenAI 兼容调用 | `chat(config, msgs, signal?, modelOverride?)` 返回 schema 校验后的 `AIResponse`；`chatRaw(...)` 返回纯文本（Phase 1 用）；`agentChat(...)` Agent **流式**工具调用（SSE 增量解析 tool_calls + `onContent` 实时回调 + JSON 兼容回退 + `max_tokens`）；`ping()` 连接测试；`AIConfig`（**3-role 模型**：`model` 主力 / `lightModel?` 轻量 / `agentModel?` Agent，`flashModel?` 已 deprecated）；`resolveLightModel`/`resolveAgentModel` 解析回退链；`ChatMessage`、`AIError`、`AISchemaError` |
 | `pipeline.ts` | **两阶段流水线状态机**（从 ChatPanel 抽取） | `runPipeline(userText, deps, cb)`（Phase 1→确认→Phase 2→修复→**满足度评估**）、`ReviewHandle`/`ReviewDecision`、`PipelineDeps`（依赖注入接口，含 3-role 模型解析 + `appMode`）、`PipelineCallbacks`、`MAX_REPAIR=2`、`MAX_FORMAT_RETRY=2`、`HISTORY_WINDOW=6`、`parseRefinedSpec`、`collectHistory`；内部 `runSinglePhase`/`runPhase2`/`executeAndRepair`/`applyRagCorrection`/`chatWithFormatRetry`；Phase 2 调用 `executeCommands(api, cmds, deps.appMode)`；`requestAnimationFrame` 用 `typeof` 守卫兼容 Node.js 单测 |
 | `runControl.ts` | 单轮运行生命周期 | `beginRun()`（返回本轮 AbortSignal）、`abortCurrentRun()`（清空/切模式/撤销时取消请求）、`onRunCancelled(cb)`（spec-review 等待气泡订阅取消）、`wasAborted()`、`endRun()` |
 | `prompts.ts` | System Prompt 构建 | `buildSystemPrompt(domain, appMode, phase="full"\|"compile")`、`buildCompilePrompt`、`buildCheckerPrompt`（修复角色）、`buildRepairMessage`、`buildFormatRepairMessage`；compile 模式含 **self_check 自检指令**；`Domain = "general"\|"physics"` |
@@ -51,9 +51,9 @@
 | `commands.ts` | 命令白名单/黑名单/流程 | `GGB_COMMANDS`、`GGB_FORBIDDEN_COMMANDS`（硬黑名单，被 schema 引用）、`GGB_5STAGE_FLOW`（参数→点→图形→动画→属性） |
 | `physics.ts` | 物理常量 + 配色 | `PHYSICS_CONSTANTS`（g/c/e/eps0/mu0/k_e/Grav/h/k_B）、`PHYSICS_COLORS`（位移蓝/速度绿/加速度橙/力红/电场紫/磁场青） |
 | `templates.ts` | 16 个一键模板 | `Template {id, icon, title, subtitle, prompt, domain, mode}`；prompt 即精炼规格，天然命中 specCache |
-| `ggbBridge.ts` | op → GGB API 执行器 | `executeCommands(api, commands, appMode?)` — **3D 模式下禁用 `setRepaintingActive` 批量渲染**（避免触发 DockGlassPane 崩溃）；`collectFailures`、**`resetTmpIds`**（vector 容错重试时复位临时对象计数）、`exportGGB`/`exportPNG`、`registerAppNameSetter`/`switchAppletMode`（2D↔3D）|
-| `agentLoop.ts` | **ReAct Agent 工具调用循环** | `runAgentLoop(userText, deps)` — observe→plan→act 循环，最大 30 次迭代；`registerConfirmationHandler`/`unregisterConfirmationHandler` 危险工具确认注入；`AgentLoopDeps`（含 `agentModel`）、`AgentLoopResult` |
-| `toolExecutor.ts` | Agent 工具 → GGB API 分发 | `executeToolCall(api, call)`/`executeToolCalls(api, calls, appMode?)` — 3D 模式禁用 batch；`setPerspective("3d")` 通过 `getPerspectiveXML()` 检测已 3D 则跳过（防 DockGlassPane）；~20 个工具 case（create_point/slider/vector/style/animation…）|
+| `ggbBridge.ts` | op → GGB API 执行器 | `executeCommands(api, commands, appMode?)` — **2D/3D 统一启用 `setRepaintingActive` 批量渲染**（升级官方 5.4.927.1 后 DockGlassPane 已不复发，禁用会导致代数区闪烁）；`collectFailures`、**`resetTmpIds`**（vector 容错重试时复位临时对象计数）、`exportGGB`/`exportPNG`、`registerAppNameSetter`/`switchAppletMode`（2D↔3D）|
+| `agentLoop.ts` | **ReAct Agent 工具调用循环** | `runAgentLoop(userText, deps)` — observe→plan→act 循环，最大 30 次迭代，**每轮刷新 api 句柄**（防 applet 重建失效）、**连续 3 轮工具失败熔断**（`MAX_CONSECUTIVE_FAILURES`）、全拒绝判定按**本轮**被拒数（避免跨轮累积误触发）、危险工具确认按 `toolCallId` 匹配；**`onThinking` 回调**（分析/规划/执行工具/等待确认 4 个节点）实时上报思考步骤，经 pipeline 透传 UI 减少等待焦虑；`registerConfirmationHandler`/`unregisterConfirmationHandler` 危险工具确认注入；`AgentLoopDeps`（含 `agentModel`）、`AgentLoopResult` |
+| `toolExecutor.ts` | Agent 工具 → GGB API 分发 | `executeToolCall(api, call)`/`executeToolCalls(api, calls, appMode?)` — 批量执行 2D/3D 统一启用；`setPerspective("3d")` 通过 `getPerspectiveXML()` 检测已 3D 则跳过（防 DockGlassPane）；~20 个工具 case（create_point/slider/vector/style/animation…）|
 | `tools.ts` | 工具 Function Calling 定义 | `TOOL_DEFINITIONS`（OpenAI tool schemas）、`TOOL_SCHEMAS`（Zod 校验）、`getToolSafety(name)` → `"safe"\|"dangerous"`；dangerous 工具（eval_raw/delete/clear）需用户确认 |
 | `satisfactionEval.ts` | Phase 3.1 满足度评估 | `evaluateSatisfaction(config, spec, snapshot, signal?, modelOverride?)` — 轻量模型对比画布快照与精炼规格，输出 `SatisfactionResult{satisfied, issues[], summary}`；失败不阻断流程 |
 | `providers.ts` | 6 预置 provider + 自定义 | `PROVIDER_PRESETS`（DeepSeek/Moonshot/GLM/SiliconFlow/OpenAI/Ollama） |
@@ -62,7 +62,7 @@
 
 | 文件 | 职责 |
 |---|---|
-| `ChatPanel.tsx` | 编排已提取至 pipeline.ts，本组件只负责：输入 UI、消息渲染、**store 依赖注入成 `PipelineDeps`**、spec 确认事件桥接（`reviewHandleRef`）|
+| `ChatPanel.tsx` | 编排已提取至 pipeline.ts，本组件只负责：输入 UI、消息渲染、**store 依赖注入成 `PipelineDeps`**、spec 确认事件桥接（`reviewHandleRef`）、**Agent 思考步骤实时显示**（`agentStep` state + `onAgentStep` → thinking 区域）|
 | `MessageBubble.tsx` | 消息气泡：user/assistant/error/ask/**spec-review**（规格确认 UI：编辑/重新生成/确认绘制）+ **assistant 渲染 self_check 报告** |
 | `GGBCanvas.tsx` | GeoGebra applet 注入，监听 `ggbAppName` 重建（2D↔3D）；**心跳监控**（2s 间隔 canvas 计数 + DockGlassPane 检测）+ **自动恢复**（保存 base64 快照 → `inject(force=true)` 强制重建 → 恢复快照）；MutationObserver DOM 监控 + WebGL context loss 监听；诊断日志前缀 `[AiGGB:DIAG]` |
 | `Toolbar.tsx` | 顶栏：domain 切换/模板/撤销/清空/导出/截图/复制/安装；清空/切模式/撤销时调用 `abortCurrentRun()` |
@@ -157,8 +157,8 @@ GeoGebra web3d 内部使用 `DockGlassPane`（一个 DIV 遮罩层）处理视�
 | 层 | 位置 | 机制 |
 |---|---|---|
 | **预防 #1** | `toolExecutor.ts:set_view` | `api.getPerspectiveXML()?.includes("3D")` 检测已是 3D → 跳过 `setPerspective("3d")` 调用 |
-| **预防 #2** | `ggbBridge.ts:executeCommands` | 3D 模式下 `useBatch` 强制为 false，跳过 `setRepaintingActive(false/true)` 批量包裹 |
-| **预防 #3** | `toolExecutor.ts:executeToolCalls` | Agent 模式同样在 `appMode === "3d"` 时跳过 `setRepaintingActive` 批量 |
+| **预防 #2** | `ggbBridge.ts:executeCommands` | `setRepaintingActive` 批量包裹 **2D/3D 统一启用**（升级 5.4.927.1 后 DockGlassPane 已不复发，禁用会导致代数区闪烁）|
+| **预防 #3** | `toolExecutor.ts:executeToolCalls` | Agent 模式同样统一启用 batch；`setPerspective("3d")` 保留已 3D 则跳过的守卫 |
 | **恢复** | `GGBCanvas.tsx:heartbeat` | 2s 间隔心跳监控 canvas 数量 + DockGlassPane DOM 检测 → 自动硬重建 |
 
 ### 心跳恢复流程
@@ -237,5 +237,5 @@ GeoGebra web3d 内部使用 `DockGlassPane`（一个 DIV 遮罩层）处理视�
 - 3D 模式：`Cube(A,B)` 两点式优先；`SetViewDirection/SetFilling/SetPointSize/SetCaption` 等 3D 禁用
 - **诊断日志**：画布/执行相关日志使用 `[AiGGB:DIAG]` 前缀，心跳/MutationObserver/DockGlassPane 检测均遵循此约定
 - **`requestAnimationFrame`**：在 lib 层使用须加 `typeof requestAnimationFrame !== "undefined"` 守卫以兼容 Node.js 单测环境
-- **3D batch 禁用**：`executeCommands` 和 `executeToolCalls` 在 `appMode === "3d"` 时跳过 `setRepaintingActive` 批量包裹
+- **3D batch 启用**：`executeCommands` 和 `executeToolCalls` 在 2D/3D 统一使用 `setRepaintingActive` 批量包裹（升级官方 5.4.927.1 后 DockGlassPane 不再因 batch 复发）
 - **`setPerspective("3d")` 守卫**：Agent 模式需先 `getPerspectiveXML()?.includes("3D")` 检查，已是 3D 则跳过调用

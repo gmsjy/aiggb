@@ -91,6 +91,8 @@ export interface PipelineCallbacks {
   onReview(handle: ReviewHandle, reviewId: string): void;
   /** 工具调用代理模式：dangerous 工具需用户确认 */
   onConfirm?(requests: ConfirmationRequest[]): Promise<ConfirmationDecision[]>;
+  /** Agent 模式实时思考步骤（观察/规划/执行工具），UI 展示减少等待焦虑 */
+  onAgentStep?(message: string): void;
 }
 
 /**
@@ -572,6 +574,8 @@ export async function runAgentPipeline(
       getApi: deps.getApi,
       getMessages: deps.getMessages,
       agentModel: resolveModel(deps.config, "agent"),
+      // ★ 透传思考步骤到 UI（减少等待焦虑）
+      onThinking: msg => cb.onAgentStep?.(msg),
     });
   } catch (err) {
     if (deps.signal.aborted) throw err;

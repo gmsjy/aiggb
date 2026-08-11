@@ -492,6 +492,19 @@ code {
   font-size: 13px;
   margin: var(--space-1) 0 0;
 }
+.thinking-text {
+  color: var(--accent);
+  font-weight: 500;
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: thinking-pulse 1.6s ease-in-out infinite;
+}
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
 .thinking-cancel {
   display: inline-flex;
   align-items: center;

@@ -119,11 +119,12 @@ interface ChatCompletionResponse {
   }>;
 }
 
-async function callAPI(
+/** 发起 chat/completions POST 请求，统一处理网络 / HTTP 错误，返回 Response（兼容流式） */
+async function fetchCompletion(
   config: AIConfig,
   body: Record<string, unknown>,
   signal?: AbortSignal
-): Promise<ChatCompletionResponse> {
+): Promise<Response> {
   const baseURL = config.baseURL.replace(/\/+$/, "");
   const url = `${baseURL}/chat/completions`;
 
@@ -149,7 +150,15 @@ async function callAPI(
     const text = await resp.text().catch(() => "");
     throw new AIError(`HTTP ${resp.status} ${resp.statusText} ${text.slice(0, 300)}`);
   }
+  return resp;
+}
 
+async function callAPI(
+  config: AIConfig,
+  body: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<ChatCompletionResponse> {
+  const resp = await fetchCompletion(config, body, signal);
   try {
     return (await resp.json()) as ChatCompletionResponse;
   } catch (err) {
@@ -211,33 +220,130 @@ export async function chat(
 
 // ──── Function Calling（工具调用）模式 ────
 
+/** SSE 流式分块的最小结构（用于增量解析 tool_calls） */
+interface StreamChunk {
+  choices?: Array<{
+    delta?: {
+      content?: string | null;
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        type?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+  }>;
+}
+
 /**
- * 发送带工具定义的对话请求，返回 AI 的文本回复或工具调用请求。
- * 不使用 response_format: json_object（与 tools 不兼容）。
+ * 发送带工具定义的【流式】对话请求，返回 AI 的文本回复或工具调用请求。
+ * - stream:true + SSE 增量解析，content 经 onContent 实时回调（UI 展示减少等待）
+ * - tool_calls 按 delta.index 累积合并为完整 JSON 字符串
+ * - 不使用 response_format: json_object（与 tools 不兼容）
+ * - 兼容回退：部分 provider 忽略 stream:true 返回普通 JSON → 自动按 JSON 解析
  */
 export async function agentChat(
   config: AIConfig,
   messages: AgentMessage[],
   tools: ToolDefinition[],
   signal?: AbortSignal,
-  modelOverride?: string
+  modelOverride?: string,
+  onContent?: (text: string) => void
 ): Promise<AgentResponse> {
   const body = {
     model: modelOverride ?? config.model,
     messages,
     tools,
     temperature: config.temperature ?? 0.2,
-    stream: false
+    stream: true,
+    // 工具 JSON 参数可能较长（create_parametric / eval_raw / eval_sequence），给足空间防截断
+    max_tokens: 2048
   };
 
-  const data = await callAPI(config, body, signal);
+  const resp = await fetchCompletion(config, body, signal);
 
-  const choice = data.choices?.[0];
-  const msg = choice?.message;
-  const content = msg?.content ?? null;
-  const toolCalls = msg?.tool_calls ?? [];
+  // ★ 兼容回退：provider 忽略 stream:true 时返回 application/json
+  const contentType = resp.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json") && !contentType.includes("text/event-stream")) {
+    const data = (await resp.json()) as ChatCompletionResponse;
+    const msg = data.choices?.[0]?.message;
+    const content = msg?.content ?? null;
+    const toolCalls: ToolCallDelta[] = (msg?.tool_calls ?? []).map(tc => ({
+      id: tc.id,
+      type: "function",
+      function: { name: tc.function.name, arguments: tc.function.arguments }
+    }));
+    if (onContent && content) onContent(content);
+    return { content, toolCalls };
+  }
 
-  return { content, toolCalls };
+  if (!resp.body) {
+    throw new AIError("响应无流（当前环境不支持流式读取）");
+  }
+
+  // ★ SSE 流式解析：累积 content + 按 index 合并 tool_calls
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  const toolCalls: ToolCallDelta[] = [];
+
+  const handleLine = (line: string): void => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === "[DONE]") return;
+
+    let chunk: StreamChunk;
+    try {
+      chunk = JSON.parse(data) as StreamChunk;
+    } catch {
+      return; // 跳过无法解析的分块
+    }
+
+    const delta = chunk.choices?.[0]?.delta;
+    if (!delta) return;
+
+    if (typeof delta.content === "string" && delta.content.length > 0) {
+      content += delta.content;
+      onContent?.(delta.content);
+    }
+
+    if (Array.isArray(delta.tool_calls)) {
+      for (const tc of delta.tool_calls) {
+        const idx = typeof tc.index === "number" ? tc.index : 0;
+        let cur = toolCalls[idx];
+        if (!cur) {
+          cur = { id: tc.id ?? `call_${idx}`, type: "function", function: { name: "", arguments: "" } };
+          toolCalls[idx] = cur;
+        }
+        if (tc.id) cur.id = tc.id;
+        if (tc.function?.name) cur.function.name += tc.function.name;
+        if (tc.function?.arguments) cur.function.arguments += tc.function.arguments;
+      }
+    }
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? ""; // 末尾可能是不完整行，留到下一块
+      for (const line of lines) handleLine(line);
+    }
+    if (buffer) {
+      buffer += decoder.decode(); // flush 解码器残留
+      for (const line of buffer.split("\n")) handleLine(line);
+    }
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    throw new AIError("流式响应中断", err);
+  }
+
+  const finalToolCalls = toolCalls.filter(tc => tc.function.name.trim().length > 0);
+  return { content: content || null, toolCalls: finalToolCalls };
 }
 
 // ──── Phase 1 精炼（纯文本） ────

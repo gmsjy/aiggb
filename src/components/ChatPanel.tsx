@@ -44,6 +44,11 @@ export function ChatPanel() {
     resolve: (decisions: ConfirmationDecision[]) => void;
   } | null>(null);
 
+  // Agent mode: 实时思考步骤 / 流式文本展示（减少等待焦虑）
+  const [agentStep, setAgentStep] = useState("");
+  const agentStepRef = useRef("");
+  const lastStepFlushRef = useRef(0);
+
   // 自动滚到底部
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -110,6 +115,16 @@ export function ChatPanel() {
       });
     };
   }, []);
+
+  /** 节流式更新 agent 步骤文本：流式 chunk 高频到来时限制 re-render 频率 */
+  const pushAgentStep = (text: string) => {
+    agentStepRef.current = text;
+    const now = Date.now();
+    if (now - lastStepFlushRef.current >= 120) {
+      lastStepFlushRef.current = now;
+      setAgentStep(text);
+    }
+  };
 
   const canSend = !!config?.apiKey && !!ggbApi && !isThinking && !runningRef.current && input.trim().length > 0;
 
@@ -186,7 +201,9 @@ export function ChatPanel() {
             return new Promise<ConfirmationDecision[]>(resolve => {
               setConfirmDialog({ requests, resolve });
             });
-          }
+          },
+          // ★ 实时显示 Agent 思考步骤 / 流式文本（节流更新）
+          onAgentStep: pushAgentStep
         });
       } else {
         await runPipeline(userText, deps, {
@@ -204,6 +221,8 @@ export function ChatPanel() {
       endRun();
       runningRef.current = false;
       setThinking(false);
+      setAgentStep(""); // 重置 Agent 步骤
+      agentStepRef.current = "";
     }
   };
 
@@ -301,7 +320,11 @@ export function ChatPanel() {
         {isThinking && (
           <div className="thinking">
             <Loader2 size={14} className="spin" />
-            {agentMode ? " Agent 构造中…（可观察右侧脚本面板）" : " AI 思考中…"}
+            {agentMode
+              ? (agentStep
+                  ? <span className="thinking-text">{agentStep.length > 120 ? agentStep.slice(0, 120) + "…" : agentStep}</span>
+                  : <span>Agent 构造中…（可观察右侧脚本面板）</span>)
+              : <span>AI 思考中…</span>}
             <button
               className="thinking-cancel"
               onClick={() => abortCurrentRun()}
