@@ -120,10 +120,15 @@ function buildAgentSystemPrompt(domain: Domain, appMode: "2d" | "3d"): string {
 
 ${modeHeader}${physicsSection}
 
+【核心原则 —— 直接行动，不要啰嗦】
+- ★ 收到需求后立即调用工具，不要先输出大段分析和规划。
+- ★ 每轮只做 1~2 件事，用工具执行结果来验证，而非文字推测。
+- ★ 构造完成后，用 1-2 句话简短总结即可。
+
 【工作方式】
-1. 分析用户需求，规划构造步骤（参数→点→几何体/曲线→动画→样式）
-2. 逐步调用工具，每步观察结果，根据结果调整下一步
-3. 完成所有构造后用文本总结
+1. 立即调用工具开始构造（参数→点→几何体/曲线→动画→样式）
+2. 观察工具返回结果，根据结果调整下一步
+3. 全部完成后简短总结
 
 【关键规则】
 - ★ 单次只调用 1~4 个必要的工具，不要一次调用大量工具。
@@ -188,6 +193,7 @@ export async function runAgentLoop(
   let approveAll = false; // ★ 信任会话标志，闭环内持久
   let consecutiveFailures = 0; // ★ 连续工具执行失败计数（熔断）
   let forceStop = false;      // ★ 熔断后禁止继续工具调用
+  let emptyResponseRetried = false; // ★ 空响应重试标志（仅重试 1 次）
 
   while (iterations < MAX_AGENT_ITERATIONS) {
     // 检查中断
@@ -230,12 +236,33 @@ export async function runAgentLoop(
     if (!response.toolCalls.length && response.content) {
       finalText = response.content;
       messages.push({ role: "assistant", content: response.content });
+      emptyResponseRetried = false; // 成功后复位
       break;
     }
 
-    // 情况 2：无文本也无工具调用 → 异常
+    // 情况 2：无文本也无工具调用 → 诊断 + 重试 1 次
     if (!response.toolCalls.length) {
-      finalText = "(AI 未返回有效响应)";
+      console.warn(
+        `[agentLoop] 第${iterations}轮空响应: finishReason=${response.finishReason || "无"}, ` +
+        `contentLen=${response.content?.length ?? 0}, msgCount=${messages.length}`
+      );
+
+      if (!emptyResponseRetried) {
+        emptyResponseRetried = true;
+        const reasonHint = response.finishReason === "length"
+          ? "[系统] 你的上一条回复因长度限制被截断（max_tokens 不足）。请缩短输出或分步执行。继续构造或输出文本总结。"
+          : "[系统] 请继续：调用下一步工具完成构造，或输出文本总结当前画布状态。不要返回空响应。";
+        messages.push({ role: "user", content: reasonHint });
+        continue;
+      }
+
+      // 重试后仍空 → 放弃，输出诊断信息
+      const diag = response.finishReason === "length"
+        ? "（输出超长被截断，可尝试增加 max_tokens 或简化构造）"
+        : response.finishReason === "content_filter"
+        ? "（内容被安全过滤拦截）"
+        : `（finish_reason=${response.finishReason || "无"}，模型未生成有效输出，请检查 Agent 模型是否支持 Function Calling）`;
+      finalText = `AI 未返回有效响应${diag}`;
       break;
     }
 

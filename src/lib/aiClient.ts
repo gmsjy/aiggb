@@ -73,6 +73,8 @@ export interface AgentResponse {
   content: string | null;
   /** 工具调用列表（AI 要求执行的操作） */
   toolCalls: ToolCallDelta[];
+  /** SSE 流的 finish_reason："stop" | "length" | "tool_calls" | "content_filter" | null */
+  finishReason: string | null;
 }
 
 // ──── 错误类型 ────
@@ -232,6 +234,7 @@ interface StreamChunk {
         function?: { name?: string; arguments?: string };
       }>;
     };
+    finish_reason?: string | null;
   }>;
 }
 
@@ -257,7 +260,7 @@ export async function agentChat(
     temperature: config.temperature ?? 0.2,
     stream: true,
     // 工具 JSON 参数可能较长（create_parametric / eval_raw / eval_sequence），给足空间防截断
-    max_tokens: 2048
+    max_tokens: 8192
   };
 
   const resp = await fetchCompletion(config, body, signal);
@@ -268,13 +271,14 @@ export async function agentChat(
     const data = (await resp.json()) as ChatCompletionResponse;
     const msg = data.choices?.[0]?.message;
     const content = msg?.content ?? null;
+    const finishReason = data.choices?.[0]?.finish_reason ?? null;
     const toolCalls: ToolCallDelta[] = (msg?.tool_calls ?? []).map(tc => ({
       id: tc.id,
       type: "function",
       function: { name: tc.function.name, arguments: tc.function.arguments }
     }));
     if (onContent && content) onContent(content);
-    return { content, toolCalls };
+    return { content, toolCalls, finishReason };
   }
 
   if (!resp.body) {
@@ -287,6 +291,7 @@ export async function agentChat(
   let buffer = "";
   let content = "";
   const toolCalls: ToolCallDelta[] = [];
+  let finishReason: string | null = null;
 
   const handleLine = (line: string): void => {
     const trimmed = line.trim();
@@ -300,6 +305,10 @@ export async function agentChat(
     } catch {
       return; // 跳过无法解析的分块
     }
+
+    // ★ 捕获 finish_reason（通常在最后一块的 choice 级别）
+    const choiceFinish = chunk.choices?.[0]?.finish_reason;
+    if (choiceFinish) finishReason = choiceFinish;
 
     const delta = chunk.choices?.[0]?.delta;
     if (!delta) return;
@@ -343,7 +352,17 @@ export async function agentChat(
   }
 
   const finalToolCalls = toolCalls.filter(tc => tc.function.name.trim().length > 0);
-  return { content: content || null, toolCalls: finalToolCalls };
+
+  // ★ 诊断：空响应时记录详细信息便于排查
+  if (!content && finalToolCalls.length === 0) {
+    console.warn(
+      `[agentChat] 空响应: finishReason=${finishReason || "无"}, ` +
+      `rawToolCalls=${toolCalls.length}, msgCount=${messages.length}, ` +
+      `model=${modelOverride ?? config.model}`
+    );
+  }
+
+  return { content: content || null, toolCalls: finalToolCalls, finishReason };
 }
 
 // ──── Phase 1 精炼（纯文本） ────
