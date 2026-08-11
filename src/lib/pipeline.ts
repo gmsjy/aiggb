@@ -40,6 +40,7 @@ import {
   type ConfirmationRequest,
   type ConfirmationDecision
 } from "./agentLoop";
+import { toolCallToEvalCommands } from "./toolExecutor";
 
 export const MAX_REPAIR = 2;
 export const MAX_FORMAT_RETRY = 2;
@@ -598,26 +599,31 @@ export async function runAgentPipeline(
 
   // ★ 构建 agent 结果摘要消息
   const summary = buildAgentSummary(result);
-  const agentCommands = result.messages
-    .filter(m => m.role === "assistant" && m.tool_calls)
-    .flatMap(m =>
-      (m.tool_calls ?? []).map(tc => ({
-        op: "eval" as const,
-        cmd: summarizeToolCall(tc.function.name, tc.function.arguments)
-      }))
-    );
 
-  // ★ constructionLog 不追加 agent 伪命令（避免 undo 重放时出错）
-  // 直接 append assistant 消息（绕过 appendAIResponse 的 constructionLog 写入）
-  deps.appendMessage({
-    id: deps.newMessageId(),
-    role: "assistant",
-    payload: {
-      explanation: summary,
-      commands: agentCommands,
-      results: [], // agent 模式的执行结果在对话流中，不做逐条 ExecResult
+  // ★ 从工具调用历史提取可重放的 eval 命令（供 undo 回放 + constructionLog 兜底）
+  const agentEvalCommands: Array<{ op: "eval"; cmd: string }> = [];
+  for (const m of result.messages) {
+    if (m.role === "assistant" && m.tool_calls) {
+      for (const tc of m.tool_calls) {
+        const cmds = toolCallToEvalCommands(tc.function.name, tc.function.arguments);
+        for (const cmd of cmds) {
+          agentEvalCommands.push({ op: "eval", cmd });
+        }
+      }
     }
-  });
+  }
+
+  // ★ 追加 assistant 消息（用 appendAIResponse 写入 constructionLog，使 undo 能回滚）
+  //    将可重放命令映射为 ExecResult[] 以便 appendAIResponse 写入日志
+  const pseudoResults: ExecResult[] = agentEvalCommands.map(c => ({
+    ok: true,
+    command: c,
+    expanded: [c.cmd],
+  }));
+  deps.appendAIResponse(
+    { explanation: summary, commands: agentEvalCommands },
+    pseudoResults
+  );
 
   deps.setThinking(false);
 
@@ -642,41 +648,6 @@ function buildAgentSummary(result: AgentLoopResult): string {
   }
 
   return parts.join("\n");
-}
-
-/** 将单次工具调用转换为人类可读的摘要（用于 ScriptPanel / 消息展示） */
-function summarizeToolCall(name: string, argsJson: string): string {
-  try {
-    const args = JSON.parse(argsJson) as Record<string, unknown>;
-    switch (name) {
-      case "eval_raw":
-        return `🔧 ${String(args.command ?? "").slice(0, 80)}`;
-      case "eval_sequence":
-        return `📋 Sequence ${args.name ?? "?"}`;
-      case "delete_object":
-        return `🗑 删除 ${args.target}`;
-      case "clear_canvas":
-        return "🗑 清空画布";
-      case "create_function":
-        return `f(x) ${args.name ?? "?"} = ${String(args.expression ?? "").slice(0, 50)}`;
-      case "create_parametric":
-        return `📈 参数曲线 ${args.name ?? "?"}`;
-      case "create_point":
-        return `📍 ${args.name ?? "?"}(${args.x ?? "?"}, ${args.y ?? "?"})`;
-      case "create_slider":
-        return `🎚 ${args.name ?? "?"} ${args.min ?? 0}~${args.max ?? 1}`;
-      case "create_vector":
-        return `➡ ${args.name ?? "?"} ${args.from ?? ""}→${args.to ?? ""}`;
-      case "set_animation":
-        return `▶ ${args.action ?? "?"} ${args.target ?? ""}`;
-      case "set_view":
-        return "🔍 视窗调整";
-      default:
-        return `🔧 ${name}`;
-    }
-  } catch {
-    return `🔧 ${name}`;
-  }
 }
 
 /** 对 agent 模式执行完的结果做满足度评估（复用 evaluateAndRepair 的核心逻辑） */

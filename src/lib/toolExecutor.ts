@@ -245,14 +245,12 @@ function dispatch(
     // ═══ 新增：函数/参数曲线 ═══
     case "create_function": {
       const { name: n, expression } = args as { name: string; expression: string };
-      const cmd = `${n}(x) = ${expression}`;
-      // 如果表达式不含 x，当做普通赋值
-      const finalCmd = expression.includes("x") ? cmd : `${n} = ${expression}`;
-      const ok = api.evalCommand(finalCmd);
-      if (!ok) throw new Error(`创建函数/表达式 ${n} 失败：${finalCmd}`);
-      return expression.includes("x")
-        ? `函数 ${n}(x) = ${expression} 已创建`
-        : `表达式 ${n} = ${expression} 已创建`;
+      // GGB 自动推断类型：f = sin(x) → 函数，Px = v0*cos(theta)*t → 数值表达式
+      // 不必显式写 f(x) = …，避免误判（如 "x^2+y^2" 含字符 x 但不是单变量函数）
+      const cmd = `${n} = ${expression}`;
+      const ok = api.evalCommand(cmd);
+      if (!ok) throw new Error(`创建函数/表达式 ${n} 失败：${cmd}`);
+      return `${n} = ${expression} 已创建`;
     }
 
     case "create_parametric": {
@@ -504,4 +502,93 @@ function formatResult(
     role: "tool",
     content: JSON.stringify({ success, ...(result ? { result } : {}), ...(error ? { error } : {}) }),
   };
+}
+
+// ──── 工具调用 → 可重放 GGB eval 命令（供 undo / constructionLog 使用） ────
+
+/**
+ * 将一个工具调用映射为等价的 GGB eval 命令列表。
+ * 返回空数组表示该工具调用不产生可重放的 eval 命令（如 set_style / set_animation 等 API 调用）。
+ * 用于 undo 时重放构造类命令，以及 constructionLog 快照回滚兜底。
+ */
+export function toolCallToEvalCommands(name: string, argsJson: string): string[] {
+  let args: Record<string, unknown>;
+  try { args = JSON.parse(argsJson) as Record<string, unknown>; } catch { return []; }
+
+  switch (name) {
+    case "create_point": {
+      const { name: n, x, y } = args as { name: string; x: number | string; y: number | string; z?: number | string };
+      const z = (args as { z?: number | string }).z;
+      return z !== undefined ? [`${n} = (${x}, ${y}, ${z})`] : [`${n} = (${x}, ${y})`];
+    }
+    case "create_points": {
+      const { points } = args as { points?: Array<{ name: string; x: number | string; y: number | string; z?: number | string }> };
+      return (points ?? []).map(p => {
+        const coords = p.z !== undefined ? `(${p.x}, ${p.y}, ${p.z})` : `(${p.x}, ${p.y})`;
+        return `${p.name} = ${coords}`;
+      });
+    }
+    case "create_slider": {
+      const { name: n, min, max, step, value } = args as { name: string; min: number | string; max: number | string; step: number | string; value: number | string };
+      return [`${n} = Slider(${min}, ${max}, ${step}, 1, 150, false, true, false, false)`, `SetValue(${n}, ${value})`];
+    }
+    case "create_sliders": {
+      const { sliders } = args as { sliders?: Array<{ name: string; min: number | string; max: number | string; step: number | string; value: number | string }> };
+      return (sliders ?? []).flatMap(s => [
+        `${s.name} = Slider(${s.min}, ${s.max}, ${s.step}, 1, 150, false, true, false, false)`,
+        `SetValue(${s.name}, ${s.value})`
+      ]);
+    }
+    case "create_segment": {
+      const { name: n, start, end } = args as { name: string; start: string; end: string };
+      return [`${n} = Segment(${start}, ${end})`];
+    }
+    case "create_circle": {
+      const { name: n, center, radius } = args as { name: string; center: string; radius: number | string };
+      return [`${n} = Circle(${center}, ${radius})`];
+    }
+    case "create_polygon": {
+      const { name: n, vertices } = args as { name: string; vertices: string[] };
+      return [`${n} = Polygon(${vertices.join(", ")})`];
+    }
+    case "create_vector": {
+      const { name: n, from, to } = args as { name: string; from: string; to: string };
+      return [`${n} = Vector(${from}, ${to})`];
+    }
+    case "create_function": {
+      const { name: n, expression } = args as { name: string; expression: string };
+      return [`${n} = ${expression}`];
+    }
+    case "create_parametric": {
+      const { name: n, xExpr, yExpr, zExpr, tMin, tMax } = args as {
+        name: string; xExpr: string; yExpr: string; zExpr?: string; tMin: number | string; tMax: number | string;
+      };
+      const curveCmd = zExpr
+        ? `Curve(${xExpr}, ${yExpr}, ${zExpr}, t, ${tMin}, ${tMax})`
+        : `Curve(${xExpr}, ${yExpr}, t, ${tMin}, ${tMax})`;
+      return [`${n} = ${curveCmd}`];
+    }
+    case "eval_raw": {
+      const { command } = args as { command: string };
+      return [command];
+    }
+    case "eval_sequence": {
+      const { name: n, expr, var: loopVar, start, end, step } = args as {
+        name: string; expr: string; var: string; start: number | string; end: number | string; step: number | string;
+      };
+      return [`${n} = Sequence(${expr}, ${loopVar}, ${start}, ${end}, ${step})`];
+    }
+    case "physics_constants": {
+      const { names } = args as { names: string[] };
+      return (names ?? []).map(n => {
+        const def = PHYSICS_CONSTANTS[n];
+        return def ? `${n} = ${def.value}` : `# unknown constant: ${n}`;
+      });
+    }
+    // set_style / set_animation / set_view / set_unit_axes / create_trace / create_text
+    // delete_object / clear_canvas / get_object_info / list_objects
+    // 这些使用 GGB API 而非 eval，不产生可重放的 eval 命令
+    default:
+      return [];
+  }
 }
