@@ -98,12 +98,58 @@ export function executeToolCalls(
 
 // ──── 分发 ────
 
+/** 创建单个滑块的内部 helper，供 create_slider 和 create_sliders 共用 */
+function createOneSlider(
+  api: GGBAppletApi,
+  args: { name: string; min: number | string; max: number | string; step: number | string; value: number | string; unit?: string; label?: string }
+): string {
+  const { name: n, min, max, step, value, unit, label } = args;
+  const cmd = `${n} = Slider(${min}, ${max}, ${step}, 1, 150, false, true, false, false)`;
+  const ok = api.evalCommand(cmd);
+  if (!ok) throw new Error(`创建滑块 ${n} 失败`);
+  api.evalCommand(`SetValue(${n}, ${value})`);
+  const captionText = label
+    ? unit ? `${label} = %v ${unit}` : `${label} = %v`
+    : unit ? `${n} = %v ${unit}` : "";
+  if (captionText) {
+    api.setCaption(n, captionText);
+    api.setLabelStyle(n, 3);
+  }
+  return `滑块 ${n} 已创建（${min}~${max}，步长 ${step}，初值 ${value}${unit ? " " + unit : ""}）`;
+}
+
 function dispatch(
   api: GGBAppletApi,
   name: string,
   args: Record<string, unknown>
 ): string {
   switch (name) {
+    // ═══ 批量创建（优先使用，减少 API 往返） ═══
+    case "create_points": {
+      const { points } = args as {
+        points: Array<{ name: string; x: number | string; y: number | string; z?: number | string }>;
+      };
+      const ok: string[] = [];
+      const fail: string[] = [];
+      for (const p of points) {
+        try {
+          const coords = p.z !== undefined
+            ? `(${p.x}, ${p.y}, ${p.z})`
+            : `(${p.x}, ${p.y})`;
+          const r = api.evalCommand(`${p.name} = ${coords}`);
+          if (!r) throw new Error(`evalCommand 返回 false`);
+          ok.push(`${p.name}${coords}`);
+        } catch (e) {
+          fail.push(`${p.name}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      const parts: string[] = [];
+      if (ok.length) parts.push(`✓ ${ok.join(", ")}`);
+      if (fail.length) parts.push(`✗ ${fail.join("; ")}`);
+      if (!parts.length) throw new Error("批量创建点全部失败");
+      return parts.join("  ");
+    }
+
     // ═══ 创建 ═══
     case "create_point": {
       const { name: n, x, y } = args as { name: string; x: number | string; y: number | string; z?: number | string };
@@ -144,23 +190,31 @@ function dispatch(
       return `多边形 ${n} 已创建（${vertices.length} 个顶点）`;
     }
 
+    case "create_sliders": {
+      const { sliders } = args as {
+        sliders: Array<{ name: string; min: number | string; max: number | string; step: number | string; value: number | string; unit?: string; label?: string }>;
+      };
+      const results: string[] = [];
+      const errors: string[] = [];
+      for (const s of sliders) {
+        try {
+          results.push(createOneSlider(api, s));
+        } catch (e) {
+          errors.push(`${s.name}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      const parts: string[] = [];
+      if (results.length) parts.push(results.join("；"));
+      if (errors.length) parts.push(`✗ ${errors.join("; ")}`);
+      if (!parts.length) throw new Error("批量创建滑块全部失败");
+      return parts.join("  ");
+    }
+
     case "create_slider": {
-      const { name: n, min, max, step, value, unit, label } = args as {
+      return createOneSlider(api, args as {
         name: string; min: number | string; max: number | string; step: number | string; value: number | string;
         unit?: string; label?: string;
-      };
-      const cmd = `${n} = Slider(${min}, ${max}, ${step}, 1, 150, false, true, false, false)`;
-      const ok = api.evalCommand(cmd);
-      if (!ok) throw new Error(`创建滑块 ${n} 失败`);
-      api.evalCommand(`SetValue(${n}, ${value})`);
-      const captionText = label
-        ? unit ? `${label} = %v ${unit}` : `${label} = %v`
-        : unit ? `${n} = %v ${unit}` : "";
-      if (captionText) {
-        api.setCaption(n, captionText);
-        api.setLabelStyle(n, 3);
-      }
-      return `滑块 ${n} 已创建（${min}~${max}，步长 ${step}，初值 ${value}${unit ? " " + unit : ""}）`;
+      });
     }
 
     case "create_vector": {

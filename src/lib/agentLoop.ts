@@ -14,12 +14,13 @@
 import {
   agentChat,
   AIError,
+  getProviderQuirks,
   type AIConfig,
   type AgentMessage,
   type AgentResponse,
   type ToolCallDelta
 } from "./aiClient";
-import { TOOL_DEFINITIONS, getToolSafety } from "./tools";
+import { TOOL_DEFINITIONS, getToolSafety, isKnownTool, TOOL_SCHEMAS } from "./tools";
 import {
   executeToolCall,
   executeToolCalls,
@@ -188,6 +189,13 @@ export async function runAgentLoop(
 
   const systemPrompt = buildAgentSystemPrompt(deps.domain, deps.appMode);
 
+  // ★ DeepSeek 适配：user-role 指令遵从度显著高于 system-role
+  //    在首条 user message 前拼接指令前缀，强制优先工具调用而非输出分析文本
+  const quirks = getProviderQuirks(deps.config);
+  const userPrefix = quirks.agentForceUserPrefix
+    ? "[指令] 本任务使用工具调用模式。每收到一条消息必须立即调用工具。禁止先输出分析/规划再调用工具——工具调用优先于文字分析。用工具执行结果验证，而非文字推测。\n\n"
+    : "";
+
   // ★ 多轮对话上下文：将历史 ChatTurn 转为 AgentMessage
   const historyMsgs = convertHistory(deps.getMessages());
   deps.onThinking?.("正在分析需求…");
@@ -198,10 +206,10 @@ export async function runAgentLoop(
     ? `\n[当前画布已有对象：${initialObjs.join(", ")}]`
     : "\n[当前画布为空]";
 
-  const messages: AgentMessage[] = [
+  let messages: AgentMessage[] = [
     { role: "system", content: systemPrompt },
     ...historyMsgs,
-    { role: "user", content: userText + canvasStatus }
+    { role: "user", content: userPrefix + userText + canvasStatus }
   ];
 
   const deniedTools: string[] = [];
@@ -222,14 +230,17 @@ export async function runAgentLoop(
 
     deps.onThinking?.(`第 ${iterations} 步：正在规划…`);
 
-    // 截断历史（保留 system + 最近 N 条）
-    const truncated = truncateHistory(messages, HISTORY_WINDOW);
-
     // ★ 每轮重新获取 api 句柄——长跑期间 DockGlassPane 心跳可能重建 applet，旧句柄失效
     const api = deps.getApi();
     if (!api) {
       throw new AIError("GeoGebra 画布已重建，本轮运行中止");
     }
+
+    // ★ 智能压缩：定期将旧消息替换为画布状态摘要，防止长对话上下文爆炸
+    messages = compressHistory(messages, api, iterations);
+
+    // 截断历史（保留 system + 最近 N 条，保证 tool_calls/tool 配对完整）
+    const truncated = truncateHistory(messages, HISTORY_WINDOW);
 
     // 调用 AI（流式：content 增量经 onThinking 实时展示）
     let response: AgentResponse;
@@ -285,10 +296,16 @@ export async function runAgentLoop(
 
     // 情况 3：有工具调用 → 分类处理
     const toolCalls = response.toolCalls;
+
+    // ★ 过滤未知工具（AI hallucinate 的不存在的工具名）：
+    //    直接返回错误给 AI，不执行、不走用户确认
+    const knownCalls = toolCalls.filter(tc => isKnownTool(tc.function.name));
+    const unknownCalls = toolCalls.filter(tc => !isKnownTool(tc.function.name));
+
     const safeCalls: ToolCallDelta[] = [];
     const dangerousCalls: ToolCallDelta[] = [];
 
-    for (const tc of toolCalls) {
+    for (const tc of knownCalls) {
       if (getToolSafety(tc.function.name) === "dangerous") {
         dangerousCalls.push(tc);
       } else {
@@ -296,12 +313,30 @@ export async function runAgentLoop(
       }
     }
 
-    // 添加 assistant 消息（含 tool_calls）
+    // 添加 assistant 消息（含全部 tool_calls，保证 tool_call_id 配对完整）
     messages.push({
       role: "assistant",
       content: response.content,
       tool_calls: toolCalls
     });
+
+    // 未知工具错误注入（在 assistant 之后，满足 API 消息顺序要求）
+    for (const tc of unknownCalls) {
+      messages.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: JSON.stringify({
+          success: false,
+          error: `未知工具 "${tc.function.name}"——此工具不存在。请使用已定义的工具。可用: ${Object.keys(TOOL_SCHEMAS).slice(0, 14).join(", ")}…`
+        })
+      });
+    }
+
+    // ★ 全是未知工具：错误已反馈给 AI，跳过执行直接下一轮
+    if (knownCalls.length === 0) {
+      consecutiveFailures = 0; // 未实际执行，不计入熔断
+      continue;
+    }
 
     // 先执行安全工具
     const toolNames = [...safeCalls, ...dangerousCalls].map(tc => tc.function.name);
@@ -329,6 +364,10 @@ export async function runAgentLoop(
       for (const r of dangerousResults) messages.push(r);
     }
     const deniedThisRound = deniedTools.length - deniedBefore;
+
+    // ★ 本轮有实质工具调用（非空响应），复位空响应重试标志
+    //    否则跨轮残留：空响应→retry 成功→flag 仍为 true→下次空响应跳过 retry
+    emptyResponseRetried = false;
 
     // ★ 本轮全是危险工具且全部被拒 → 引导 AI 换安全工具
     //    （用"本轮被拒数"而非累计 deniedTools.length，避免跨轮累积误触发）
@@ -559,6 +598,110 @@ function convertHistory(turns: ChatTurn[]): AgentMessage[] {
     // error / spec-review 不进历史
   }
   return msgs;
+}
+
+// ──── 上下文压缩 ────
+
+const COMPRESS_THRESHOLD = 20;   // 消息数超过此值触发压缩
+const COMPRESS_INTERVAL = 4;     // 每 N 轮压缩一次
+const COMPRESS_KEEP_RECENT = 8;  // 压缩后保留最近 N 条消息
+
+/**
+ * 智能压缩对话历史：当消息积累过多时，将旧消息替换为画布状态摘要。
+ * 从实际 GGB API 获取当前画布对象列表（而非从消息历史重建），准确且便宜。
+ *
+ * 压缩策略：
+ *   - 保留 system prompt + 原始用户请求 → 不丢任务意图
+ *   - 插入画布状态快照（对象名/类型/定义）→ 保留"当前有什么"
+ *   - 保留最近 N 条消息 → 保留最新操作上下文
+ *   - 丢弃中间冗余的工具调用/结果对
+ *
+ * 返回压缩后的消息数组（原地不修改原数组）。
+ */
+function compressHistory(
+  messages: AgentMessage[],
+  api: GGBAppletApi,
+  iterations: number
+): AgentMessage[] {
+  if (messages.length < COMPRESS_THRESHOLD) return messages;
+  if (iterations % COMPRESS_INTERVAL !== 0) return messages;
+
+  // ★ 从 GGB 获取真实画布状态（比从消息历史重建更准确）
+  const allNames = api.getAllObjectNames();
+  let summary: string;
+  if (allNames.length === 0) {
+    summary = "[画布状态] 当前画布为空（无对象）。";
+  } else {
+    const details = allNames.slice(0, 40).map(name => {
+      try {
+        const type = api.getObjectType(name);
+        const cmd = api.getCommandString(name);
+        return `${name}(${type}): ${cmd}`;
+      } catch {
+        return `${name}`;
+      }
+    });
+    const suffix = allNames.length > 40
+      ? `\n… 等共 ${allNames.length} 个对象`
+      : `（共 ${allNames.length} 个）`;
+    summary = `[画布状态快照 — 第 ${iterations} 轮]\n${details.join("\n")}${suffix}`;
+  }
+
+  // 保留：system(0)、原始用户消息(1 或 2)、摘要、最近 N 条
+  const system = messages[0];
+  const userRequest = messages[1]; // 含 userPrefix + userText + canvasStatus
+  const recentStart = Math.max(2, messages.length - COMPRESS_KEEP_RECENT);
+  const recent = messages.slice(recentStart);
+
+  // 修复可能的消息配对断裂（recent 开头可能是孤立的 tool 消息）
+  const paired = fixPairingBoundary([...recent]);
+
+  console.log(
+    `[agentLoop] 历史压缩: ${messages.length} → ${3 + paired.length} ` +
+    `(画布 ${allNames.length} 个对象, iter=${iterations})`
+  );
+
+  return [system, userRequest, { role: "user", content: summary }, ...paired];
+}
+
+/**
+ * 修复消息数组开头的配对问题：移除开头孤立的 tool 消息（缺少 assistant(tool_calls)），
+ * 移除末尾悬空的 assistant(tool_calls)（缺少 tool 响应）。
+ */
+function fixPairingBoundary(msgs: AgentMessage[]): AgentMessage[] {
+  // 收集所有 assistant(tool_calls) 的 tool_call_id
+  const pending = new Set<string>();
+  const resolved = new Set<string>();
+  for (const m of msgs) {
+    if (m.role === "assistant" && m.tool_calls) {
+      for (const tc of m.tool_calls) pending.add(tc.id);
+    }
+    if (m.role === "tool" && m.tool_call_id) {
+      resolved.add(m.tool_call_id);
+    }
+  }
+
+  const clean = msgs.filter(m => {
+    // 孤立的 tool 消息（无对应 assistant tool_calls）
+    if (m.role === "tool" && m.tool_call_id && !pending.has(m.tool_call_id)) return false;
+    // 孤立的 assistant(tool_calls)（无 tool 响应）
+    if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+      return m.tool_calls.every(tc => resolved.has(tc.id));
+    }
+    return true;
+  });
+
+  // 收缩尾部悬空的 assistant(tool_calls)
+  let end = clean.length - 1;
+  while (end >= 0) {
+    const m = clean[end];
+    if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+      end--;
+    } else {
+      break;
+    }
+  }
+  return clean.slice(0, end + 1);
 }
 
 /** 截断对话历史，保留 system 消息 + 最近 N 条，同时保证 tool_calls/tool 消息配对完整 */

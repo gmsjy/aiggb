@@ -40,6 +40,34 @@ export function resolveModel(config: AIConfig, role: "light" | "heavy" | "agent"
   }
 }
 
+// ──── Provider quirks 适配 ────
+
+export interface ProviderQuirks {
+  /** Agent 模式的 temperature 覆盖（DeepSeek 对温度敏感，低 temp 减少 tool name 幻觉） */
+  agentTemperature?: number;
+  /** Agent 模式首条 user message 是否需要强指令前缀（DeepSeek 对 user-role 遵从度 > system-role） */
+  agentForceUserPrefix?: boolean;
+}
+
+/**
+ * 根据 provider / model 名称返回特定 provider 的行为矫正参数。
+ * 各 LLM 在 Function Calling 上的行为差异较大，这里集中适配。
+ */
+export function getProviderQuirks(config: AIConfig): ProviderQuirks {
+  const fingerprint = [
+    (config.provider ?? "").toLowerCase(),
+    (config.model ?? "").toLowerCase(),
+    (config.agentModel ?? "").toLowerCase(),
+  ].join(" ");
+
+  // DeepSeek 全系：对温度敏感 + user-role 指令遵从度高于 system-role
+  if (/deepseek/.test(fingerprint)) {
+    return { agentTemperature: 0.05, agentForceUserPrefix: true };
+  }
+
+  return {};
+}
+
 /** 传统纯文本消息（Phase 1/2 使用） */
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -168,10 +196,68 @@ async function callAPI(
   }
 }
 
+// ──── Provider 能力检测 ────
+
+export interface ProviderCapabilities {
+  /** 是否支持 response_format json_schema（优于 json_object，约束更强） */
+  jsonSchema: boolean;
+}
+
+/**
+ * 检测 provider 是否支持结构化输出（json_schema）。
+ * OpenAI / DeepSeek / GLM / Moonshot / SiliconFlow / Zhipu 系均已支持，
+ * Ollama 等本地模型不支持。
+ */
+export function getProviderCapabilities(config: AIConfig): ProviderCapabilities {
+  const fp = [
+    (config.provider ?? "").toLowerCase(),
+    (config.baseURL ?? "").toLowerCase(),
+  ].join(" ");
+  // 已知支持 json_schema 的 provider 名单
+  if (/openai|deepseek|glm|moonshot|zhipu|siliconflow|api\.together|fireworks/.test(fp)) {
+    return { jsonSchema: true };
+  }
+  return { jsonSchema: false };
+}
+
+// ──── Structured Output JSON Schema（Phase 2 编译输出） ────
+
+/**
+ * AIResponse 的简化 JSON Schema，用于 response_format json_schema 约束。
+ * 只描述结构骨架——详细校验（slider min<max、数值合理性、命令黑名单等）仍由 Zod 负责。
+ * 目的：大幅减少 JSON 格式错误（缺括号、key 拼写、类型漂移），降低 AISchemaError 重试率。
+ */
+const AI_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    explanation: { type: "string", description: "操作说明，≤500 字" },
+    commands: {
+      type: "array",
+      description: "GGB 命令列表，≤64 条",
+      items: {
+        type: "object",
+        properties: {
+          op: {
+            type: "string",
+            enum: ["eval", "slider", "animate", "trace", "style", "view",
+                   "caption", "delete", "reset", "vector", "forceDiagram",
+                   "physicsTrace", "unitAxes", "constants"]
+          }
+        },
+        required: ["op"]
+      }
+    },
+    ask: { type: "string", description: "反问用户的内容（与 commands 互斥，有此字段时 commands 为空数组）" },
+    self_check: { type: "string", description: "AI 自检报告，≤400 字" }
+  },
+  required: ["explanation", "commands"],
+  additionalProperties: false
+};
+
 // ──── 传统 JSON 模式 ────
 
 /**
- * 调用 OpenAI 兼容的 chat completions 接口（JSON 模式）。
+ * 调用 OpenAI 兼容的 chat completions 接口（优先 json_schema 结构化输出，降级 json_object）。
  * 网络 / 鉴权问题抛 AIError；JSON / schema 问题抛 AISchemaError（可重试）。
  */
 export async function chat(
@@ -180,13 +266,27 @@ export async function chat(
   signal?: AbortSignal,
   modelOverride?: string
 ): Promise<AIResponseT> {
-  const body = {
+  const caps = getProviderCapabilities(config);
+  const body: Record<string, unknown> = {
     model: modelOverride ?? config.model,
     messages,
-    response_format: { type: "json_object" },
     temperature: config.temperature ?? 0.2,
     stream: false
   };
+
+  // ★ 优先 json_schema（结构化约束更强），降级 json_object
+  if (caps.jsonSchema) {
+    body.response_format = {
+      type: "json_schema",
+      json_schema: {
+        name: "ai_response",
+        strict: false,   // false 以兼容 optional 字段 + discriminatedUnion
+        schema: AI_RESPONSE_JSON_SCHEMA
+      }
+    };
+  } else {
+    body.response_format = { type: "json_object" };
+  }
 
   const data = await callAPI(config, body, signal);
 
@@ -253,11 +353,13 @@ export async function agentChat(
   modelOverride?: string,
   onContent?: (text: string) => void
 ): Promise<AgentResponse> {
+  const quirks = getProviderQuirks(config);
   const body = {
     model: modelOverride ?? config.model,
     messages,
     tools,
-    temperature: config.temperature ?? 0.2,
+    // ★ DeepSeek 对温度敏感，低 temp 减少 tool name 拼写幻觉，同时不抑制多样性
+    temperature: quirks.agentTemperature ?? config.temperature ?? 0.2,
     stream: true,
     // 工具 JSON 参数可能较长（create_parametric / eval_raw / eval_sequence），给足空间防截断
     max_tokens: 8192

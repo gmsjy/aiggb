@@ -53,6 +53,14 @@ export const CreateSliderArgs = z.object({
   unit: z.string().max(8).optional(),
   label: z.string().max(40).optional(),
 });
+
+// ── 批量创建工具（减少 API 往返 + token 消耗） ──
+export const CreateSlidersArgs = z.object({
+  sliders: z.array(CreateSliderArgs).min(1).max(6),
+});
+export const CreatePointsArgs = z.object({
+  points: z.array(CreatePointArgs).min(1).max(8),
+});
 export const CreateVectorArgs = z.object({
   name: Identifier,
   from: z.union([Identifier, z.string().min(1).max(80)]), // 点名 或 坐标表达式
@@ -227,12 +235,21 @@ function toJsonSchema(schema: z.ZodTypeAny): {
     } else if (inner instanceof z.ZodArray) {
       const arrSchema = inner as z.ZodArray<z.ZodTypeAny>;
       const elementType = arrSchema._def.type;
-      const itemsType = elementType instanceof z.ZodString ? "string"
-        : elementType instanceof z.ZodNumber ? "number"
-        : "string";
+      let items: unknown;
+      if (elementType instanceof z.ZodObject) {
+        // ★ 递归：array of objects → 展开内层 object 的 properties
+        const nested = toJsonSchema(elementType);
+        items = { type: "object", ...nested };
+      } else if (elementType instanceof z.ZodString) {
+        items = { type: "string" };
+      } else if (elementType instanceof z.ZodNumber) {
+        items = { type: "number" };
+      } else {
+        items = { type: "string" }; // fallback
+      }
       properties[key] = {
         type: "array",
-        items: { type: itemsType },
+        items,
         minItems: arrSchema._def.minLength?.value,
         maxItems: arrSchema._def.maxLength?.value,
       };
@@ -248,15 +265,24 @@ function toJsonSchema(schema: z.ZodTypeAny): {
   return { properties, required };
 }
 
-// ──── 21 个工具 ────
+// ──── 23 个工具 ────
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   // ═══ 创建类（safe） ═══
   {
     type: "function",
     function: {
+      name: "create_points",
+      description: "★ 批量创建多个点（推荐）。一次调用创建 1~8 个点，减少 API 往返。用法：points=[{name,x,y},{name,x,y},...]。3D 时可加 z 坐标。",
+      parameters: { type: "object", ...toJsonSchema(CreatePointsArgs) },
+    },
+    safety: "safe",
+  },
+  {
+    type: "function",
+    function: {
       name: "create_point",
-      description: "在画布上创建一个点。x/y/z 可以是数值或表达式字符串（如 \"v0*cos(theta)*t\"）。2D 时只填 x,y；3D 时可填 z。",
+      description: "在画布上创建一个点。x/y/z 可以是数值或表达式字符串（如 \"v0*cos(theta)*t\"）。2D 时只填 x,y；3D 时可填 z。多个点请用 create_points。",
       parameters: { type: "object", ...toJsonSchema(CreatePointArgs) },
     },
     safety: "safe",
@@ -291,8 +317,17 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "create_sliders",
+      description: "★ 批量创建多个滑块（推荐）。一次调用创建 1~6 个滑块，减少 API 往返。当需要多个参数（如初速、角度、时间）时优先用此工具。用法：sliders=[{name,min,max,step,value,unit?,label?},...]。",
+      parameters: { type: "object", ...toJsonSchema(CreateSlidersArgs) },
+    },
+    safety: "safe",
+  },
+  {
+    type: "function",
+    function: {
       name: "create_slider",
-      description: "创建一个数值滑块。min/max/value/step 可以是数值或表达式。常用于角度、速度、时间等可调参数。",
+      description: "创建一个数值滑块。min/max/value/step 可以是数值或表达式。用于角度、速度、时间等可调参数。多个滑块请用 create_sliders。",
       parameters: { type: "object", ...toJsonSchema(CreateSliderArgs) },
     },
     safety: "safe",
@@ -457,10 +492,12 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
 
 export const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
   create_point: CreatePointArgs,
+  create_points: CreatePointsArgs,
   create_segment: CreateSegmentArgs,
   create_circle: CreateCircleArgs,
   create_polygon: CreatePolygonArgs,
   create_slider: CreateSliderArgs,
+  create_sliders: CreateSlidersArgs,
   create_vector: CreateVectorArgs,
   create_text: CreateTextArgs,
   create_function: CreateFunctionArgs,
@@ -482,4 +519,9 @@ export const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
 /** 获取工具的安全等级 */
 export function getToolSafety(name: string): ToolSafety {
   return TOOL_DEFINITIONS.find(t => t.function.name === name)?.safety ?? "dangerous";
+}
+
+/** 判断工具名是否为已注册的已知工具（防止 AI hallucinate 不存在的工具） */
+export function isKnownTool(name: string): boolean {
+  return name in TOOL_SCHEMAS;
 }
