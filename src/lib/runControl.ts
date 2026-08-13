@@ -12,12 +12,28 @@ let controller: AbortController | null = null;
 let aborted = false;
 const cancelListeners = new Set<() => void>();
 
+/** 本轮 trace ID（供诊断日志关联同一轮 run 的跨模块日志） */
+let _traceId = "";
+
+/** 生成本轮唯一 trace ID */
+function genTraceId(): string {
+  const ts = Date.now().toString(36);
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `run-${ts}-${rand}`;
+}
+
 /** 开始一轮 run：取消上一轮残留请求并返回新的 signal */
 export function beginRun(): AbortSignal {
   cancel();
   aborted = false;
   controller = new AbortController();
+  _traceId = genTraceId();
   return controller.signal;
+}
+
+/** 获取当前 run 的 trace ID（供跨模块诊断日志使用） */
+export function getTraceId(): string {
+  return _traceId || "(idle)";
 }
 
 /** 订阅本轮被取消（清空/切模式）的事件。返回退订函数。 */

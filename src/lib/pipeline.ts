@@ -32,6 +32,7 @@ import { lookupCachedSpec, storeCachedSpec } from "./specCache";
 import type { AIResponse } from "./schema";
 import type { GGBAppletApi } from "../types/ggb";
 import type { ChatTurn } from "../store/useAppStore";
+import { getTraceId } from "./runControl";
 import {
   runAgentLoop,
   registerConfirmationHandler,
@@ -41,6 +42,14 @@ import {
   type ConfirmationDecision
 } from "./agentLoop";
 import { toolCallToEvalCommands } from "./toolExecutor";
+import { saveTrajectory } from "./trajectoryStore";
+import {
+  searchExecution,
+  storeExecution,
+  buildExecutionRecord,
+  buildExamplePrompt,
+  type ExecutionRecord,
+} from "./trainingStore";
 
 export const MAX_REPAIR = 2;
 export const MAX_FORMAT_RETRY = 2;
@@ -81,6 +90,10 @@ export interface PipelineDeps {
   chatRawImpl?: typeof defaultChatRaw;
   /** 满足度评估注入（测试可 mock） */
   evalSatisfactionImpl?: typeof import("./satisfactionEval").evaluateSatisfaction;
+  /** 训练库检索（Phase 2 注入参考案例）。注入以支持单测 mock */
+  trainingSearchImpl?: (spec: string) => Promise<ExecutionRecord | null>;
+  /** 训练库存储（成功命令）。注入以支持单测 mock */
+  trainingStoreImpl?: (rec: ExecutionRecord) => void;
   /** 解析后的轻量模型名（用于精炼/评估） */
   lightModel: string;
   /** 解析后的主力模型名（用于编译/修复/降级） */
@@ -112,7 +125,7 @@ export async function runPipeline(
       spec = await refineSpec(userText, deps);
     } catch (err) {
       if (deps.signal.aborted) throw err;
-      console.warn("[Pipeline] Phase 1 failed, falling back to single-phase", err);
+      console.warn(`[Pipeline] ${getTraceId()} Phase 1 failed, falling back to single-phase`, err);
       await runSinglePhase(userText, deps);
       return;
     }
@@ -169,7 +182,15 @@ async function refineSpec(userText: string, deps: PipelineDeps): Promise<Refined
     { role: "system", content: buildRefinePrompt(deps.domain) },
     { role: "user", content: userText }
   ];
-  const rawSpec = await chatRawFn(deps.config, phase1Messages, deps.signal, deps.lightModel);
+  let rawSpec = await chatRawFn(deps.config, phase1Messages, deps.signal, deps.lightModel, undefined, true);
+
+  // ★ V4 json_object 模式有概率返回空 content（官方已知问题）→ 重试 1 次
+  //    避免空规格直接降级 single-phase（浪费 heavy model 重新做整轮）
+  if (!rawSpec.trim()) {
+    console.warn(`[Pipeline] ${getTraceId()} Phase 1 空响应，重试 1 次`);
+    rawSpec = await chatRawFn(deps.config, phase1Messages, deps.signal, deps.lightModel, undefined, true);
+  }
+
   const spec = parseRefinedSpec(rawSpec);
   if (spec && !spec.ask) {
     storeCachedSpec(userText, deps.domain, deps.appMode, existingObjs, spec);
@@ -220,10 +241,23 @@ function waitReview(
 async function runPhase2(finalSpec: string, deps: PipelineDeps): Promise<void> {
   deps.setThinking(true);
   try {
+    // ★ 训练数据闭环：检索相似成功案例，注入 user message 末尾（DeepSeek recency bias）
+    //    仅当案例命令数 ≥ 3 时注入；否则不加（避免误导）
+    const searchFn = deps.trainingSearchImpl ?? searchExecution;
+    let example: ExecutionRecord | null = null;
+    try {
+      example = await searchFn(finalSpec);
+    } catch {
+      example = null; // 检索失败不阻断编译
+    }
+    const userContent = (example && example.commands.length >= 3)
+      ? `${finalSpec}\n\n${buildExamplePrompt(example)}`
+      : finalSpec;
+
     const phase2Messages: ChatMessage[] = [
       { role: "system", content: buildCompilePrompt(deps.domain, deps.appMode) },
       ...collectHistory(deps.getMessages(), Math.ceil(HISTORY_WINDOW / 2)),
-      { role: "user", content: finalSpec }
+      { role: "user", content: userContent }
     ];
     const chatFn = deps.chatImpl ?? defaultChat;
     const response = await chatWithFormatRetry(chatFn, deps, phase2Messages);
@@ -240,11 +274,11 @@ async function runPhase2(finalSpec: string, deps: PipelineDeps): Promise<void> {
 async function evaluateAndRepair(finalSpec: string, deps: PipelineDeps): Promise<void> {
   const api = deps.getApi();
   if (!api) {
-    console.log("[AiGGB:DIAG] evaluateAndRepair: api is null, skip");
+    console.log(`[AiGGB:DIAG] ${getTraceId()} evaluateAndRepair: api is null, skip`);
     return;
   }
 
-  console.log("[AiGGB:DIAG] evaluateAndRepair: 开始满足度评估");
+  console.log(`[AiGGB:DIAG] ${getTraceId()} evaluateAndRepair: 开始满足度评估`);
   // ★ 等待浏览器下一帧，确保 3D 渲染管线空闲（避免刚恢复重绘时立即大量 API 读取导致 WebGL 压力）
   if (typeof requestAnimationFrame !== "undefined") {
     await new Promise<void>(r => requestAnimationFrame(() => r()));
@@ -283,8 +317,8 @@ async function evaluateAndRepair(finalSpec: string, deps: PipelineDeps): Promise
       { role: "user", content: repairMsg }
     ]);
 
-    // 执行修正命令（不做递归评估，避免无限循环）
-    await executeAndRepair(repairResponse, finalSpec, deps);
+    // 执行修正命令（不做递归评估，避免无限循环；captureTraining=false 避免增量污染训练库）
+    await executeAndRepair(repairResponse, finalSpec, deps, false);
   } catch (err) {
     if (deps.signal.aborted) throw err;
     deps.appendMessage({
@@ -314,7 +348,9 @@ async function runSinglePhase(userText: string, deps: PipelineDeps): Promise<voi
 async function executeAndRepair(
   response: AIResponse,
   originalRequest: string,
-  deps: PipelineDeps
+  deps: PipelineDeps,
+  /** 是否捕获训练样本（主执行 true；满足度修复回路 false，避免增量命令污染训练库） */
+  captureTraining = true
 ): Promise<void> {
   // [ASK] 反问：不执行命令
   if (response.ask) {
@@ -335,28 +371,28 @@ async function executeAndRepair(
   let ragRepairNote = applyRagCorrection(response);
   const snapshot = await takeSnapshot(api);
 
-  console.log("[AiGGB:DIAG] executeAndRepair: 执行", response.commands.length, "条命令");
+  console.log(`[AiGGB:DIAG] ${getTraceId()} executeAndRepair: 执行`, response.commands.length, "条命令");
   let results = executeCommands(api, response.commands, deps.appMode);
   deps.appendAIResponse(response, results);
 
   let attempts = 0;
   while (attempts < MAX_REPAIR) {
     const failures = collectFailures(results);
-    console.log(`[AiGGB:DIAG] executeAndRepair: 第${attempts}次执行 — ${results.length - failures.length}成功 / ${failures.length}失败`);
+    console.log(`[AiGGB:DIAG] ${getTraceId()} executeAndRepair: 第${attempts}次执行 — ${results.length - failures.length}成功 / ${failures.length}失败`);
     if (failures.length === 0) break;
     attempts++;
 
     // 全部失败 → 回滚：快照优先，快照不可用则 newConstruction + 重放构造日志
     if (attempts === 1 && failures.length === results.length) {
-      console.warn("[AiGGB:DIAG] executeAndRepair: ★ 全部命令失败，尝试回滚...");
+      console.warn(`[AiGGB:DIAG] ${getTraceId()} executeAndRepair: ★ 全部命令失败，尝试回滚...`);
       const restored = snapshot !== null && (await restoreSnapshot(api, snapshot));
       if (!restored) {
-        console.warn("[AiGGB:DIAG] executeAndRepair: ★ 快照不可用 → newConstruction() + 重放日志");
+        console.warn(`[AiGGB:DIAG] ${getTraceId()} executeAndRepair: ★ 快照不可用 → newConstruction() + 重放日志`);
         api.newConstruction();
         resetTmpIds();
         replayConstructionLog(api, deps.getConstructionLog());
       } else {
-        console.log("[AiGGB:DIAG] executeAndRepair: 快照恢复成功");
+        console.log(`[AiGGB:DIAG] ${getTraceId()} executeAndRepair: 快照恢复成功`);
       }
     }
 
@@ -381,6 +417,17 @@ async function executeAndRepair(
 
     results = executeCommands(deps.getApi() ?? api, response.commands, deps.appMode);
     deps.appendAIResponse(response, results);
+  }
+
+  // ★ 训练数据闭环：首次执行即全成功 → 存训练库（供后续相似意图检索注入）
+  //    attempts === 0 表示未进入修复循环；仅主执行捕获（captureTraining 控制）
+  if (captureTraining && attempts === 0 && collectFailures(results).length === 0) {
+    const storeFn = deps.trainingStoreImpl ?? storeExecution;
+    try {
+      void storeFn(buildExecutionRecord(originalRequest, response.commands));
+    } catch {
+      // 静默：训练库失败不影响主流程
+    }
   }
 }
 
@@ -521,7 +568,7 @@ export function collectHistory(messages: ChatTurn[], windowSize: number): ChatMe
     else if (m.role === "assistant") {
       const payload: Record<string, unknown> = {
         explanation: m.payload.explanation,
-        commands: m.payload.commands
+        summary: summarizeCommandsForHistory(m.payload.commands),
       };
       if (m.payload.self_check) payload.self_check = m.payload.self_check;
       collapsed.push({ role: "assistant", content: JSON.stringify(payload) });
@@ -531,6 +578,82 @@ export function collectHistory(messages: ChatTurn[], windowSize: number): ChatMe
     }
   }
   return collapsed.slice(-windowSize * 2);
+}
+
+/**
+ * 将命令数组压缩为紧凑摘要，替代完整 JSON 序列化（省 ~70% token）。
+ * 只保留 AI 下一轮需要知道的：创建了什么对象、改了什么样式/视窗、删了什么。
+ */
+function summarizeCommandsForHistory(commands: Array<{ op: string; [k: string]: unknown }>): string {
+  const created: string[] = [];
+  const styled: string[] = [];
+  const views: string[] = [];
+  const animated: string[] = [];
+  const other: string[] = [];
+  let evalCount = 0;
+
+  for (const c of commands) {
+    switch (c.op) {
+      case "eval": {
+        evalCount++;
+        const cmd = String(c.cmd ?? "");
+        // 提取对象名（赋值左值）
+        const m = cmd.match(/^(\w[\w]*)\s*[:=]/);
+        if (m) created.push(m[1]);
+        else other.push(cmd.slice(0, 60));
+        break;
+      }
+      case "slider": {
+        created.push(`${c.name}(Slider)`);
+        break;
+      }
+      case "vector":
+      case "forceDiagram": {
+        created.push(`${c.name}(Vector)`);
+        break;
+      }
+      case "style": {
+        const target = String(c.target ?? "?");
+        const parts: string[] = [target];
+        if (c.color) parts.push(`color=${c.color}`);
+        if (c.thickness !== undefined) parts.push(`w=${c.thickness}`);
+        styled.push(parts.join(":"));
+        break;
+      }
+      case "view": {
+        if (c.xmin !== undefined) views.push(`range[${c.xmin},${c.xmax}]×[${c.ymin},${c.ymax}]`);
+        if (c.perspective) views.push(`persp=${c.perspective}`);
+        if (c.showGrid !== undefined) views.push(`grid=${c.showGrid}`);
+        break;
+      }
+      case "animate": {
+        animated.push(`${c.target}:${c.action}`);
+        break;
+      }
+      case "constants": {
+        const names = c.names as string[] | undefined;
+        created.push(`consts(${(names ?? []).join(",")})`);
+        break;
+      }
+      case "delete":
+        other.push(`del:${c.target}`);
+        break;
+      case "reset":
+        other.push("reset");
+        break;
+      default:
+        other.push(c.op);
+    }
+  }
+
+  const parts: string[] = [];
+  if (created.length) parts.push(`创建[${created.join(", ")}]`);
+  if (styled.length) parts.push(`样式[${styled.join("; ")}]`);
+  if (views.length) parts.push(`视窗[${views.join(", ")}]`);
+  if (animated.length) parts.push(`动画[${animated.join(", ")}]`);
+  if (evalCount > created.length) parts.push(`+${evalCount - created.length}条eval`);
+  if (other.length) parts.push(`其他[${other.join(", ")}]`);
+  return parts.length ? parts.join(" ") : "(无操作)";
 }
 
 // ──── Agent Mode（工具调用代理） ────
@@ -565,7 +688,14 @@ export async function runAgentPipeline(
     return;
   }
 
+  // ★ 高风险操作快照：整轮 agent 模式开始前保存 base64 快照。
+  //    Agent 逐步执行可能部分成功部分失败 → 画布停在"半成品"。
+  //    失败时（熔断/超限/空响应放弃/异常）恢复到本轮开始前，给用户一个干净起点。
+  const agentSnapshot = await takeSnapshot(api);
+
   let result: AgentLoopResult | null = null;
+  // ★ 是否已回滚：true 时本轮命令未生效，不写入 constructionLog（否则 undo 重放出错）
+  let rollbackHappened = false;
   try {
     result = await runAgentLoop(userText, {
       config: deps.config,
@@ -575,11 +705,28 @@ export async function runAgentPipeline(
       getApi: deps.getApi,
       getMessages: deps.getMessages,
       agentModel: resolveModel(deps.config, "agent"),
+      // ★ 改造五：ReAct 轨迹持久化（IndexedDB；非浏览器环境静默跳过）
+      persistTrajectory: rec => { void saveTrajectory(rec); },
       // ★ 透传思考步骤到 UI（减少等待焦虑）
       onThinking: msg => cb.onAgentStep?.(msg),
     });
+
+    // ★ 失败回滚：AgentLoopResult.failed（熔断/超限/空响应放弃）→ 恢复本轮开始前快照
+    if (result.failed && !deps.signal.aborted && agentSnapshot !== null) {
+      const restored = await restoreSnapshot(deps.getApi() ?? api, agentSnapshot);
+      if (restored) {
+        rollbackHappened = true;
+        console.log(`[AiGGB:DIAG] ${getTraceId()} agent 失败回滚：恢复本轮开始前快照`);
+      }
+    }
   } catch (err) {
     if (deps.signal.aborted) throw err;
+
+    // ★ 异常时也尝试回滚（若有部分执行），避免半成品画布
+    if (agentSnapshot !== null && !deps.signal.aborted) {
+      const restored = await restoreSnapshot(deps.getApi() ?? api, agentSnapshot);
+      rollbackHappened = restored;
+    }
 
     // ★ 部分结果：即使异常也有已执行的操作摘要
     const partialMsg = result
@@ -598,16 +745,21 @@ export async function runAgentPipeline(
   }
 
   // ★ 构建 agent 结果摘要消息
-  const summary = buildAgentSummary(result);
+  const summary = rollbackHappened
+    ? `${buildAgentSummary(result)}\n\n⚠ 本轮构造失败，画布已回滚到开始前状态。`
+    : buildAgentSummary(result);
 
   // ★ 从工具调用历史提取可重放的 eval 命令（供 undo 回放 + constructionLog 兜底）
+  //    回滚后本轮命令未生效 → 不提取（constructionLog 保持一致）
   const agentEvalCommands: Array<{ op: "eval"; cmd: string }> = [];
-  for (const m of result.messages) {
-    if (m.role === "assistant" && m.tool_calls) {
-      for (const tc of m.tool_calls) {
-        const cmds = toolCallToEvalCommands(tc.function.name, tc.function.arguments);
-        for (const cmd of cmds) {
-          agentEvalCommands.push({ op: "eval", cmd });
+  if (!rollbackHappened) {
+    for (const m of result.messages) {
+      if (m.role === "assistant" && m.tool_calls) {
+        for (const tc of m.tool_calls) {
+          const cmds = toolCallToEvalCommands(tc.function.name, tc.function.arguments);
+          for (const cmd of cmds) {
+            agentEvalCommands.push({ op: "eval", cmd });
+          }
         }
       }
     }
@@ -627,7 +779,8 @@ export async function runAgentPipeline(
 
   deps.setThinking(false);
 
-  // ★ 满足度评估（Phase 3.1）：审查画布
+  // ★ 满足度评估（Phase 3.1）：审查画布。已回滚则跳过（画布非本轮产物）
+  if (rollbackHappened) return;
   try {
     await evaluateAgentResult(result, deps);
   } catch (err) {

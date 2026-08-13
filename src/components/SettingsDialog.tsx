@@ -9,9 +9,11 @@ import { ping, AIError, type AIConfig } from "../lib/aiClient";
 
 interface Props {
   onClose: () => void;
+  /** 打开训练数据管理面板（可选） */
+  onOpenTraining?: () => void;
 }
 
-export function SettingsDialog({ onClose }: Props) {
+export function SettingsDialog({ onClose, onOpenTraining }: Props) {
   const existing = useAppStore(s => s.config);
   const privacyAcknowledged = useAppStore(s => s.privacyAcknowledged);
   const setConfig = useAppStore(s => s.setConfig);
@@ -319,6 +321,11 @@ export function SettingsDialog({ onClose }: Props) {
             <button onClick={onTest} disabled={testing}>
               {testing ? "测试中…" : "测试连接"}
             </button>
+            {onOpenTraining && (
+              <button className="secondary" onClick={onOpenTraining} title="管理训练数据（导入/导出/回放）">
+                训练数据
+              </button>
+            )}
             <div className="spacer" />
             {existing?.apiKey && (
               <button className="danger" onClick={onClear}>

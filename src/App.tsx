@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useAppStore } from "./store/useAppStore";
 import { registerAppNameSetter } from "./lib/ggbBridge";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { TrainingDialog } from "./components/TrainingDialog";
 import { ChatPanel } from "./components/ChatPanel";
 import { GGBCanvas } from "./components/GGBCanvas";
 import { ScriptPanel } from "./components/ScriptPanel";
@@ -15,6 +16,7 @@ export function App() {
   const config = useAppStore(s => s.config);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [galleryOpen, setGalleryOpen] = useState<boolean>(false);
+  const [trainingOpen, setTrainingOpen] = useState<boolean>(false);
   const [offline, setOffline] = useState<boolean>(typeof navigator !== "undefined" && !navigator.onLine);
   const [scriptCollapsed, setScriptCollapsed] = useState<boolean>(
     () => typeof localStorage !== "undefined" && localStorage.getItem(SCRIPT_COLLAPSED_KEY) === "1"
@@ -68,8 +70,14 @@ export function App() {
         <ScriptPanel />
       </div>
 
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsDialog
+          onClose={() => setSettingsOpen(false)}
+          onOpenTraining={() => setTrainingOpen(true)}
+        />
+      )}
       {galleryOpen && <TemplateGallery onClose={() => setGalleryOpen(false)} />}
+      {trainingOpen && <TrainingDialog onClose={() => setTrainingOpen(false)} />}
       <PWAUpdatePrompt />
     </div>
   );

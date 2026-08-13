@@ -38,6 +38,16 @@ export type CommandCategory =
 
 // ── 命令定义 ──
 
+/** 重载参数类型（Mock 与真实执行共享同一签名表） */
+export type GGBArgType =
+  | "Point" | "Number" | "Vector" | "List" | "Line" | "Circle" | "Function" | "Any";
+
+/** 一个重载签名：参数类型数组 + 语义说明 */
+export interface GGBOverload {
+  args: GGBArgType[];
+  semantic: string;
+}
+
 export interface GGBCommandDef {
   /** 规范命令名（如 "Segment"） */
   name: string;
@@ -51,6 +61,12 @@ export interface GGBCommandDef {
   category: CommandCategory;
   /** 正确用法示例（每条一行，注入 prompt few-shot） */
   examples: string[];
+  /** 中文意图别名（改造三）：如 Diameter 的 aliases=["过圆心的线","直径"]。
+   *  注入 prompt 帮助 LLM 从自然意图联想正确命令。可增量维护，零依赖。 */
+  aliases?: string[];
+  /** 重载签名表：MockGGB 据此做参数类型校验，防模型把点/半径/坐标混淆。
+   *  只对存在重载歧义的命令补充（Circle/Segment/Vector/…），其余省略。 */
+  overloads?: GGBOverload[];
   /** 补充说明（使用时注意事项） */
   note?: string;
 }
@@ -81,22 +97,29 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     name: "Vector", signature: "Vector(A, B)", paramCount: [2, 2],
     modes: ["2d", "3d"], category: "point",
     examples: ["v = Vector((0,0), (3,4))", "w = Vector(A, B)"],
+    overloads: [
+      { args: ["Point", "Point"], semantic: "起点 A → 终点 B（位移矢量）" },
+      { args: ["Point", "Vector"], semantic: "起点 A → A + 位移 Vector" },
+    ],
     note: "A、B 必须是 Point 或坐标字面量，禁止 Point+Point",
   },
   {
     name: "Midpoint", signature: "Midpoint(A, B)", paramCount: [2, 2],
     modes: ["2d", "3d"], category: "point",
     examples: ["M = Midpoint(A, B)"],
+    aliases: ["中点", "两点中点"],
   },
   {
     name: "Center", signature: "Center(c)", paramCount: [1, 1],
     modes: ["2d", "3d"], category: "point",
     examples: ["O = Center(c)"],
+    aliases: ["圆心", "中心"],
   },
   {
     name: "Intersect", signature: "Intersect(a, b [, n])", paramCount: [2, 3],
     modes: ["2d", "3d"], category: "point",
     examples: ["P = Intersect(f, g)", "Q = Intersect(c, l, 2)"],
+    aliases: ["交点", "求交", "相交点"],
   },
   {
     name: "UnitVector", signature: "UnitVector(v)", paramCount: [1, 1],
@@ -109,12 +132,17 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     name: "Line", signature: "Line(A, B)", paramCount: [2, 2],
     modes: ["2d", "3d"], category: "line",
     examples: ["l = Line(A, B)", "l = Line(P, Direction)"],
+    aliases: ["直线", "两点连线", "过两点"],
   },
   {
     name: "Segment", signature: "Segment(A, B)", paramCount: [2, 2],
     modes: ["2d", "3d"], category: "line",
     examples: ["s = Segment(A, B)"],
+    overloads: [
+      { args: ["Point", "Point"], semantic: "两点之间的线段" },
+    ],
     note: "两端点必须是已声明的 Point，禁止匿名坐标 Segment((x1,y1),(x2,y2))",
+    aliases: ["线段", "两点连线（有限长）"],
   },
   {
     name: "Ray", signature: "Ray(A, B)", paramCount: [2, 2],
@@ -135,16 +163,31 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     name: "AngleBisector", signature: "AngleBisector(A, O, B)", paramCount: [3, 3],
     modes: ["2d", "3d"], category: "line",
     examples: ["b = AngleBisector(A, O, B)"],
+    aliases: ["角平分线", "平分角"],
   },
   {
     name: "PerpendicularBisector", signature: "PerpendicularBisector(A, B)", paramCount: [2, 2],
     modes: ["2d", "3d"], category: "line",
     examples: ["pb = PerpendicularBisector(A, B)"],
+    aliases: ["中垂线", "垂直平分线"],
   },
   {
     name: "Tangent", signature: "Tangent(P, c)", paramCount: [2, 2],
     modes: ["2d", "3d"], category: "line",
     examples: ["t = Tangent(P, c)", "t = Tangent(l, c)"],
+    aliases: ["切线", "相切"],
+  },
+  {
+    name: "PerpendicularLine", signature: "PerpendicularLine(P, l)", paramCount: [2, 2],
+    modes: ["2d", "3d"], category: "line",
+    examples: ["pl = PerpendicularLine(P, l)"],
+    aliases: ["垂线", "过点作垂线"],
+  },
+  {
+    name: "ParallelLine", signature: "ParallelLine(P, l)", paramCount: [2, 2],
+    modes: ["2d", "3d"], category: "line",
+    examples: ["pl = ParallelLine(P, l)"],
+    aliases: ["平行线", "过点作平行线"],
   },
 
   // ─── 圆 / 圆锥曲线 ───
@@ -152,6 +195,12 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     name: "Circle", signature: "Circle(O, r) | Circle(A, B, C)", paramCount: [2, 3],
     modes: ["2d", "3d"], category: "circle",
     examples: ["c = Circle((0,0), 3)", "c = Circle(A, B, C)"],
+    overloads: [
+      { args: ["Point", "Number"], semantic: "圆心 O + 半径 r" },
+      { args: ["Point", "Point"], semantic: "圆心 O + 圆上一点 P" },
+      { args: ["Point", "Point", "Point"], semantic: "过三点 A/B/C 的圆" },
+    ],
+    aliases: ["圆", "画圆", "过三点画圆", "圆心半径"],
   },
   {
     name: "Semicircle", signature: "Semicircle(A, B)", paramCount: [2, 2],
@@ -182,11 +231,13 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     name: "Incircle", signature: "Incircle(A, B, C)", paramCount: [3, 3],
     modes: ["2d"], category: "circle",
     examples: ["ic = Incircle(A, B, C)"],
+    aliases: ["内切圆", "三角形内切圆"],
   },
   {
     name: "CircumcircleArc", signature: "CircumcircleArc(A, B, C)", paramCount: [3, 3],
     modes: ["2d"], category: "circle",
     examples: ["arc = CircumcircleArc(A, B, C)"],
+    aliases: ["过三点圆弧", "外接圆弧"],
   },
   {
     name: "Sector", signature: "Sector(c, P1, P2)", paramCount: [3, 3],
@@ -214,6 +265,11 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     name: "Polygon", signature: "Polygon(A,B,C,...) | Polygon(list)", paramCount: [3, -1],
     modes: ["2d", "3d"], category: "polygon",
     examples: ["p = Polygon(A, B, C)", "p = Polygon({A,B,C,D})"],
+    overloads: [
+      { args: ["Point", "Point", "Point"], semantic: "≥3 顶点，多点用 ... 变长" },
+      { args: ["List"], semantic: "顶点列表 Polygon({A,B,C})" },
+    ],
+    aliases: ["多边形", "三角形", "四边形", "五边形"],
   },
   {
     name: "RigidPolygon", signature: "RigidPolygon(A, B, C)", paramCount: [3, 3],
@@ -237,6 +293,7 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     modes: ["2d", "3d"], category: "function",
     examples: ["c = Curve(cos(t), sin(t), t, 0, 2π)"],
     note: "参数变量名不能与已存在对象同名",
+    aliases: ["参数曲线", "轨迹曲线", "参数方程"],
   },
   {
     name: "Derivative", signature: "Derivative(f)", paramCount: [1, 1],
@@ -372,6 +429,7 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     modes: ["2d", "3d"], category: "list",
     examples: ["pts = Sequence((i, i^2), i, 0, 10, 0.5)"],
     note: "禁止 Sequence(var, list) 简写格式，必须五个参数完整",
+    aliases: ["序列", "等间距", "批量生成", "网格点"],
   },
   {
     name: "IterationList", signature: "IterationList(f, init, n)", paramCount: [3, 3],
@@ -668,6 +726,10 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     name: "Sphere", signature: "Sphere(O, r) | Sphere(P1, P2)", paramCount: [2, 2],
     modes: ["3d"], category: "solid3d",
     examples: ["s = Sphere((0,0,0), 3)", "marker = Sphere(P, 0.2)"],
+    overloads: [
+      { args: ["Point", "Number"], semantic: "球心 O + 半径 r" },
+      { args: ["Point", "Point"], semantic: "球心 P1 + 球面点 P2" },
+    ],
     note: "3D 禁止 SetPointSize——用 Sphere(P, 0.2) 替代标记点",
   },
   {
@@ -864,6 +926,18 @@ export function buildCommandReference(mode: "2d" | "3d", domain?: "general" | "p
   // 物理域附加矢量/微积分命令权重
   if (domain === "physics") {
     lines.unshift("⚛ 物理域推荐优先使用：Vector Tangent Normal Integral NDerivative SolveODE Sequence");
+  }
+
+  // 改造三：中文意图速查（aliases）——帮助 LLM 从自然语言意图联想正确命令
+  //   "过圆心" → Circle、"中垂线" → PerpendicularBisector
+  const aliasParts: string[] = [];
+  for (const c of cmds) {
+    if (c.aliases && c.aliases.length > 0) {
+      aliasParts.push(c.aliases.map(a => `${a}→${c.name}`).join(" "));
+    }
+  }
+  if (aliasParts.length > 0) {
+    lines.push(`\n【中文意图→命令速查】${aliasParts.join("  ")}`);
   }
 
   return lines.join("\n");

@@ -8,6 +8,7 @@
 
 import { AIResponse, formatZodError, type AIResponse as AIResponseT } from "./schema";
 import type { ToolDefinition } from "./tools";
+import { getTraceId } from "./runControl";
 
 // ──── 配置与消息类型 ────
 
@@ -47,6 +48,23 @@ export interface ProviderQuirks {
   agentTemperature?: number;
   /** Agent 模式首条 user message 是否需要强指令前缀（DeepSeek 对 user-role 遵从度 > system-role） */
   agentForceUserPrefix?: boolean;
+  /** 单轮最大工具调用数（超出阈值时 system prompt 收紧限制，避免 provider 丢弃后半 tool_calls） */
+  maxToolsPerTurn?: number;
+  /** stream 模式下是否可靠返回 finish_reason（DeepSeek/SiliconFlow 有时缺） */
+  streamsFinishReason?: boolean;
+  /** max tokens 参数字段名（OpenAI o-series 用 max_completion_tokens，其他用 max_tokens） */
+  maxTokensField?: "max_tokens" | "max_completion_tokens";
+  // ── V4+ 扩展 ──
+  /** 是否支持原生 thinking 模式（DeepSeek V4 = true，内嵌非独立 reasoner） */
+  supportsThinking?: boolean;
+  /** thinking 深度（V4 通过 reasoning_effort 控制） */
+  reasoningEffort?: "low" | "medium" | "high";
+  /** 多轮对话中是否必须把 reasoning_content 原样回传 API（V4 = true，否则 400） */
+  mustRoundtripReasoning?: boolean;
+  /** 是否支持 tool_choice: "required"（V4 拒绝，只能 auto） */
+  supportsToolChoiceRequired?: boolean;
+  /** 上下文窗口 token 数（V4 = 1M，用于压缩策略调参） */
+  contextWindow?: number;
 }
 
 /**
@@ -60,12 +78,23 @@ export function getProviderQuirks(config: AIConfig): ProviderQuirks {
     (config.agentModel ?? "").toLowerCase(),
   ].join(" ");
 
-  // DeepSeek 全系：对温度敏感 + user-role 指令遵从度高于 system-role
+  // DeepSeek V4 全系：thinking 内嵌 + reasoning_content 需回传 + 拒绝 tool_choice=required
   if (/deepseek/.test(fingerprint)) {
-    return { agentTemperature: 0.05, agentForceUserPrefix: true };
+    return {
+      agentTemperature: 0.05,
+      agentForceUserPrefix: true,
+      maxToolsPerTurn: 4,      // DeepSeek 单轮 >4 个 tool 时后半易丢失
+      streamsFinishReason: false,
+      supportsThinking: true,          // V4 原生 thinking
+      reasoningEffort: "medium",
+      mustRoundtripReasoning: true,    // ★ 多轮必须回传 reasoning_content
+      supportsToolChoiceRequired: false, // ★ V4 拒绝 tool_choice: required
+      contextWindow: 1_000_000,        // V4 百万上下文
+    };
   }
 
-  return {};
+  // 默认：标准 OpenAI 行为
+  return { streamsFinishReason: true };
 }
 
 /** 传统纯文本消息（Phase 1/2 使用） */
@@ -84,6 +113,8 @@ export interface AgentMessage {
   tool_calls?: ToolCallDelta[];
   tool_call_id?: string;
   name?: string;
+  /** V4 thinking 模式的推理过程。多轮对话中必须原样回传（mustRoundtripReasoning） */
+  reasoning_content?: string;
 }
 
 export interface ToolCallDelta {
@@ -103,6 +134,8 @@ export interface AgentResponse {
   toolCalls: ToolCallDelta[];
   /** SSE 流的 finish_reason："stop" | "length" | "tool_calls" | "content_filter" | null */
   finishReason: string | null;
+  /** V4 thinking 模式的推理过程（多轮回传用） */
+  reasoningContent?: string;
 }
 
 // ──── 错误类型 ────
@@ -139,6 +172,7 @@ interface ChatCompletionResponse {
   choices?: Array<{
     message?: {
       content?: string | null;
+      reasoning_content?: string | null; // V4 thinking 推理过程
       tool_calls?: Array<{
         id: string;
         type: "function";
@@ -327,6 +361,7 @@ interface StreamChunk {
   choices?: Array<{
     delta?: {
       content?: string | null;
+      reasoning_content?: string | null; // V4 thinking 推理过程（流式增量）
       tool_calls?: Array<{
         index?: number;
         id?: string;
@@ -354,6 +389,7 @@ export async function agentChat(
   onContent?: (text: string) => void
 ): Promise<AgentResponse> {
   const quirks = getProviderQuirks(config);
+  const maxTokField = quirks.maxTokensField ?? "max_tokens";
   const body = {
     model: modelOverride ?? config.model,
     messages,
@@ -362,7 +398,7 @@ export async function agentChat(
     temperature: quirks.agentTemperature ?? config.temperature ?? 0.2,
     stream: true,
     // 工具 JSON 参数可能较长（create_parametric / eval_raw / eval_sequence），给足空间防截断
-    max_tokens: 8192
+    [maxTokField]: 8192
   };
 
   const resp = await fetchCompletion(config, body, signal);
@@ -380,7 +416,7 @@ export async function agentChat(
       function: { name: tc.function.name, arguments: tc.function.arguments }
     }));
     if (onContent && content) onContent(content);
-    return { content, toolCalls, finishReason };
+    return { content, toolCalls, finishReason, reasoningContent: msg?.reasoning_content ?? undefined };
   }
 
   if (!resp.body) {
@@ -392,6 +428,7 @@ export async function agentChat(
   const decoder = new TextDecoder();
   let buffer = "";
   let content = "";
+  let reasoningContent = "";
   const toolCalls: ToolCallDelta[] = [];
   let finishReason: string | null = null;
 
@@ -418,6 +455,11 @@ export async function agentChat(
     if (typeof delta.content === "string" && delta.content.length > 0) {
       content += delta.content;
       onContent?.(delta.content);
+    }
+
+    // ★ V4 thinking：累积 reasoning_content（多轮需回传，不入 UI 流式展示）
+    if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
+      reasoningContent += delta.reasoning_content;
     }
 
     if (Array.isArray(delta.tool_calls)) {
@@ -458,13 +500,13 @@ export async function agentChat(
   // ★ 诊断：空响应时记录详细信息便于排查
   if (!content && finalToolCalls.length === 0) {
     console.warn(
-      `[agentChat] 空响应: finishReason=${finishReason || "无"}, ` +
+      `[agentChat] ${getTraceId()} 空响应: finishReason=${finishReason || "无"}, ` +
       `rawToolCalls=${toolCalls.length}, msgCount=${messages.length}, ` +
       `model=${modelOverride ?? config.model}`
     );
   }
 
-  return { content: content || null, toolCalls: finalToolCalls, finishReason };
+  return { content: content || null, toolCalls: finalToolCalls, finishReason, reasoningContent: reasoningContent || undefined };
 }
 
 // ──── Phase 1 精炼（纯文本） ────
@@ -478,7 +520,9 @@ export async function chatRaw(
   messages: ChatMessage[],
   signal?: AbortSignal,
   modelOverride?: string,
-  maxTokens?: number
+  maxTokens?: number,
+  /** 约束 AI 输出为 JSON（用于 Phase 1 精炼和满足度评估，降低非 JSON 输出率） */
+  jsonMode?: boolean
 ): Promise<string> {
   const body: Record<string, unknown> = {
     model: modelOverride ?? config.model,
@@ -487,6 +531,12 @@ export async function chatRaw(
     stream: false
   };
   if (maxTokens) body.max_tokens = maxTokens;
+  if (jsonMode) {
+    body.response_format = { type: "json_object" };
+    // ★ V4 文档明确要求：json_object 模式需合理设置 max_tokens 防 JSON 被截断
+    //    未显式传入时给 4K 默认（Phase 1 规格 / 满足度评估输出均远小于此）
+    if (!maxTokens) body.max_tokens = 4096;
+  }
 
   const data = await callAPI(config, body, signal);
 

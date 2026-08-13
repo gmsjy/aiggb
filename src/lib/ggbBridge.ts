@@ -55,13 +55,33 @@ export function executeCommands(api: GGBAppletApi, commands: Command[], appMode?
     api.setRepaintingActive(false);
   }
   try {
-    return commands.map((cmd, i) => {
-      const r = executeOne(api, cmd);
-      if (!r.ok) {
-        console.warn(`[AiGGB:DIAG] executeCommands [${i}]: ❌ ${cmd.op} 执行失败 —`, r.error);
+    // ★ 方案 A（静态排序）+ 方案 C（分层重试）：
+    //    GGB 严格按依赖顺序执行（先点、后线、再面）。模型生成的命令可能乱序，
+    //    仅靠 map 按数组顺序执行会导致依赖对象未就绪而失败，或 GGB 静默创建自由点污染。
+    //    - orderCommands：按 op 优先级重排（constants→slider→eval→vector→animate→style）
+    //    - 分层重试：第一轮执行全部，失败的进下一轮（此时前面成功的已建好依赖）
+    const ordered = orderCommands(commands);
+    const results = new Map<number, ExecResult>();
+
+    let pending = ordered;
+    for (let pass = 0; pass < MAX_EXEC_PASSES && pending.length > 0; pass++) {
+      const retry: Array<{ cmd: Command; idx: number }> = [];
+      for (const { cmd, idx } of pending) {
+        const r = executeOne(api, cmd);
+        results.set(idx, r);
+        if (!r.ok) {
+          console.warn(`[AiGGB:DIAG] executeCommands [${idx}] pass${pass + 1}: ❌ ${cmd.op} 执行失败 —`, r.error);
+          // 失败且可重试（非幂等 op 不做多次副作用）→ 下轮重试
+          if (pass < MAX_EXEC_PASSES - 1 && !NON_IDEMPOTENT_OPS.has(cmd.op)) {
+            retry.push({ cmd, idx });
+          }
+        }
       }
-      return r;
-    });
+      pending = retry;
+    }
+
+    // ★ 对齐原始 commands 数组顺序返回（constructionLog 回滚重放需按模型生成顺序）
+    return commands.map((_, i) => results.get(i) as ExecResult);
   } finally {
     if (useBatch) {
       console.log("[AiGGB:DIAG] setRepaintingActive(true) — 恢复重绘 (可能触发大量 GPU 渲染)");
@@ -77,6 +97,40 @@ export function executeCommands(api: GGBAppletApi, commands: Command[], appMode?
       }
     }
   }
+}
+
+/** 分层重试的最大轮数（第 1 轮 + 2 次重试），覆盖 eval 内部依赖乱序 */
+const MAX_EXEC_PASSES = 3;
+
+/** op 静态执行优先级：数值越小越先执行。覆盖 GGB 的依赖顺序（先点、后线、再面）。 */
+const OP_PRIORITY: Record<string, number> = {
+  constants: 0,      // 物理常量先注入
+  slider: 1,         // 滑块
+  eval: 2,           // 点/线/面（内部乱序靠分层重试解决）
+  vector: 3,         // 引用已存在的点
+  forceDiagram: 3,
+  animate: 4,        // 引用滑块/点
+  trace: 4,
+  physicsTrace: 4,
+  style: 5,          // 引用已创建对象
+  caption: 5,
+  view: 6,           // 视窗最后
+  unitAxes: 6,
+  delete: 7,         // 删除放最后（不挡构造）
+  reset: 7,
+};
+
+/** 非幂等 op：分层重试时跳过（重复执行有副作用） */
+const NON_IDEMPOTENT_OPS = new Set(["delete", "reset"]);
+
+/**
+ * 按 op 依赖优先级重排命令（方案 A：跨 op 静态排序）。
+ * 仅改变执行次序；调用方负责把返回结果映射回原始顺序。
+ */
+export function orderCommands(commands: Command[]): Array<{ cmd: Command; idx: number }> {
+  return commands
+    .map((cmd, idx) => ({ cmd, idx }))
+    .sort((a, b) => (OP_PRIORITY[a.cmd.op] ?? 9) - (OP_PRIORITY[b.cmd.op] ?? 9));
 }
 
 function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
@@ -189,6 +243,16 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
       }
 
       case "delete": {
+        // ★ 与 toolExecutor.delete_object 保持一致：目标不存在时报错
+        //    （提示 LLM 对象名可能拼错，而非静默 no-op 让画布处于意外状态）
+        if (!api.exists(cmd.target)) {
+          return {
+            ok: false,
+            command: cmd,
+            expanded: [],
+            error: `对象 ${cmd.target} 不存在，无法删除；请检查对象名（可用 list_objects 确认）`
+          };
+        }
         api.deleteObject(cmd.target);
         return { ok: true, command: cmd, expanded };
       }

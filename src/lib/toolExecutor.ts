@@ -59,6 +59,13 @@ export function executeToolCall(
     return formatResult(call.id, false, undefined, safetyCheck);
   }
 
+  // Step 2.5: 语义预检（Pre-flight）——拦截 Zod 查不出、GGB 会崩的逻辑错误
+  //    （如负半径、min>=max、端点相同）。字符串表达式无法静态判断 → 仅检查字面量 number。
+  const preFlight = preFlightCheck(api, call.name, args);
+  if (preFlight) {
+    return formatResult(call.id, false, undefined, `执行前检查失败：${preFlight}`);
+  }
+
   // Step 3: 执行
   try {
     const result = dispatch(api, call.name, args);
@@ -483,6 +490,119 @@ function checkSafety(name: string, args: Record<string, unknown>): string | null
     const target = (args as { target: string }).target;
     if (target.startsWith("_")) {
       return `禁止删除临时对象 ${target}`;
+    }
+  }
+
+  return null; // 通过
+}
+
+/**
+ * 语义预检（Pre-flight）——在触发 GGB API 前拦截逻辑错误。
+ * 与 Zod 校验互补：Zod 查类型/必填/正则，这里查【跨字段语义】（负半径、min>=max 等）。
+ * 字符串表达式（如 radius="R"、"v0*t"）无法静态判断正负 → 仅检查字面量 number。
+ * 返回错误文案，或 null（通过）。
+ */
+function preFlightCheck(
+  api: GGBAppletApi,
+  name: string,
+  args: Record<string, unknown>
+): string | null {
+  const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+  switch (name) {
+    case "create_circle": {
+      const radius = args.radius;
+      if (isNum(radius) && radius <= 0) {
+        return `半径必须为正数，当前 radius=${radius}。建议改为 1 或 2，或引用滑块/表达式（如 "R"）`;
+      }
+      break;
+    }
+
+    case "create_slider":
+    case "create_sliders": {
+      const list: Array<{ name?: string; min?: unknown; max?: unknown; step?: unknown; value?: unknown }> =
+        name === "create_sliders" ? (args.sliders as never[]) ?? [] : [args];
+      for (const s of list) {
+        const label = s.name ?? "?";
+        if (isNum(s.min) && isNum(s.max) && s.min >= s.max) {
+          return `滑块 ${label} 的 min(${s.min}) 必须小于 max(${s.max})`;
+        }
+        if (isNum(s.step) && s.step <= 0) {
+          return `滑块 ${label} 的 step 必须为正数，当前=${s.step}`;
+        }
+        if (isNum(s.value) && isNum(s.min) && isNum(s.max) && (s.value < s.min || s.value > s.max)) {
+          return `滑块 ${label} 的初值 ${s.value} 超出范围 [${s.min}, ${s.max}]`;
+        }
+      }
+      break;
+    }
+
+    case "create_parametric": {
+      if (isNum(args.tMin) && isNum(args.tMax) && args.tMin >= args.tMax) {
+        return `参数曲线的 tMin(${args.tMin}) 必须小于 tMax(${args.tMax})`;
+      }
+      break;
+    }
+
+    case "set_view": {
+      if (isNum(args.xmin) && isNum(args.xmax) && args.xmin >= args.xmax) {
+        return `视窗的 xmin(${args.xmin}) 必须小于 xmax(${args.xmax})`;
+      }
+      if (isNum(args.ymin) && isNum(args.ymax) && args.ymin >= args.ymax) {
+        return `视窗的 ymin(${args.ymin}) 必须小于 ymax(${args.ymax})`;
+      }
+      break;
+    }
+
+    case "create_segment": {
+      if (args.start === args.end) {
+        return `线段两端点不能相同（start=end=${args.start}）`;
+      }
+      break;
+    }
+
+    case "create_polygon": {
+      const vertices = (args.vertices as string[]) ?? [];
+      if (new Set(vertices).size < 3) {
+        return `多边形至少需要 3 个不同顶点，当前给了 ${vertices.join(", ")}`;
+      }
+      break;
+    }
+
+    case "create_vector": {
+      // to 坐标表达式中检测除零风险（静态字面量分母为 0）
+      const to = String(args.to ?? "");
+      const divByZero = /\/\s*0(?![.\d])/.test(to);
+      if (divByZero) {
+        return `矢量终点表达式 "${to}" 包含除零（分母为 0），GGB 会报 NaN。请改为 +0.001 防除零`;
+      }
+      break;
+    }
+
+    case "physics_constants": {
+      const known = new Set(Object.keys(PHYSICS_CONSTANTS));
+      const unknown = (args.names as string[] ?? []).filter(n => !known.has(n));
+      if (unknown.length > 0) {
+        return `未知物理常量：${unknown.join(", ")}。可用：${[...known].join(", ")}`;
+      }
+      break;
+    }
+  }
+
+  // 依赖检查：from/center/position 等引用的对象若存在性可判定且缺失 → 提示
+  const refTargets: Array<[string, string]> = [
+    ["create_segment", "start"], ["create_segment", "end"],
+    ["create_circle", "center"], ["create_text", "position"],
+    ["create_trace", "target"], ["set_animation", "target"],
+    ["set_style", "target"], ["get_object_info", "name"],
+    ["delete_object", "target"],
+  ];
+  for (const [toolName, field] of refTargets) {
+    if (name === toolName) {
+      const target = args[field];
+      if (typeof target === "string" && !api.exists(target)) {
+        return `依赖对象 ${target} 不存在；请先用 create_point / create_slider 等创建它`;
+      }
     }
   }
 

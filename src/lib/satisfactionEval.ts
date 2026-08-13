@@ -14,6 +14,7 @@
 
 import { z } from "zod";
 import { chatRaw as defaultChatRaw, type AIConfig, type ChatMessage } from "./aiClient";
+import { getTraceId } from "./runControl";
 
 // ──── Schema ────
 
@@ -82,8 +83,13 @@ export async function evaluateSatisfaction(
   ];
 
   try {
-    // ★ 用轻量模型（便宜快速）；lightModel 已由调用方通过 resolveModel 解析
-    const raw = await chatRawFn(config, messages, signal, lightModel ?? config.model);
+    // ★ V4 json_object 模式有概率返回空 content → 重试 1 次
+    //    否则空响应被 JSON.parse("") 当异常吞掉，错误图形被静默标记为 satisfied
+    let raw = await chatRawFn(config, messages, signal, lightModel ?? config.model, undefined, true);
+    if (!raw.trim()) {
+      console.warn(`[satisfactionEval] ${getTraceId()} 空响应，重试 1 次`);
+      raw = await chatRawFn(config, messages, signal, lightModel ?? config.model, undefined, true);
+    }
     const cleaned = raw.trim()
       .replace(/^```json?\s*/, "").replace(/\s*```$/, "")
       .replace(/^﻿/, "");

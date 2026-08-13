@@ -525,3 +525,62 @@ export function getToolSafety(name: string): ToolSafety {
 export function isKnownTool(name: string): boolean {
   return name in TOOL_SCHEMAS;
 }
+
+// ──── 工具分类元数据（改造四） ────
+
+export type ToolCategory =
+  | "create"    // 创建对象（点/线/圆/多边形/滑块/矢量/文本/函数/曲线）
+  | "physics"   // 物理专用（常量/轨迹/单位轴）
+  | "modify"    // 修改（样式/动画/视图）
+  | "delete"    // 删除（对象/清空）
+  | "query"     // 查询（对象信息/列表）
+  | "advanced"; // 高级（序列/原始命令）
+
+/**
+ * 工具名 → 分类映射。独立于 TOOL_DEFINITIONS（保持 API tools 参数纯净，
+ * 避免未知字段在 strict schema 下被拒绝）。用于 agent system prompt 按分组速览工具。
+ */
+export const TOOL_CATEGORIES: Record<string, ToolCategory> = {
+  // create
+  create_points: "create", create_point: "create", create_segment: "create",
+  create_circle: "create", create_polygon: "create", create_sliders: "create",
+  create_slider: "create", create_vector: "create", create_text: "create",
+  create_function: "create", create_parametric: "create",
+  // physics
+  physics_constants: "physics", create_trace: "physics", set_unit_axes: "physics",
+  // modify
+  set_style: "modify", set_animation: "modify", set_view: "modify",
+  // delete
+  delete_object: "delete", clear_canvas: "delete",
+  // query
+  get_object_info: "query", list_objects: "query",
+  // advanced
+  eval_sequence: "advanced", eval_raw: "advanced",
+};
+
+const CATEGORY_LABELS: Record<ToolCategory, string> = {
+  create: "创建对象",
+  physics: "物理专用",
+  modify: "修改样式/动画/视图",
+  delete: "删除对象",
+  query: "查询画布状态",
+  advanced: "高级（序列/原始命令）",
+};
+
+/** 生成按分类分组的工具速览文本（注入 agent system prompt，帮助模型理解工具分组） */
+export function buildToolCategoryOverview(): string {
+  const groups = new Map<ToolCategory, string[]>();
+  for (const [name, cat] of Object.entries(TOOL_CATEGORIES)) {
+    const list = groups.get(cat) ?? [];
+    list.push(name);
+    groups.set(cat, list);
+  }
+  const lines: string[] = [];
+  for (const cat of Object.keys(CATEGORY_LABELS) as ToolCategory[]) {
+    const tools = groups.get(cat);
+    if (tools && tools.length > 0) {
+      lines.push(`  ${CATEGORY_LABELS[cat]}: ${tools.join(" / ")}`);
+    }
+  }
+  return lines.join("\n");
+}
