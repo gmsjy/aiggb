@@ -29,6 +29,18 @@ export interface ExecutionRecord {
   commands: Command[];
 }
 
+/** L2 场景记录：多个相似 L1 案例聚合的模式（结构可复用，参数可变） */
+export interface SceneRecord {
+  id: string;
+  /** 代表规格（最热案例的 spec） */
+  specSample: string;
+  /** 模式命令（最热案例的 commands，slider 值视为可变） */
+  pattern: Command[];
+  /** 并入次数（≥2 才有注入价值） */
+  heat: number;
+  lastSeen: number;
+}
+
 // ──── 纯函数：tokenize / 相似度 ────
 
 /** 中英混合 tokenize：英文/数字词 + 中文 bigram（对中文短意图效果好） */
@@ -80,9 +92,21 @@ export async function searchExecution(
 // ──── IndexedDB 封装 ────
 
 const DB_NAME = "aiggb";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // v2: 新增 scenes store
 const STORE_NAME = "executions";
+const SCENES_STORE = "scenes";
 const MAX_RECORDS = 300; // 上限 300 条，超出删最旧
+
+/** 场景聚合阈值：Jaccard ≥ 0.6 视为同场景并入 */
+const SCENE_MERGE_THRESHOLD = 0.6;
+
+/** 幂等创建 object store（多个模块共享 DB，onupgradeneeded 都调用，contains 防重复） */
+function ensureStore(db: IDBDatabase, name: string): void {
+  if (!db.objectStoreNames.contains(name)) {
+    const store = db.createObjectStore(name, { keyPath: "id" });
+    store.createIndex("ts", "ts");
+  }
+}
 
 let _dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -95,11 +119,10 @@ function openDb(): Promise<IDBDatabase> {
   _dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: "id" });
-        store.createIndex("ts", "ts");
-      }
+      // 共享 DB：任一模块升级到 v2 时确保全部 store 存在（executions/scenes/trajectories）
+      ensureStore(req.result, "executions");
+      ensureStore(req.result, "scenes");
+      ensureStore(req.result, "trajectories");
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error ?? new Error("IndexedDB open 失败"));
@@ -121,11 +144,11 @@ async function getAllRecords(): Promise<ExecutionRecord[]> {
   }
 }
 
-/** 存储一条成功执行记录（静默失败，不阻断主流程） */
+/** 存储一条成功执行记录（静默失败，不阻断主流程），并聚合到 L2 场景 */
 export async function storeExecution(record: ExecutionRecord): Promise<void> {
   try {
     const db = await openDb();
-    return await new Promise<void>((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, "readwrite");
       const store = tx.objectStore(STORE_NAME);
       store.put(record);
@@ -153,9 +176,143 @@ export async function storeExecution(record: ExecutionRecord): Promise<void> {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error ?? new Error("保存失败"));
     });
+
+    // ★ L2 场景聚合：与现有场景聚类，并入或新建
+    await upsertScene(record).catch(() => {});
   } catch {
     // 静默失败：训练库是锦上添花
   }
+}
+
+// ──── L2 场景聚合 ────
+
+async function getAllScenes(): Promise<SceneRecord[]> {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(SCENES_STORE, "readonly");
+      const req = tx.objectStore(SCENES_STORE).getAll();
+      req.onsuccess = () => resolve(req.result as SceneRecord[]);
+      req.onerror = () => reject(req.error ?? new Error("读取场景失败"));
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function putScene(scene: SceneRecord): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(SCENES_STORE, "readwrite");
+      tx.objectStore(SCENES_STORE).put(scene);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("保存场景失败"));
+    });
+  } catch {
+    // 静默
+  }
+}
+
+/**
+ * 纯函数：给定现有场景 + 新案例 spec，返回应并入的场景（Jaccard ≥ 阈值），
+ * 无匹配返回 null（表示应新建场景）。抽成纯函数便于单测。
+ */
+export function findMergeTarget(scenes: SceneRecord[], spec: string): SceneRecord | null {
+  const tokens = tokenize(spec);
+  let best: SceneRecord | null = null;
+  let bestScore = 0;
+  for (const s of scenes) {
+    const score = jaccardSimilarity(tokens, tokenize(s.specSample));
+    if (score > bestScore) {
+      bestScore = score;
+      best = s;
+    }
+  }
+  return bestScore >= SCENE_MERGE_THRESHOLD ? best : null;
+}
+
+/**
+ * L2 场景聚合：新成功案例与现有场景聚类（Jaccard ≥ SCENE_MERGE_THRESHOLD → 并入并 heat++），
+ * 否则新建场景。并入时 pattern 更新为最新成功命令（最近最准）。
+ */
+async function upsertScene(record: ExecutionRecord): Promise<void> {
+  const scenes = await getAllScenes();
+  const target = findMergeTarget(scenes, record.spec);
+  if (target) {
+    await putScene({
+      ...target,
+      heat: target.heat + 1,
+      lastSeen: Date.now(),
+      pattern: record.commands,
+    });
+  } else {
+    await putScene({
+      id: `scene-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      specSample: record.spec,
+      pattern: record.commands,
+      heat: 1,
+      lastSeen: Date.now(),
+    });
+  }
+}
+
+/** 检索最相似场景（L2，优先于单案例注入） */
+export async function searchScene(
+  spec: string,
+  threshold = 0.5
+): Promise<SceneRecord | null> {
+  const scenes = await getAllScenes();
+  if (scenes.length === 0) return null;
+  const tokens = tokenize(spec);
+  let best: SceneRecord | null = null;
+  let bestScore = 0;
+  for (const s of scenes) {
+    const score = jaccardSimilarity(tokens, tokenize(s.specSample));
+    if (score > bestScore) {
+      bestScore = score;
+      best = s;
+    }
+  }
+  return bestScore >= threshold ? best : null;
+}
+
+/** 清空场景（供 clearAllData / UI） */
+export async function clearScenes(): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(SCENES_STORE, "readwrite");
+      tx.objectStore(SCENES_STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("清空场景失败"));
+    });
+  } catch {
+    // 静默
+  }
+}
+
+/**
+ * 把场景模式构建为可注入 compile prompt 的参考文本。
+ * 与单案例（buildExamplePrompt）的区别：场景标注"结构可复用、参数可变"，
+ * 解决多案例硬套参数问题——AI 看到结构骨架，按当前规格填参数。
+ */
+export function buildScenePrompt(scene: SceneRecord): string {
+  const cmdLines = scene.pattern.map(c => {
+    if (c.op === "eval") return `- eval: ${(c as { cmd: string }).cmd}`;
+    if (c.op === "slider") {
+      const s = c as { name: string; min: number | string; max: number | string; value: number | string; unit?: string };
+      return `- slider: ${s.name} (范围/初值可变${s.unit ? ", 单位 " + s.unit : ""})`;
+    }
+    if (c.op === "vector") return `- vector: ${(c as { name: string }).name} (from/to 可变)`;
+    return `- ${c.op}`;
+  });
+
+  return `【已验证场景模式 — ${scene.heat} 次成功，命令结构可复用】
+示例需求 "${scene.specSample.slice(0, 40)}" 的命令骨架：
+${cmdLines.join("\n")}
+
+★ 这是【结构模式】不是具体案例：slider 范围/初值、矢量坐标等参数必须根据【当前规格】的精确值重新计算，禁止复制场景中的数值。`;
 }
 
 /** 构造 ExecutionRecord */
@@ -175,6 +332,7 @@ export interface TrainingBackup {
   version: 1;
   exportedAt: number;
   executions: ExecutionRecord[];
+  scenes: SceneRecord[];
   trajectories: TrajectoryRecord[];
 }
 
@@ -215,46 +373,69 @@ export async function clearExecutions(): Promise<void> {
   }
 }
 
-/** 导出全部训练数据（执行样本 + 轨迹）为备份对象 */
+/** 导出全部训练数据（执行样本 + 场景 + 轨迹）为备份对象 */
 export async function exportAllData(): Promise<TrainingBackup> {
-  const [executions, trajectories] = await Promise.all([
+  const [executions, scenes, trajectories] = await Promise.all([
     getAllExecutions(),
+    getAllScenes(),
     getAllTrajectories(),
   ]);
   return {
     version: 1,
     exportedAt: Date.now(),
     executions,
+    scenes,
     trajectories,
   };
 }
 
-/** 导入训练数据备份，返回 (成功执行导入数, 轨迹导入数) */
+/** 导入训练数据备份，返回 (成功执行导入数, 场景数, 轨迹数) */
 export async function importData(
   backup: Partial<TrainingBackup>
-): Promise<{ executions: number; trajectories: number }> {
+): Promise<{ executions: number; scenes: number; trajectories: number }> {
   const execCount = await importExecutions(backup.executions ?? []);
+  const sceneCount = await importScenes(backup.scenes ?? []);
   const trajCount = await importTrajectories(backup.trajectories ?? []);
-  return { executions: execCount, trajectories: trajCount };
+  return { executions: execCount, scenes: sceneCount, trajectories: trajCount };
 }
 
-/** 清空全部训练数据（执行样本 + 轨迹） */
+/** 批量导入场景 */
+async function importScenes(scenes: SceneRecord[]): Promise<number> {
+  if (scenes.length === 0) return 0;
+  try {
+    const db = await openDb();
+    return await new Promise<number>((resolve, reject) => {
+      const tx = db.transaction(SCENES_STORE, "readwrite");
+      const store = tx.objectStore(SCENES_STORE);
+      for (const s of scenes) store.put(s);
+      tx.oncomplete = () => resolve(scenes.length);
+      tx.onerror = () => reject(tx.error ?? new Error("导入场景失败"));
+    });
+  } catch {
+    return 0;
+  }
+}
+
+/** 清空全部训练数据（执行样本 + 场景 + 轨迹） */
 export async function clearAllData(): Promise<void> {
-  await Promise.all([clearExecutions(), clearTrajectories()]);
+  await Promise.all([clearExecutions(), clearScenes(), clearTrajectories()]);
 }
 
 /** 训练数据统计（供 UI 展示） */
 export async function getTrainingStats(): Promise<{
   executions: number;
+  scenes: number;
   successTrajectories: number;
   failedTrajectories: number;
 }> {
-  const [executions, trajectories] = await Promise.all([
+  const [executions, scenes, trajectories] = await Promise.all([
     getAllExecutions(),
+    getAllScenes(),
     getAllTrajectories(),
   ]);
   return {
     executions: executions.length,
+    scenes: scenes.length,
     successTrajectories: trajectories.filter(t => t.success).length,
     failedTrajectories: trajectories.filter(t => !t.success).length,
   };

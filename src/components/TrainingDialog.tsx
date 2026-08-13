@@ -28,12 +28,13 @@ interface Props {
 
 interface Stats {
   executions: number;
+  scenes: number;
   successTrajectories: number;
   failedTrajectories: number;
 }
 
 export function TrainingDialog({ onClose }: Props) {
-  const [stats, setStats] = useState<Stats>({ executions: 0, successTrajectories: 0, failedTrajectories: 0 });
+  const [stats, setStats] = useState<Stats>({ executions: 0, scenes: 0, successTrajectories: 0, failedTrajectories: 0 });
   const [failedTrajs, setFailedTrajs] = useState<TrajectoryRecord[]>([]);
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -107,6 +108,13 @@ export function TrainingDialog({ onClose }: Props) {
             <div>
               <strong>{stats.executions}</strong>
               <span>成功执行样本</span>
+            </div>
+          </div>
+          <div className="stat-card">
+            <Database size={18} />
+            <div>
+              <strong>{stats.scenes}</strong>
+              <span>聚合场景</span>
             </div>
           </div>
           <div className="stat-card">

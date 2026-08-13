@@ -37,7 +37,7 @@ export interface TrajectoryRecord {
 // ──── IndexedDB 封装 ────
 
 const DB_NAME = "aiggb";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // 与 trainingStore 共享 DB：v2 含 executions/scenes/trajectories
 const STORE_NAME = "trajectories";
 const MAX_RECORDS = 500; // 上限 500 条，超出删最旧
 
@@ -52,10 +52,13 @@ function openDb(): Promise<IDBDatabase> {
   _dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
+      // 共享 DB（与 trainingStore 同库）：升级时确保全部 store 存在
       const db = req.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: "id" });
-        store.createIndex("ts", "ts");
+      for (const name of ["executions", "scenes", "trajectories"]) {
+        if (!db.objectStoreNames.contains(name)) {
+          const store = db.createObjectStore(name, { keyPath: "id" });
+          store.createIndex("ts", "ts");
+        }
       }
     };
     req.onsuccess = () => resolve(req.result);

@@ -45,6 +45,8 @@ interface PersistedState {
   privacyAcknowledged: boolean;
   /** Feature Flag: true = 工具调用代理模式, false = 两阶段流水线（默认） */
   agentMode: boolean;
+  /** 模板使用频率（模板 id → 点击次数），供 TemplateGallery 排序（偏好记忆） */
+  templateUsage: Record<string, number>;
 }
 
 interface AppState extends PersistedState {
@@ -56,6 +58,11 @@ interface AppState extends PersistedState {
    * 用于修复回路全失败回滚时、快照不可用情况下的兜底重建（newConstruction + 重放）。
    */
   constructionLog: string[];
+  /**
+   * 画布符号表（对象名/类型/定义）——GGB listener 实时同步。
+   * 供 Phase 2 编译注入画布状态（多轮连贯性，AI 不遗忘已建对象）。
+   */
+  symbolTable: Array<{ name: string; type: string; cmd: string }>;
   isThinking: boolean;
 
   // setters
@@ -67,6 +74,8 @@ interface AppState extends PersistedState {
   setThinking: (b: boolean) => void;
   setAppName: (name: "classic" | "3d") => void;
   setAgentMode: (on: boolean) => void;
+  setSymbolTable: (symbols: Array<{ name: string; type: string; cmd: string }>) => void;
+  recordTemplateUse: (id: string) => void;
 
   appendMessage: (t: ChatTurn) => void;
   clearMessages: () => void;
@@ -91,10 +100,12 @@ export const useAppStore = create<AppState>()(
       domain: "general",
       privacyAcknowledged: false,
       agentMode: false,
+      templateUsage: {},
       ggbApi: null,
       ggbAppName: "classic",
       messages: [],
       constructionLog: [],
+      symbolTable: [],
       isThinking: false,
 
       setConfig: c => set({ config: c }),
@@ -105,6 +116,10 @@ export const useAppStore = create<AppState>()(
       setThinking: b => set({ isThinking: b }),
       setAppName: name => set({ ggbAppName: name }),
       setAgentMode: on => set({ agentMode: on }),
+      setSymbolTable: symbols => set({ symbolTable: symbols }),
+      recordTemplateUse: id => set(state => ({
+        templateUsage: { ...(state.templateUsage ?? {}), [id]: ((state.templateUsage ?? {})[id] ?? 0) + 1 }
+      })),
 
       appendMessage: t => set(state => ({ messages: [...state.messages, t] })),
 
@@ -159,7 +174,8 @@ export const useAppStore = create<AppState>()(
         config: state.config,
         domain: state.domain,
         privacyAcknowledged: state.privacyAcknowledged,
-        agentMode: state.agentMode
+        agentMode: state.agentMode,
+        templateUsage: state.templateUsage
       }),
       // v1→v2：移除 highschool 分类，旧值回归 general
       // v2→v3：flashModel → lightModel

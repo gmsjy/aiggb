@@ -11,10 +11,14 @@
 import type { RefinedSpec } from "./specSchema";
 import { TEMPLATES } from "./templates";
 import type { Domain } from "./prompts";
+import { refinePromptHash } from "./refinePrompt";
 
-const STORAGE_KEY = "aiggb_spec_cache_v1";
+const STORAGE_KEY = "aiggb_spec_cache_v2"; // v2: 键含 prompt_hash，refinePrompt 更新后旧缓存自动失效
 const TTL_MS = 30 * 24 * 3600 * 1000; // 30 天
 const MAX_ENTRIES = 50;
+
+/** Phase 1 prompt 版本指纹（模块加载时计算一次）——prompt 变化即缓存键变化 */
+const PROMPT_HASH = refinePromptHash();
 
 /** 最小键值存储接口（浏览器 localStorage 的鸭子类型子集） */
 export interface SpecStorage {
@@ -92,14 +96,14 @@ function objectFingerprint(existingObjects: string[]): string {
   return meaningful.length > 0 ? meaningful.join(",") : "_fresh";
 }
 
-/** 缓存键：领域 | 模式 | 画布指纹 | 归一化输入 */
+/** 缓存键：prompt_hash | 领域 | 模式 | 画布指纹 | 归一化输入 */
 function cacheKey(
   domain: Domain,
   mode: "2d" | "3d",
   existingObjects: string[],
   text: string
 ): string {
-  return `${domain}|${mode}|${objectFingerprint(existingObjects)}|${norm(text)}`;
+  return `${PROMPT_HASH}|${domain}|${mode}|${objectFingerprint(existingObjects)}|${norm(text)}`;
 }
 
 // ── 对外接口 ──

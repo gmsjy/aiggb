@@ -4,15 +4,18 @@
  * 按 domain（数学 general / 物理 physics）+ mode（平面 2d / 立体 3d）双重分类。
  * 精简版：每个分类（物理2D / 数学2D / 3D）各保留 4 个最有代表性的模板。
  *
- * 提示词编写原则（v2.1 —— 精简优化版）：
+ * 提示词编写原则（v2.2 —— 物理正确性修正，基于 v2.1 精简）：
  *   - 【训练闭环】模板是「意图→成功命令」训练样本的最佳来源：点击 → specCache 精确命中 →
  *     Phase 2 编译 → 首次执行全成功 → 自动存训练库。因此必须"一次成功率高"。
  *   - 【保留关键，精简样板】保留 Phase 2 编译必需的信息（slider 完整参数、数学公式、
  *     矢量 to 坐标表达式、复杂 Sequence 命令、视窗范围），删冗余（op 前缀、重复样式、长解释）。
  *   - 【矢量铁律】矢量 to 一律用坐标表达式（"P+(dx,dy)"），禁止 Point+Point；/k 写进每个分量。
  *   - 【Pre-flight 兼容】slider 保证 min<max / step>0 / value∈[min,max]。
- *   - 物理模板注入 g=9.8；分母 +0.001 防除零；3D 遵循铁律（Cross 两步法、Cube 两点式、
- *     禁 SetViewDirection/SetFilling/SetPointSize/SetCaption/ZoomIn）。
+ *   - 物理模板注入 g=9.8；分母 +0.001 防除零；3D 遵循铁律（Cross 两步法、Cube 两点式或
+ *     显式顶点+Prism、禁 SetViewDirection/SetFilling/SetPointSize/SetCaption/ZoomIn）。
+ *   - 【物理正确性 v2.2】斜抛 min/max 落地钳制防穿地；圆周 v/a 同缩放保持 |a|=ω|v|；单摆
+ *     θ₀≤45° 并 Text 标注近似误差；3D 截面显式声明全部顶点 + Prism 避开 Cube 自动命名冲突；
+ *     圆锥曲线抛物线用独立参数 p（避免与椭圆 a 一词两义）。
  */
 
 export interface Template {
@@ -30,17 +33,17 @@ export const TEMPLATES: Template[] = [
   // ═══════ 2D · 物理（4 个） ═══════
   {
     id: "projectile", icon: "🏐", title: "斜抛运动", subtitle: "抛物线轨迹 + 速度矢量",
-    prompt: "斜抛运动。注入 g=9.8。参数：v0=20(1~50 step1 m/s 初速)，theta=π/4(0~π/2 step0.01 rad 仰角)，t=0(0~5 step0.02 s)。质点 P=(v0*cos(theta)*t, v0*sin(theta)*t-0.5*g*t^2) 红。矢量 vArrow: P→P+(v0*cos(theta)/5, (v0*sin(theta)-g*t)/5) 绿#43a047。轨迹 P 蓝拖尾。视窗 -2~50 × -2~25。轴 x/m y/m。动画 t increasing。",
+    prompt: "斜抛运动。注入 g=9.8。参数：v0=20(1~50 step1 m/s 初速)，theta=π/4(0~π/2 step0.01 rad 仰角)，t=0(0~5 step0.02 s)。tf=2*v0*sin(theta)/g（飞行时间），reach=v0^2*sin(2*theta)/g（射程）。P=(min(v0*cos(theta)*t, reach), max(0, v0*sin(theta)*t-0.5*g*t^2)) 红（落地钳制：y≥0、x≤射程，防穿地）。ground: y=0 灰虚线（地面）。vx=If(t<tf, v0*cos(theta), 0)，vy=If(t<tf, v0*sin(theta)-g*t, 0)。vArrow: P→P+(vx/5, vy/5) 绿#43a047（落地后速度归零）。轨迹 P 蓝拖尾。视窗 -2~50 × -2~25。轴 x/m y/m。动画 t increasing。",
     domain: "physics", mode: "2d"
   },
   {
     id: "circular", icon: "🎯", title: "圆周运动", subtitle: "向心加速度 + 转速可调",
-    prompt: "匀速圆周运动。参数：r=2(0.5~3 step0.1 m 半径)，omega=1(0.5~5 step0.1 rad/s 角速度)，t=0(0~10 step0.02 s)。O=(0,0)，P=(r*cos(omega*t), r*sin(omega*t)) 红。矢量 vArrow: P→P+(-r*omega*sin(omega*t)/3, r*omega*cos(omega*t)/3) 绿#43a047。矢量 aArrow(向心): P→P+(-r*omega^2*cos(omega*t)/5, -r*omega^2*sin(omega*t)/5) 橙#fb8c00。Segment(O,P) 蓝虚线。轨迹 P 蓝。视窗 -4~4 × -4~4。动画 t 自动。",
+    prompt: "匀速圆周运动。参数：r=2(0.5~3 step0.1 m 半径)，omega=1(0.5~5 step0.1 rad/s 角速度)，t=0(0~10 step0.02 s)。O=(0,0)，P=(r*cos(omega*t), r*sin(omega*t)) 红。vArrow: P→P+(-r*omega*sin(omega*t)/3, r*omega*cos(omega*t)/3) 绿#43a047。aArrow(向心): P→P+(-r*omega^2*cos(omega*t)/3, -r*omega^2*sin(omega*t)/3) 橙#fb8c00（v/a 同除 3，保持 |a|=ω|v|）。Segment(O,P) 蓝虚线。轨迹 P 蓝。视窗 -4~4 × -4~4。动画 t 自动。",
     domain: "physics", mode: "2d"
   },
   {
     id: "pendulum", icon: "🪀", title: "单摆", subtitle: "小角近似 · 周期摆动",
-    prompt: "单摆（小角近似）。注入 g=9.8。参数：L=1(0.1~2 step0.05 m 摆长)，theta0=π/6(0~π/3 step0.01 rad 初角)，t=0(0~10 step0.02 s)。omega=sqrt(g/(L+0.001))，theta=theta0*cos(omega*t)。O=(0,0)，M=(L*sin(theta), -L*cos(theta)) 红。Segment(O,M) 蓝。轨迹 M 蓝拖尾。视窗 -1.5~1.5 × -1.5~0.3。轴 x/m y/m。动画 t oscillating。",
+    prompt: "单摆（小角近似）。注入 g=9.8。参数：L=1(0.1~2 step0.05 m 摆长)，theta0=π/6(0~π/4 step0.01 rad 初角)，t=0(0~10 step0.02 s)。omega=sqrt(g/(L+0.001))，theta=theta0*cos(omega*t)。O=(0,0)，M=(L*sin(theta), -L*cos(theta)) 红。Segment(O,M) 蓝。轨迹 M 蓝拖尾。eval Text(\"小角近似：θ₀≤45°，周期误差<4%\", (0.7,0.1)) 深灰。视窗 -1.5~1.5 × -1.5~0.3。轴 x/m y/m。动画 t oscillating。",
     domain: "physics", mode: "2d"
   },
   {
@@ -62,7 +65,7 @@ export const TEMPLATES: Template[] = [
   },
   {
     id: "conic", icon: "🥚", title: "圆锥曲线", subtitle: "椭圆 · 双曲线 · 抛物线对比",
-    prompt: "圆锥曲线对比。参数：a=3(0.5~4 step0.1 长半轴)，b=2(0.5~4 step0.1 短半轴)。c=sqrt(abs(a^2-b^2)+0.001)。椭圆 x^2/a^2+y^2/b^2=1 蓝。焦点 F1=(c,0) F2=(-c,0) 红。双曲线 x^2/a^2-y^2/b^2=1 绿虚线。抛物线 y=x^2/(4a) 紫虚线。视窗 -6~6 × -4~4。轴 x y。",
+    prompt: "圆锥曲线对比。参数：a=3(0.5~4 step0.1 半长轴)，b=2(0.5~4 step0.1 半短轴)，p=3(0.5~4 step0.1 抛物线焦距)。椭圆 x^2/a^2+y^2/b^2=1 蓝。双曲线 x^2/a^2-y^2/b^2=1 绿虚线。抛物线 y=x^2/(4p) 紫虚线（独立参数 p，不借用椭圆 a）。ce=sqrt(abs(a^2-b^2)+0.001)（椭圆焦距）。椭圆焦点 E1=If(a>=b, (ce,0), (0,ce)) E2=If(a>=b, (-ce,0), (0,-ce)) 红。ch=sqrt(a^2+b^2+0.001)（双曲线焦距，注意是加号）。双曲线焦点 H1=(ch,0) H2=(-ch,0) 绿。抛物线焦点 Fp=(0,p) 紫。视窗 -6~6 × -4~4。轴 x y。",
     domain: "general", mode: "2d"
   },
   {
@@ -74,7 +77,7 @@ export const TEMPLATES: Template[] = [
   // ═══════ 3D 立体（4 个，3D 模式下全量展示） ═══════
   {
     id: "cube-section", icon: "📦", title: "正方体截面", subtitle: "平面 ACF 截正方体",
-    prompt: "3D 正方体截面。A=(0,0,0) B=(3,0,0)，cube=Cube(A,B)（两点式）半透明蓝。C=(3,3,0) F=(0,0,3)。截面=IntersectPath(Plane(A,C,F), cube) 红。A/C/F 红。视窗 xmin=-2 xmax=6 ymin=-2 ymax=6 zmin=-1 zmax=5。3D 禁 SetViewDirection/SetFilling/SetPointSize/SetCaption/ZoomIn。",
+    prompt: "3D 正方体截面。顶点全显式声明：A=(0,0,0) B=(3,0,0) C=(3,3,0) D=(0,3,0)（底面），E=(0,0,3) F=(3,0,3) G=(3,3,3) H=(0,3,3)（顶面，E 在 A 正上方）。cube=Prism(Polygon(A,B,C,D), E) 半透明蓝（显式顶点+Prism 构造，避免 Cube(A,B) 自动顶点命名与 C/F 显式声明冲突）。截面=IntersectPath(Plane(A,C,F), cube) 红（三角形 ACF）。A/C/F 红。视窗 xmin=-2 xmax=6 ymin=-2 ymax=6 zmin=-1 zmax=5。3D 禁 SetViewDirection/SetFilling/SetPointSize/SetCaption/ZoomIn。",
     domain: "general", mode: "3d"
   },
   {

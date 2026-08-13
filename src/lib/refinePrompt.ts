@@ -55,3 +55,22 @@ spec 内容分节：
 
 ${physicsSection}`;
 }
+
+/** djb2 字符串哈希（零依赖，供 prompt 版本指纹使用） */
+export function promptHash(...parts: string[]): string {
+  let h = 5381;
+  for (const p of parts) {
+    for (let i = 0; i < p.length; i++) {
+      h = ((h << 5) + h + p.charCodeAt(i)) >>> 0;
+    }
+  }
+  return h.toString(36);
+}
+
+/**
+ * Phase 1 精炼 prompt 的版本指纹。
+ * 改 refinePrompt 内容 → hash 变 → specCache 键变 → 旧缓存失效（防止旧 prompt 的缓存命中新 prompt）。
+ */
+export function refinePromptHash(): string {
+  return promptHash(buildRefinePrompt("general"), buildRefinePrompt("physics"));
+}

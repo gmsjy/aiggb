@@ -43,12 +43,16 @@ import {
 } from "./agentLoop";
 import { toolCallToEvalCommands } from "./toolExecutor";
 import { saveTrajectory } from "./trajectoryStore";
+import { recordFailure, refreshTraps, buildTrapPrompt } from "./trapStore";
 import {
   searchExecution,
+  searchScene,
   storeExecution,
   buildExecutionRecord,
   buildExamplePrompt,
+  buildScenePrompt,
   type ExecutionRecord,
+  type SceneRecord,
 } from "./trainingStore";
 
 export const MAX_REPAIR = 2;
@@ -92,6 +96,8 @@ export interface PipelineDeps {
   evalSatisfactionImpl?: typeof import("./satisfactionEval").evaluateSatisfaction;
   /** 训练库检索（Phase 2 注入参考案例）。注入以支持单测 mock */
   trainingSearchImpl?: (spec: string) => Promise<ExecutionRecord | null>;
+  /** L2 场景检索（Phase 2 注入场景模式，优先于单案例）。注入以支持单测 mock */
+  sceneSearchImpl?: (spec: string) => Promise<SceneRecord | null>;
   /** 训练库存储（成功命令）。注入以支持单测 mock */
   trainingStoreImpl?: (rec: ExecutionRecord) => void;
   /** 解析后的轻量模型名（用于精炼/评估） */
@@ -241,18 +247,38 @@ function waitReview(
 async function runPhase2(finalSpec: string, deps: PipelineDeps): Promise<void> {
   deps.setThinking(true);
   try {
-    // ★ 训练数据闭环：检索相似成功案例，注入 user message 末尾（DeepSeek recency bias）
-    //    仅当案例命令数 ≥ 3 时注入；否则不加（避免误导）
-    const searchFn = deps.trainingSearchImpl ?? searchExecution;
-    let example: ExecutionRecord | null = null;
+    // ★ 分层记忆注入（L2 场景优先，L1 案例兜底）——DeepSeek recency bias 放 user message 末尾
+    //    - 场景模式（≥2 次成功的结构骨架）→ 解决单案例硬套参数
+    //    - 单案例 → 兜底，仅当命令数 ≥ 3 时注入（避免误导）
+    const sceneSearchFn = deps.sceneSearchImpl ?? searchScene;
+    let scene: SceneRecord | null = null;
     try {
-      example = await searchFn(finalSpec);
+      scene = await sceneSearchFn(finalSpec);
     } catch {
-      example = null; // 检索失败不阻断编译
+      scene = null;
     }
-    const userContent = (example && example.commands.length >= 3)
-      ? `${finalSpec}\n\n${buildExamplePrompt(example)}`
-      : finalSpec;
+
+    // ★ 画布状态注入（多轮连贯性：AI 知道已建对象，增量修改不重建）
+    const objs = deps.getApi()?.getAllObjectNames() ?? [];
+    const canvasStatus = objs.length > 0
+      ? `\n[当前画布已有对象：${objs.slice(0, 30).join(", ")}${objs.length > 30 ? "…" : ""}]`
+      : "\n[当前画布为空]";
+
+    let userContent = `${finalSpec}${canvasStatus}`;
+    if (scene && scene.heat >= 2 && scene.pattern.length >= 3) {
+      userContent = `${finalSpec}${canvasStatus}\n\n${buildScenePrompt(scene)}`;
+    } else {
+      const searchFn = deps.trainingSearchImpl ?? searchExecution;
+      let example: ExecutionRecord | null = null;
+      try {
+        example = await searchFn(finalSpec);
+      } catch {
+        example = null;
+      }
+      if (example && example.commands.length >= 3) {
+        userContent = `${finalSpec}${canvasStatus}\n\n${buildExamplePrompt(example)}`;
+      }
+    }
 
     const phase2Messages: ChatMessage[] = [
       { role: "system", content: buildCompilePrompt(deps.domain, deps.appMode) },
@@ -398,8 +424,17 @@ async function executeAndRepair(
 
     const curApi = deps.getApi() ?? api;
     const existingObjs = curApi.getAllObjectNames() ?? [];
+
+    // ★ known_traps 动态升级：记录本次失败（两阶段模式），并从 Agent 失败轨迹回填
+    for (const f of failures) {
+      void recordFailure(extractCmdName(f.cmd), f.error).catch(() => {});
+    }
+    const traps = await refreshTraps().catch(() => []);
+
     const checkerSystem = buildCheckerPrompt(failures, existingObjs, originalRequest);
     let repairUserMsg = JSON.stringify(response);
+    const trapNote = buildTrapPrompt(traps);
+    if (trapNote) repairUserMsg = trapNote + "\n\n" + repairUserMsg;
     if (ragRepairNote) repairUserMsg = ragRepairNote + "\n\n" + repairUserMsg;
 
     const chatFn = deps.chatImpl ?? defaultChat;
@@ -429,6 +464,12 @@ async function executeAndRepair(
       // 静默：训练库失败不影响主流程
     }
   }
+}
+
+/** 从失败命令提取首命令名（"obj = Cmd(...)" → "Cmd"；无法提取返回 "eval"） */
+function extractCmdName(cmd: string): string {
+  const m = /^(?:\w+\s*=\s*)?(\w+)\s*\(/.exec(cmd.trim());
+  return m ? m[1] : "eval";
 }
 
 /** RAG 模糊纠正：就地修正 eval 命令；返回可注入修复上下文的说明（无纠正/无建议时为 null） */

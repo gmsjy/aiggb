@@ -18,7 +18,10 @@ import {
   jaccardSimilarity,
   buildExamplePrompt,
   buildExecutionRecord,
+  buildScenePrompt,
+  findMergeTarget,
   type ExecutionRecord,
+  type SceneRecord,
 } from "../src/lib/trainingStore";
 import { runPipeline, type PipelineDeps, type ReviewHandle } from "../src/lib/pipeline";
 import { MockGGB } from "./mockGGB";
@@ -54,6 +57,40 @@ test("buildExamplePrompt 含命令 + 勿照搬提示", () => {
   const prompt = buildExamplePrompt(rec);
   assert.ok(prompt.includes("v0 = Slider(1,50,1)"), "应含成功命令");
   assert.ok(prompt.includes("勿照搬"), "应含勿照搬提示");
+});
+
+// ── L2 场景聚合（落地 B） ──
+
+test("findMergeTarget：相似 spec 命中场景，不相似返回 null", () => {
+  const scene: SceneRecord = {
+    id: "s1", specSample: "斜抛运动 v0=20 θ=45°", heat: 3, lastSeen: 1,
+    pattern: [{ op: "eval", cmd: "P = (v0*cos(t), v0*sin(t))" } as Command],
+  };
+
+  // 相似斜抛 → 命中并入
+  const hit = findMergeTarget([scene], "斜抛运动 v0=15 θ=30°");
+  assert.equal(hit?.id, "s1", "相似斜抛应命中场景");
+
+  // 无关场景 → null（新建）
+  const miss = findMergeTarget([scene], "画一个圆半径为3");
+  assert.equal(miss, null, "无关 spec 不应命中");
+});
+
+test("buildScenePrompt 标注结构模式 + 勿复制数值", () => {
+  const scene: SceneRecord = {
+    id: "s1", specSample: "斜抛运动", heat: 5, lastSeen: 1,
+    pattern: [
+      { op: "eval", cmd: "v0 = Slider(1,50,1)" } as Command,
+      { op: "eval", cmd: "P = (v0*cos(t), v0*sin(t))" } as Command,
+      { op: "vector", name: "vArrow", from: "P", to: "P+(dx,dy)" } as Command,
+    ],
+  };
+
+  const prompt = buildScenePrompt(scene);
+  assert.ok(prompt.includes("5 次成功"), "应含成功次数");
+  assert.ok(prompt.includes("结构模式"), "应标注结构模式");
+  assert.ok(prompt.includes("禁止复制"), "应禁止复制数值");
+  assert.ok(prompt.includes("v0 = Slider"), "应含命令骨架");
 });
 
 // ── pipeline 注入 ──
@@ -116,6 +153,36 @@ test("Phase 2 命中训练库 → 参考案例注入 user message", async () => 
   const lastUser = [...phase2Msgs].reverse().find(m => m.role === "user")!;
   assert.ok(lastUser.content.includes("参考案例"), "应注入参考案例");
   assert.ok(lastUser.content.includes("v0 = Slider(1,50,1)"), "案例应含命令");
+});
+
+test("Phase 2 命中 L2 场景 → 注入场景模式（优先于单案例）", async () => {
+  const scene: SceneRecord = {
+    id: "sc1", specSample: "斜抛运动 v0=20", heat: 5, lastSeen: 1,
+    pattern: [
+      { op: "eval", cmd: "v0 = Slider(1,50,1)" } as Command,
+      { op: "eval", cmd: "P = (v0*cos(theta)*t, v0*sin(theta)*t)" } as Command,
+      { op: "vector", name: "vArrow", from: "P", to: "P+(dx,dy)" } as Command,
+    ],
+  };
+
+  const captured: ChatMessage[][] = [];
+  let sceneSearchCalled = false;
+  const { deps } = makeHarness({
+    chatRawImpl: async () => JSON.stringify({ spec: "斜抛运动 v0=20" }),
+    sceneSearchImpl: async () => { sceneSearchCalled = true; return scene; },
+    chatImpl: (async (_c, msgs) => {
+      captured.push(msgs as ChatMessage[]);
+      return { explanation: "完成", commands: [] } as AIResponse;
+    }) as PipelineDeps["chatImpl"],
+  });
+
+  await runPipeline("画斜抛", deps, { onReview: autoConfirm });
+
+  assert.ok(sceneSearchCalled, "应调用场景检索");
+  const phase2Msgs = captured.find(msgs => msgs[0].role === "system")!;
+  const lastUser = [...phase2Msgs].reverse().find(m => m.role === "user")!;
+  assert.ok(lastUser.content.includes("已验证场景模式"), "应注入场景模式");
+  assert.ok(lastUser.content.includes("结构模式"), "应标注结构模式");
 });
 
 test("训练库未命中 → 不注入，user message 是纯规格", async () => {

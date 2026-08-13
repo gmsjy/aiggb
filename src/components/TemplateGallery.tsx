@@ -15,6 +15,8 @@ interface Props {
 export function TemplateGallery({ onClose }: Props) {
   const domain = useAppStore(s => s.domain);
   const ggbAppName = useAppStore(s => s.ggbAppName);
+  const templateUsage = useAppStore(s => s.templateUsage);
+  const recordTemplateUse = useAppStore(s => s.recordTemplateUse);
   const currentMode: "2d" | "3d" = ggbAppName === "3d" ? "3d" : "2d";
 
   const onPick = (prompt: string) => {
@@ -26,6 +28,12 @@ export function TemplateGallery({ onClose }: Props) {
   const items = currentMode === "3d"
     ? TEMPLATES.filter(t => t.mode === "3d")
     : TEMPLATES.filter(t => t.mode === "2d" && t.domain === domain);
+
+  // ★ 偏好记忆：按使用频率降序排列（常用模板靠前），未用过保序
+  const usage = templateUsage ?? {};
+  const sorted = [...items].sort((a, b) =>
+    (usage[b.id] ?? 0) - (usage[a.id] ?? 0)
+  );
 
   const title = currentMode === "3d"
     ? "3D 立体场景模板"
@@ -60,8 +68,11 @@ export function TemplateGallery({ onClose }: Props) {
               {emptyHint}
             </p>
             <div className="template-grid">
-              {items.map(t => (
-                <button key={t.id} className="template-card" onClick={() => onPick(t.prompt)}>
+              {sorted.map(t => (
+                <button key={t.id} className="template-card" onClick={() => {
+                  recordTemplateUse(t.id);
+                  onPick(t.prompt);
+                }}>
                   <span className="template-icon">{t.icon}</span>
                   <span className="template-title">{t.title}</span>
                   <span className="template-subtitle">{t.subtitle}</span>
