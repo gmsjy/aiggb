@@ -13,6 +13,7 @@
     "test:unit": "node --test --import tsx tests/specCache.test.ts tests/pipeline.test.ts tests/ggbBridge.test.ts tests/ggbKB.test.ts tests/toolExecutor.test.ts tests/agentLoop.test.ts tests/agentSmoke.test.ts tests/satisfactionEval.test.ts tests/trainingStore.test.ts tests/trajectory-replay.test.ts tests/trapStore.test.ts",
     "test:replay": "tsx tests/runner.ts",
     "test:trajectory": "tsx tests/trajectory-replay.ts",
+    "test:e2e": "tsx tests/euclid-e2e.ts",
     "test:record": "cross-env TEST_MODE=record tsx tests/runner.ts",
     "test:smoke": "cross-env TEST_MODE=smoke tsx tests/runner.ts",
     "test:drift": "cross-env DRIFT_BASELINE=0 tsx tests/drift-monitor.ts",

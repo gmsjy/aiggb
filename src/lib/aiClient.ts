@@ -248,7 +248,9 @@ export function getProviderCapabilities(config: AIConfig): ProviderCapabilities 
     (config.baseURL ?? "").toLowerCase(),
   ].join(" ");
   // 已知支持 json_schema 的 provider 名单
-  if (/openai|deepseek|glm|moonshot|zhipu|siliconflow|api\.together|fireworks/.test(fp)) {
+  // ★ DeepSeek 实测：v4-flash 端点返回 400 "response_format type unavailable"（只支持 json_object）
+  //    → DeepSeek 保守降级 json_object（运行时若 json_schema 400 会自动回退，见 chat()）
+  if (/openai|glm|moonshot|zhipu|siliconflow|api\.together|fireworks/.test(fp)) {
     return { jsonSchema: true };
   }
   return { jsonSchema: false };
@@ -309,7 +311,8 @@ export async function chat(
   };
 
   // ★ 优先 json_schema（结构化约束更强），降级 json_object
-  if (caps.jsonSchema) {
+  const usedJsonSchema = caps.jsonSchema;
+  if (usedJsonSchema) {
     body.response_format = {
       type: "json_schema",
       json_schema: {
@@ -322,7 +325,20 @@ export async function chat(
     body.response_format = { type: "json_object" };
   }
 
-  const data = await callAPI(config, body, signal);
+  // ★ 运行时降级：部分 provider（如 DeepSeek v4-flash）声明支持但端点实际返回 400
+  //    "response_format type unavailable" → 回退 json_object 重试一次
+  let data: ChatCompletionResponse;
+  try {
+    data = await callAPI(config, body, signal);
+  } catch (err) {
+    if (usedJsonSchema && err instanceof AIError && /400/.test(err.message)) {
+      console.warn("[aiClient] json_schema 请求被拒（400），回退 json_object 重试");
+      body.response_format = { type: "json_object" };
+      data = await callAPI(config, body, signal);
+    } else {
+      throw err;
+    }
+  }
 
   const raw = data.choices?.[0]?.message?.content ?? "";
   if (!raw) {
