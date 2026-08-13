@@ -106,6 +106,9 @@ code {
 .main-split {
   display: grid;
   grid-template-columns: minmax(340px, 380px) minmax(0, 1fr) minmax(320px, 420px);
+  /* ★ 必须定义行占满剩余高度：grid-auto-rows:auto 时行高由内容决定，
+       窗口变高 → main-split 变高但行不填满 → GGB 容器不随窗口 resize。 */
+  grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
   transition: grid-template-columns 0.2s ease;

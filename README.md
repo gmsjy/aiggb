@@ -66,6 +66,13 @@ AiGGB 提供两种执行模式，可在设置面板切换：
 
 AI 逐步调用工具（创建点/滑块/矢量/执行命令/查询对象…），每步获得执行反馈后即时调整。适合复杂构造场景。
 
+关键机制：
+- **23 个工具**，分 safe / dangerous 两级（`eval_raw`/`delete`/`clear` 需用户确认，可信任会话后自动通过）
+- **参数归一化**：Zod 校验 → 安全拦截 → **preFlight 语义预检**（负半径、min≥max、除零、依赖对象缺失在调用 GGB 前拦截，可读错误喂回 AI 自行修正）
+- **未知工具过滤**：AI 臆造的工具名直接返回错误，不执行
+- **连续失败熔断**：3 轮执行失败自动中止（参数类错误不计入，给模型自我修正机会）
+- **可重放**：工具调用 → `toolCallToEvalCommands` 映射为 GGB 命令，undo 回滚与训练回放复用同一套
+
 ---
 
 ## 如何写好提示词
@@ -259,7 +266,21 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
 3. **清洗层**：BOM 剥离 + Code Fence 清理
 4. **校验层**：Zod discriminatedUnion 校验（硬黑名单 + XSS/注入拦截）
 5. **纠正层**：RAG 命令后置纠正（Levenshtein ≤2 + 臆造映射 + 参数个数校验）
-6. **执行层**：Pre-check（animate/trace 目标存在）+ Point+Point 自动重写 + 修复回路
+6. **执行层**：Pre-check（animate/trace 目标存在）+ Point+Point 自动重写 + Agent preFlight 语义预检（负半径/min≥max/除零/依赖缺失）+ 修复回路
+
+---
+
+## 分层记忆系统
+
+Agent 模式运行时会沉淀可复用的经验，形成训练数据闭环（`trapStore.ts` / `trainingStore.ts` / `trajectoryStore.ts`，IndexedDB 持久化）：
+
+- **prompt_hash**：prompt 版本指纹，标记记忆所对应的 System Prompt 版本
+- **L2 场景**：按场景类型（单摆/电场/3D 几何…）分类的记忆索引
+- **known_traps**：已确认的 GGB 陷阱（如 Circle 第二参点/半径混淆）——模型踩过并修复后沉淀为规则，下次提前规避
+- **符号表**：画布对象名 + 类型快照，多轮修改直接引用
+- **偏好**：配色 / 命名 / 视窗风格的用户偏好
+
+每次 ReAct 轨迹（成功/失败）可回放（`npm run test:trajectory`），用当前执行层重放历史轨迹统计修复率，验证"越用越强"。
 
 ---
 
@@ -283,11 +304,16 @@ React 19 · Vite 8 · TypeScript 5 · Zustand 5 · Zod 3 · GeoGebra deployggb.j
 
 | 命令 | 说明 |
 |---|---|
-| `npm run test:unit` | 单测：pipeline 状态机 + specCache + satisfactionEval |
-| `npm run test:replay` | 离线回归（当前 59/63, 93.7%） |
+| `npm run test:unit` | **103 单测（0 API）**：pipeline 状态机 / specCache / ggbBridge / ggbKB / toolExecutor / agentLoop / agentSmoke / satisfactionEval / trainingStore / trajectory-replay / trapStore |
+| `npm run test:replay` | 离线回归 63 用例（当前 **63/63, 100%**） |
+| `npm run test:trajectory` | 用当前执行层重放历史失败轨迹，统计"越用越强"修复率（离线） |
 | `npm run test:record` | 在线全量 + 录制 fixtures（需 `.env` 配置 Key） |
-| `npm run test:drift` | 漂移监控 N=10 |
+| `npm run test:smoke` | 在线冒烟（static + clarify 子集） |
+| `npm run test:drift` / `test:baseline` | 漂移监控 N=10 / 更新基线（需 `.env` Key） |
 | `npm run test:hash` | 查看 prompt 指纹 |
+| `npm run prompt:iterate` / `analyze` / `golden` / `compare` | Prompt 迭代工作流 |
+| `npm run test:visual` / `test:visual-all` | Playwright 截图回归 |
+| `npm run test:e2e` | 欧几里得 E2E（需真实 Key） |
 
 详见 [SPEC.md](SPEC.md) 第 10B/10C 章。
 
@@ -300,34 +326,48 @@ src/
 ├── main.tsx / App.tsx         入口 + 顶层布局
 ├── components/
 │   ├── ChatPanel.tsx           对话面板（输入/消息渲染/store 依赖注入）
-│   ├── GGBCanvas.tsx           GeoGebra applet 嵌入（2D/3D 切换 + ResizeObserver）
+│   ├── GGBCanvas.tsx           GeoGebra applet 嵌入（2D/3D 切换 + ResizeObserver 跟随 + 心跳自愈）
 │   ├── Toolbar.tsx             工具栏（domain 切换/2D-3D/清空/撤销/导出）
 │   ├── TemplateGallery.tsx     模板库（按 domain + 模式双重过滤）
 │   ├── ScriptPanel.tsx         实时脚本展示
 │   ├── SettingsDialog.tsx      API 配置
 │   └── MessageBubble.tsx / PWAUpdatePrompt.tsx
 ├── lib/
-│   ├── pipeline.ts             两阶段管线状态机（Phase 1→确认→Phase 2→修复）
-│   ├── agentLoop.ts            Agent 模式 ReAct 循环（工具调用代理）
-│   ├── aiClient.ts             OpenAI 兼容客户端（chat/chatRaw）
-│   ├── ggbBridge.ts            op→GGB API 执行器 + 画布快照
+│   ├── pipeline.ts             两阶段管线状态机（Phase 1→确认→Phase 2→修复→评估）
+│   ├── agentLoop.ts            Agent 模式 ReAct 循环（工具调用 + 熔断 + 未知工具过滤）
+│   ├── toolExecutor.ts         Agent 工具执行（Zod 校验 + 安全拦截 + preFlight 语义预检 + 可重放映射）
+│   ├── tools.ts                Agent 工具定义（Function Calling schema + 安全分级）
+│   ├── aiClient.ts             OpenAI 兼容客户端（chat/chatRaw/agentChat 流式工具调用 + 3-role 模型）
+│   ├── ggbBridge.ts            op→GGB API 执行器 + 画布快照 + 批量渲染
 │   ├── schema.ts               Zod 校验 + CoordExpr 注入防护
-│   ├── prompts.ts              System/Compile/Checker Prompt
+│   ├── prompts.ts              System/Compile/Checker Prompt（few-shot 示例驱动）
 │   ├── refinePrompt.ts         Phase 1 精炼 Prompt
 │   ├── satisfactionEval.ts     满足度评估（flash 模型画布审查）
 │   ├── commandCorrect.ts       RAG 命令后置纠正
-│   ├── ggbKB.ts                命令知识库（~126 条 + 臆造映射）
-│   ├── tools.ts / toolExecutor.ts  Agent 工具定义与执行
+│   ├── ggbKB.ts                命令知识库（~170 条 + 臆造映射 + 重载签名表）
 │   ├── commands.ts             GGB 命令白名单/黑名单
-│   ├── runControl.ts           单轮运行生命周期管理
+│   ├── runControl.ts           单轮运行生命周期管理（AbortSignal/取消）
 │   ├── specCache.ts            意图→规格缓存（模板精确匹配 + LRU）
 │   ├── specSchema.ts           Phase 1 输出校验
 │   ├── physics.ts              物理常量
-│   ├── templates.ts            12 条模板（物理 4 + 数学 4 + 3D 4，按 domain + 模式过滤）
-│   └── providers.ts            AI 预置 provider
-├── store/useAppStore.ts        Zustand (persist v2)
+│   ├── templates.ts            12 条模板（物理 4 + 数学 4 + 3D 4）
+│   ├── providers.ts            AI 预置 provider
+│   ├── trainingStore.ts        训练数据闭环（IndexedDB 轨迹持久化）
+│   ├── trajectoryStore.ts      ReAct 轨迹构造（供回放/训练）
+│   └── trapStore.ts            分层记忆系统（prompt_hash / L2场景 / known_traps / 符号表 / 偏好）
+├── store/useAppStore.ts        Zustand (persist v3)
 ├── styles/                     CSS Variables + 全局样式
 └── types/ggb.d.ts              GGBAppletApi 类型
+
+tests/
+├── runner.ts + cases.json      63 用例离线回放运行器
+├── mockGGB.ts                  轻量 GeoGebra Mock（类型推断 + 依赖检查 + 重载校验）
+├── toolExecutor.test.ts        工具层 23 用例
+├── agentLoop.test.ts           Agent 状态机 13 用例
+├── agentSmoke.test.ts          Agent 端到端冒烟 4 场景（单摆/电场/3D/负例）
+├── pipeline.test.ts / specCache.test.ts / ggbBridge.test.ts / ggbKB.test.ts / satisfactionEval.test.ts
+├── trainingStore.test.ts / trajectory-replay.test.ts / trapStore.test.ts
+└── fixtures/                   录制的 AI 响应基线
 ```
 
 ---

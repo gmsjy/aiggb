@@ -181,15 +181,21 @@ export function GGBCanvas() {
         if (Math.abs(w - last.w) < 40 && Math.abs(h - last.h) < 40) continue;
         lastSizeRef.current = { w, h };
         // ★ 如果画布已有对象，跳过重建以免清空用户可见的绘图。
-        //    GeoGebra 内部有自适应 resize 逻辑；只有空画布（初始/刚切模式）才重建。
+        //    ★ 关键：观察目标是 ggb-panel（会随窗口响应），而非 #ggb-container——
+        //       GGB 注入时会给 #ggb-container 设内联 width/height 锁死初始尺寸，
+        //       监听它会导致尺寸永远不变、ResizeObserver 永不触发。
+        //    有对象时用 setSize 更新 GGB 内部尺寸（内联高度 + canvas 一并跟随）。
         const curApi = useAppStore.getState().ggbApi;
         if (curApi) {
           try {
             const objCount = curApi.getObjectNumber();
             console.log("[AiGGB:DIAG] ResizeObserver — getObjectNumber()=", objCount, "size=", w, "x", h);
             if (objCount > 0) {
-              console.log("[AiGGB] ResizeObserver: skip rebuild (canvas has objects, GeoGebra handles resize internally)");
-              // 通知 GeoGebra 触发重绘以适应新容器尺寸
+              console.log("[AiGGB] ResizeObserver: 同步 GGB 内部尺寸 " + w + "x" + h + "（保留对象，不重建）");
+              const apiAny = curApi as unknown as { setSize?: (w: number, h: number) => void };
+              if (typeof apiAny.setSize === "function") {
+                try { apiAny.setSize(w, h); } catch { /* 忽略 */ }
+              }
               try { curApi.refreshViews(); } catch { /* 忽略 */ }
               return;
             }
@@ -207,7 +213,10 @@ export function GGBCanvas() {
         }, REBUILD_DEBOUNCE);
       }
     });
-    ro.observe(containerEl);
+    // ★ 观察 ggb-panel（会随窗口响应）而非 #ggb-container：
+    //    GGB 注入后给容器设内联固定尺寸，监听容器本身会永不触发。
+    const observeTarget = (containerEl.parentElement as HTMLElement | null) ?? containerEl;
+    ro.observe(observeTarget);
 
     // ★★★ DIAGNOSTIC: MutationObserver 监控画布容器 DOM 变化 ★★★
     //    任何子元素增删 + 属性变化都会记录，用于定位画布DOM是否被谁移除了
