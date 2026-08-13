@@ -1,4 +1,4 @@
-import{a as e,i as t,n,o as r,r as i,t as a}from"./index-Bcz6DSRD.js";var o=e({satisfied:t(),issues:i(r().max(120)).max(5),summary:r().max(200)}),s=`你是 GeoGebra 图形逻辑审查员。对照【精炼绘图规格】检查【当前画布快照】，判断是否满足要求。
+import{a as e,i as t,n,o as r,r as i,t as a}from"./index-CaFlYSjG.js";var o=e({satisfied:t(),issues:i(r().max(120)).max(5),summary:r().max(200)}),s=`你是 GeoGebra 图形逻辑审查员。对照【精炼绘图规格】检查【当前画布快照】，判断是否满足要求。
 
 规则：
 1. 规格明确要求的对象是否都存在？
@@ -25,4 +25,4 @@ ${t.map((e,t)=>`${t+1}. ${e}`).join(`
 2. 保留画布上已正确的对象（不要删除或重建）
 3. 针对每个问题逐一修正：缺失对象 → 创建；颜色/样式不符 → 用 style op 修正；依赖缺失 → 补充声明
 4. 如果某个问题无法修复（如超出 GGB 能力），在 explanation 中说明`}export{u as buildSatisfactionRepairPrompt,l as evaluateSatisfaction};
-//# sourceMappingURL=satisfactionEval-DPRFR8LU.js.map
+//# sourceMappingURL=satisfactionEval-YCrMmRru.js.map
