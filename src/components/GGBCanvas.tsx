@@ -31,8 +31,17 @@ export function GGBCanvas() {
     let active = true; // 本代次是否仍有效
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
+    let loadTimer: ReturnType<typeof setTimeout> | null = null; // applet 加载超时守卫
     const webglCleanups: Array<() => void> = []; // WebGL 事件监听清理函数
     const mode = ggbAppName; // 固定本代次的目标模式
+
+    /** 取消挂起的加载超时守卫（成功加载 / 切代次时调用） */
+    const clearLoadTimer = () => {
+      if (loadTimer !== null) {
+        clearTimeout(loadTimer);
+        loadTimer = null;
+      }
+    };
 
     const inject = (w: number, h: number, force = false) => {
       if (!active) {
@@ -131,6 +140,7 @@ export function GGBCanvas() {
             const curDomain = useAppStore.getState().domain;
             applyCanvasConfig(api, curDomain, mode === "3d" ? "3d" : "2d");
             injectingRef.current = false;
+            clearLoadTimer(); // 加载成功：取消超时守卫
             console.log("[AiGGB] " + mode + " loaded");
 
             // ★ 3D 模式：监听 WebGL context 丢失/恢复（3D 渲染崩溃时画布可能白屏）
@@ -164,7 +174,25 @@ export function GGBCanvas() {
       if (typeof (applet as unknown as { setHTML5Codebase?: (url: string) => void }).setHTML5Codebase === "function") {
         (applet as unknown as { setHTML5Codebase: (url: string) => void }).setHTML5Codebase(codebaseUrl);
       }
-      applet.inject(CONTAINER_ID);
+
+      // ★ 加载超时守卫：若 appletOnLoad 迟迟不触发（deployggb/WebGL 卡死），复位 injectingRef，
+      //   确保心跳恢复等后续 inject 不被永久阻塞。超时后等 GGB 自行恢复或由心跳再次触发。
+      clearLoadTimer();
+      const LOAD_TIMEOUT_MS = 15000;
+      loadTimer = setTimeout(() => {
+        if (!active) return;
+        console.warn("[AiGGB:DIAG] ⚠ applet 加载超时（15s），复位 injectingRef 以允许重试");
+        injectingRef.current = false;
+      }, LOAD_TIMEOUT_MS);
+
+      try {
+        applet.inject(CONTAINER_ID);
+      } catch (err) {
+        // applet.inject 同步抛错：不能让 injectingRef 卡死
+        console.error("[AiGGB:DIAG] applet.inject() 抛错，复位 injectingRef：", err);
+        clearLoadTimer();
+        injectingRef.current = false;
+      }
     };
 
     // 初始注入或 appName 变化时重建
@@ -349,10 +377,10 @@ export function GGBCanvas() {
       if (objCount > 0 && newCount === 0 && !hasDockGlassPane && !recoveryInProgress) {
         recoveryInProgress = true;
         console.warn(`[AiGGB:DIAG] ⚠ 画布消失 (${objCount}对象, 非DockGlassPane) → 尝试 refreshViews`);
-        try { api.refreshViews(); } catch {}
+        try { api.refreshViews(); } catch { /* ignore */ }
         setTimeout(() => {
-          try { api.setRepaintingActive(true); } catch {}
-          try { api.setPerspective(mode === "3d" ? "3d" : "AG"); } catch {}
+          try { api.setRepaintingActive(true); } catch { /* ignore */ }
+          try { api.setPerspective(mode === "3d" ? "3d" : "AG"); } catch { /* ignore */ }
           recoveryInProgress = false;
         }, 300);
       }
@@ -363,6 +391,7 @@ export function GGBCanvas() {
       active = false;              // 作废本代次：pending retry/rebuild/inject 全部失效
       if (retryTimer !== null) clearTimeout(retryTimer);
       if (rebuildTimer !== null) clearTimeout(rebuildTimer);
+      clearLoadTimer();           // 取消加载超时守卫
       ro.disconnect();
       domMo.disconnect();
       clearInterval(heartbeat);

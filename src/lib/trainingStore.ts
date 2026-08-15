@@ -11,6 +11,7 @@
  */
 
 import type { Command } from "./schema";
+import { openGGBDB } from "./ggbDB";
 import {
   getAllTrajectories,
   importTrajectories,
@@ -89,10 +90,8 @@ export async function searchExecution(
   return bestScore >= threshold ? best : null;
 }
 
-// ──── IndexedDB 封装 ────
+// ──── IndexedDB 封装（共享库，schema 由 ggbDB 统一管理） ────
 
-const DB_NAME = "aiggb";
-const DB_VERSION = 2; // v2: 新增 scenes store
 const STORE_NAME = "executions";
 const SCENES_STORE = "scenes";
 const MAX_RECORDS = 300; // 上限 300 条，超出删最旧
@@ -100,34 +99,8 @@ const MAX_RECORDS = 300; // 上限 300 条，超出删最旧
 /** 场景聚合阈值：Jaccard ≥ 0.6 视为同场景并入 */
 const SCENE_MERGE_THRESHOLD = 0.6;
 
-/** 幂等创建 object store（多个模块共享 DB，onupgradeneeded 都调用，contains 防重复） */
-function ensureStore(db: IDBDatabase, name: string): void {
-  if (!db.objectStoreNames.contains(name)) {
-    const store = db.createObjectStore(name, { keyPath: "id" });
-    store.createIndex("ts", "ts");
-  }
-}
-
-let _dbPromise: Promise<IDBDatabase> | null = null;
-
 function openDb(): Promise<IDBDatabase> {
-  if (typeof indexedDB === "undefined") {
-    return Promise.reject(new Error("IndexedDB 不可用（非浏览器环境）"));
-  }
-  if (_dbPromise) return _dbPromise;
-
-  _dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      // 共享 DB：任一模块升级到 v2 时确保全部 store 存在（executions/scenes/trajectories）
-      ensureStore(req.result, "executions");
-      ensureStore(req.result, "scenes");
-      ensureStore(req.result, "trajectories");
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error("IndexedDB open 失败"));
-  });
-  return _dbPromise;
+  return openGGBDB().then(({ db }) => db);
 }
 
 async function getAllRecords(): Promise<ExecutionRecord[]> {

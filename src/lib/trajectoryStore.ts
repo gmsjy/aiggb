@@ -12,6 +12,7 @@
  */
 
 import type { AgentMessage } from "./aiClient";
+import { openGGBDB } from "./ggbDB";
 
 // ──── 轨迹记录类型 ────
 
@@ -34,37 +35,13 @@ export interface TrajectoryRecord {
   messages: AgentMessage[];
 }
 
-// ──── IndexedDB 封装 ────
+// ──── IndexedDB 封装（共享库，schema 由 ggbDB 统一管理） ────
 
-const DB_NAME = "aiggb";
-const DB_VERSION = 2; // 与 trainingStore 共享 DB：v2 含 executions/scenes/trajectories
 const STORE_NAME = "trajectories";
 const MAX_RECORDS = 500; // 上限 500 条，超出删最旧
 
-let _dbPromise: Promise<IDBDatabase> | null = null;
-
 function openDb(): Promise<IDBDatabase> {
-  if (typeof indexedDB === "undefined") {
-    return Promise.reject(new Error("IndexedDB 不可用（非浏览器环境）"));
-  }
-  if (_dbPromise) return _dbPromise;
-
-  _dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      // 共享 DB（与 trainingStore 同库）：升级时确保全部 store 存在
-      const db = req.result;
-      for (const name of ["executions", "scenes", "trajectories"]) {
-        if (!db.objectStoreNames.contains(name)) {
-          const store = db.createObjectStore(name, { keyPath: "id" });
-          store.createIndex("ts", "ts");
-        }
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error("IndexedDB open 失败"));
-  });
-  return _dbPromise;
+  return openGGBDB().then(({ db }) => db);
 }
 
 /**

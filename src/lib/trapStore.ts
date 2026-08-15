@@ -11,6 +11,7 @@
  */
 
 import { getAllTrajectories, type TrajectoryRecord } from "./trajectoryStore";
+import { openGGBDB } from "./ggbDB";
 
 // ── 类型 ──
 
@@ -29,8 +30,6 @@ export interface KnownTrap {
 
 // ── 常量 ──
 
-const DB_NAME = "aiggb";
-const DB_VERSION = 2;
 const STORE_NAME = "traps";
 /** 出现 ≥ 此次数自动提升为"已知陷阱"（注入 prompt） */
 export const MIN_OCCURRENCE = 3;
@@ -45,38 +44,20 @@ export function normalizeError(error: string): string {
     .trim();
 }
 
-// ── IndexedDB ──
+// ── IndexedDB（共享库，schema 在 ggbDB 统一管理） ──
 
-let _dbPromise: Promise<IDBDatabase> | null = null;
 let _trapsCache: KnownTrap[] | null = null; // 会话内缓存，防重复读库
 
-function openDb(): Promise<IDBDatabase> {
-  if (typeof indexedDB === "undefined") {
-    return Promise.reject(new Error("IndexedDB 不可用（非浏览器环境）"));
-  }
-  if (_dbPromise) return _dbPromise;
-
-  _dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      for (const name of ["executions", "scenes", "trajectories", "traps"]) {
-        if (!db.objectStoreNames.contains(name)) {
-          const store = db.createObjectStore(name, { keyPath: "id" });
-          store.createIndex("ts", "ts");
-        }
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error("IndexedDB open 失败"));
-  });
-  return _dbPromise;
+async function openDb(): Promise<IDBDatabase> {
+  const { db } = await openGGBDB();
+  return db;
 }
 
 async function readAllTraps(): Promise<KnownTrap[]> {
   if (_trapsCache) return _trapsCache;
   try {
     const db = await openDb();
+    if (!db.objectStoreNames.contains(STORE_NAME)) return [];
     const traps = await new Promise<KnownTrap[]>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, "readonly");
       const req = tx.objectStore(STORE_NAME).getAll();
@@ -90,17 +71,18 @@ async function readAllTraps(): Promise<KnownTrap[]> {
   }
 }
 
-async function upsertTrap(trap: KnownTrap): Promise<void> {
+async function upsertTrap(trap: KnownTrap): Promise<boolean> {
   try {
     const db = await openDb();
-    await new Promise<void>((resolve, reject) => {
+    return await new Promise<boolean>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, "readwrite");
       tx.objectStore(STORE_NAME).put(trap);
-      tx.oncomplete = () => resolve();
+      tx.oncomplete = () => resolve(true);
       tx.onerror = () => reject(tx.error ?? new Error("保存 trap 失败"));
     });
   } catch {
-    // 静默
+    // 静默；返回 false 供调用方判断是否同步会话缓存
+    return false;
   }
 }
 
@@ -113,29 +95,37 @@ export function findTrapTarget(traps: KnownTrap[], pattern: string): KnownTrap |
 
 /**
  * 记录一次失败（执行层失败时调用）：同 pattern 归并 occurrenceCount++，否则新建。
- * @returns 达到提升阈值与否（供调试/测试断言）
+ * 同步更新会话内缓存 _trapsCache（否则本会话内 refreshTraps 读到的仍是旧缓存，已知陷阱不生效）。
  */
 export async function recordFailure(toolName: string, error: string): Promise<void> {
   const pattern = `${toolName}: ${normalizeError(error)}`;
   if (!error.trim()) return;
   const traps = await readAllTraps();
   const existing = findTrapTarget(traps, pattern);
+  let next: KnownTrap;
   if (existing) {
-    await upsertTrap({
+    next = {
       ...existing,
       occurrenceCount: existing.occurrenceCount + 1,
       lastSeen: Date.now(),
-    });
+    };
   } else {
-    await upsertTrap({
+    next = {
       id: `trap-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       pattern,
       wrongExample: error.slice(0, 120),
       occurrenceCount: 1,
       lastSeen: Date.now(),
       source: "auto",
-    });
+    };
   }
+  const saved = await upsertTrap(next);
+  if (!saved) return; // DB 不可用/写入失败：不同步会话缓存，避免幽灵记录
+  // ★ 仅当 DB 写入成功才同步会话缓存 _trapsCache（让后续 refreshTraps() 立即读到新记录）
+  const idx = traps.findIndex(t => t.pattern === pattern);
+  if (idx >= 0) traps[idx] = next;
+  else traps.push(next);
+  _trapsCache = traps;
 }
 
 /**
@@ -167,11 +157,27 @@ export async function ingestTrajectoryFailures(records: TrajectoryRecord[]): Pro
   return count;
 }
 
+/**
+ * 从 Agent 失败轨迹回填陷阱（Agent 模式一轮结束后调用）。
+ * 仅回填"非成功"轨迹中的工具失败；成功后复位缓存让后续注入读取到新鲜数据。
+ */
+export async function backfillTrapsFromTrajectories(): Promise<void> {
+  try {
+    const records = await getAllTrajectories();
+    const failed = records.filter(r => !r.success);
+    if (failed.length === 0) return;
+    await ingestTrajectoryFailures(failed);
+    // ingestTrajectoryFailures 内部通过 recordFailure 已同步 _trapsCache
+  } catch {
+    // 锦上添花，失败不影响主流程
+  }
+}
+
 // ── 读取（注入用） ──
 
 /**
  * 获取达到提升阈值的已知陷阱（供 checker prompt 注入）。
- * 首次调用时回填历史失败轨迹；会话内缓存（防抖 60s）。
+ * 会话内缓存（防重复读库）。force=true 时清缓存后回填轨迹再读取（供会话开始 / 测试）。
  */
 export async function refreshTraps(force = false): Promise<KnownTrap[]> {
   if (force) {

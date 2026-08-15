@@ -17,8 +17,13 @@ import {
   buildTrapPrompt,
   MIN_OCCURRENCE,
   MAX_INJECT_TRAPS,
+  recordFailure,
+  ingestTrajectoryFailures,
+  backfillTrapsFromTrajectories,
+  refreshTraps,
   type KnownTrap,
 } from "../src/lib/trapStore";
+import type { TrajectoryRecord } from "../src/lib/trajectoryStore";
 
 test("normalizeError：数字替换 N、去多余空白", () => {
   assert.equal(
@@ -68,4 +73,46 @@ test("注入上限 MAX_INJECT_TRAPS 生效", () => {
   assert.ok(prompt.length > 0);
   // 验证 MAX_INJECT_TRAPS 常量存在（refreshTraps 用它 slice）
   assert.ok(MAX_INJECT_TRAPS >= 3);
+});
+
+test("非浏览器环境：refactor 后 recordFailure/refreshTraps/backfill 均安全 no-op（不抛错）", async () => {
+  // Node 无 indexedDB：共享 openDb（ggbDB）reject → 各 API 应静默降级，不抛异常、不污染
+  await assert.doesNotReject(() => recordFailure("create_circle", "半径必须为正数，当前 radius=-5"));
+  await assert.doesNotReject(() => refreshTraps(true));
+  await assert.doesNotReject(() => backfillTrapsFromTrajectories());
+  const traps = await refreshTraps();
+  assert.ok(Array.isArray(traps), "refreshTraps 在非浏览器环境应返回空数组");
+});
+
+test("ingestTrajectoryFailures 跳过成功轨迹、从失败轨迹提取工具错误", async () => {
+  const successRec: TrajectoryRecord = {
+    id: "s1", ts: 1, userText: "ok", finalText: "done", iterations: 2,
+    success: true, deniedTools: [], messages: [],
+  };
+  const failedRec: TrajectoryRecord = {
+    id: "f1", ts: 2, userText: "bad", finalText: "", iterations: 30,
+    success: false, deniedTools: [],
+    messages: [
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "c1", type: "function", function: { name: "create_circle", arguments: "{}" } }],
+      },
+      // 命中 success=false 且含 error → 计入
+      { role: "tool", tool_call_id: "c1", content: JSON.stringify({ success: false, error: "半径必须为正数，当前 radius=-5" }) },
+    ],
+  };
+  // 失败但无错误信息的轨迹不该提取
+  const failedNoErr: TrajectoryRecord = {
+    id: "f2", ts: 3, userText: "nope", finalText: "", iterations: 30,
+    success: false, deniedTools: [],
+    messages: [
+      { role: "assistant", content: null, tool_calls: [{ id: "c2", type: "function", function: { name: "list_objects", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "c2", content: JSON.stringify({ success: true, result: "ok" }) },
+    ],
+  };
+
+  // 注意：非浏览器环境 recordFailure 会静默 no-op，但 ingest 对"可解析且 success=false 且含 error"的条目仍会计数
+  const count = await ingestTrajectoryFailures([successRec, failedRec, failedNoErr]);
+  assert.equal(count, 1, "只应提取失败轨迹里 success=false 且带 error 的那条");
 });

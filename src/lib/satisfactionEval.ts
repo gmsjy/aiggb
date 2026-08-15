@@ -92,7 +92,7 @@ export async function evaluateSatisfaction(
     }
     const cleaned = raw.trim()
       .replace(/^```json?\s*/, "").replace(/\s*```$/, "")
-      .replace(/^﻿/, "");
+      .replace(/^\uFEFF/, "");
 
     const parsed = JSON.parse(cleaned);
 

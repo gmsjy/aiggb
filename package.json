@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "deploy": "npm run build && gh-pages -d dist",
     "lint": "eslint .",
-    "test:unit": "node --test --import tsx tests/specCache.test.ts tests/pipeline.test.ts tests/ggbBridge.test.ts tests/ggbKB.test.ts tests/toolExecutor.test.ts tests/agentLoop.test.ts tests/agentSmoke.test.ts tests/satisfactionEval.test.ts tests/trainingStore.test.ts tests/trajectory-replay.test.ts tests/trapStore.test.ts",
+    "test:unit": "node --test --import tsx tests/specCache.test.ts tests/pipeline.test.ts tests/ggbBridge.test.ts tests/ggbKB.test.ts tests/toolExecutor.test.ts tests/agentLoop.test.ts tests/agentSmoke.test.ts tests/satisfactionEval.test.ts tests/trainingStore.test.ts tests/trajectory-replay.test.ts tests/trapStore.test.ts tests/runControl.test.ts",
     "test:replay": "tsx tests/runner.ts",
     "test:trajectory": "tsx tests/trajectory-replay.ts",
     "test:e2e": "tsx tests/euclid-e2e.ts",

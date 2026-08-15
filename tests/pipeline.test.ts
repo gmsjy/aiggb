@@ -15,6 +15,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { runPipeline, type PipelineDeps, type ReviewHandle } from "../src/lib/pipeline";
+import { createMemoryStorage, type SpecStorage } from "../src/lib/specCache";
 import { TEMPLATES } from "../src/lib/templates";
 import { MockGGB } from "./mockGGB";
 import type { AIResponse, Command } from "../src/lib/schema";
@@ -29,6 +30,8 @@ interface HarnessOpts {
   scripts?: AIResponse[];
   domain?: "general" | "physics";
   appMode?: "2d" | "3d";
+  /** 规格缓存存储（默认无缓存；注入后可验证缓存命中 / retry 跳过缓存的逻辑） */
+  specCacheStorage?: SpecStorage;
 }
 
 function makeHarness(opts: HarnessOpts = {}) {
@@ -89,6 +92,7 @@ function makeHarness(opts: HarnessOpts = {}) {
     },
     lightModel: "m",   // resolves to config.model
     heavyModel: "m",   // resolves to config.model
+    specCacheStorage: opts.specCacheStorage,
   };
 
   return { deps, controller, messages, mock, chatCalls, get rawCalls() { return rawCalls; } };
@@ -157,6 +161,43 @@ test("重试路径：retry → Phase 1 重跑 → confirm → 完成", async () 
   // 旧气泡被移除，只剩 confirmed 气泡 + assistant
   assert.deepEqual(h.messages.map(m => m.role), ["spec-review", "assistant"]);
   assert.equal(h.messages[0].role === "spec-review" && h.messages[0].payload.status, "confirmed");
+});
+
+test("★ retry 必须绕过 specCache：即使缓存命中也重新调用 Phase 1（回归：缓存永远同一规格）", async () => {
+  // 预置一个「第二次点击重新生成时返回不同内容」的可变脚本：
+  //   - 注入内存缓存存储，使 storeCachedSpec/lookupCachedSpec 在单测里真实生效
+  //   - 第一次 Phase 1 输出 specA 并落缓存；retry 后若不跳过缓存会直接命中 specA——
+  //     「重新生成」形同虚设。修复后 retry 应重新调用 chatRaw 拿到 specB。
+  const cacheStore = createMemoryStorage();
+  let rawIdx = 0;
+  const rawResponses = [
+    JSON.stringify({ spec: "绘制三角形 ABC 的外接圆，标注圆心 O 与半径。" }),
+    JSON.stringify({ spec: "重新生成的规格：绘制正方形的内切圆。" }),
+  ];
+  const h = makeHarness({ specCacheStorage: cacheStore });
+  // 用自定义 chatRaw 脚本（按序返回两份不同规格）
+  h.deps.chatRawImpl = async () => rawResponses[Math.min(rawIdx++, rawResponses.length - 1)]!;
+  h.deps.chatImpl = async () => {
+    // 每次 Phase 2 命令不同，便于断言命中哪份规格
+    const useNew = rawIdx >= 2; // retry 后为 true
+    return evalResp(useNew
+      ? ["O = (0,0)", "sq = Polygon((1,1),(-1,1),(-1,-1),(1,-1))"]
+      : ["A = (0,0)", "B = (3,0)", "C = (1,2)"]);
+  };
+  h.deps.sceneSearchImpl = async () => null;
+  h.deps.trainingSearchImpl = async () => null;
+
+  const handles: ReviewHandle[] = [];
+  const p = runPipeline("画圆", h.deps, { onReview: hd => handles.push(hd) });
+  await waitUntil(() => handles.length === 1);
+  assert.ok(handles[0].spec.includes("外接圆"), "第一次 Phase 1 返回 specA");
+  handles[0].retry();
+  await waitUntil(() => handles.length === 2);
+  assert.ok(handles[1].spec.includes("正方形"), "retry 应绕过缓存返回新规格 specB，而非缓存里的 specA");
+  assert.equal(rawIdx, 2, "retry 应重新调用 chatRaw（跳过缓存）");
+  handles[1].confirm(handles[1].spec);
+  await p;
+  assert.equal(h.messages.filter(m => m.role === "assistant").length, 1);
 });
 
 test("Phase 1 API 失败 → 降级单阶段", async () => {

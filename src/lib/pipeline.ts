@@ -28,7 +28,7 @@ import {
 import { buildRefinePrompt } from "./refinePrompt";
 import { batchCorrect, correctionsToRepairContext } from "./commandCorrect";
 import { RefinedSpec, type RefinedSpec as RefinedSpecT } from "./specSchema";
-import { lookupCachedSpec, storeCachedSpec } from "./specCache";
+import { lookupCachedSpec, storeCachedSpec, type SpecStorage } from "./specCache";
 import type { AIResponse } from "./schema";
 import type { GGBAppletApi } from "../types/ggb";
 import type { ChatTurn } from "../store/useAppStore";
@@ -43,7 +43,7 @@ import {
 } from "./agentLoop";
 import { toolCallToEvalCommands } from "./toolExecutor";
 import { saveTrajectory } from "./trajectoryStore";
-import { recordFailure, refreshTraps, buildTrapPrompt } from "./trapStore";
+import { recordFailure, refreshTraps, buildTrapPrompt, backfillTrapsFromTrajectories } from "./trapStore";
 import {
   searchExecution,
   searchScene,
@@ -100,6 +100,8 @@ export interface PipelineDeps {
   sceneSearchImpl?: (spec: string) => Promise<SceneRecord | null>;
   /** 训练库存储（成功命令）。注入以支持单测 mock */
   trainingStoreImpl?: (rec: ExecutionRecord) => void;
+  /** 规格缓存的底层存储（测试可注入内存实现，验证缓存命中/跳过的逻辑）。默认 localStorage */
+  specCacheStorage?: SpecStorage;
   /** 解析后的轻量模型名（用于精炼/评估） */
   lightModel: string;
   /** 解析后的主力模型名（用于编译/修复/降级） */
@@ -124,11 +126,13 @@ export async function runPipeline(
   deps: PipelineDeps,
   cb: PipelineCallbacks
 ): Promise<void> {
+  let phase1Pass = true;
   for (;;) {
     // ── Phase 1：意图 → 精炼规格（缓存优先）──
+    // ★ retry（重新生成）时跳过 specCache：否则命中缓存返回同一份规格，「重新生成」形同虚设
     let spec: RefinedSpecT | null;
     try {
-      spec = await refineSpec(userText, deps);
+      spec = await refineSpec(userText, deps, !phase1Pass);
     } catch (err) {
       if (deps.signal.aborted) throw err;
       console.warn(`[Pipeline] ${getTraceId()} Phase 1 failed, falling back to single-phase`, err);
@@ -166,6 +170,7 @@ export async function runPipeline(
     if (decision.action === "retry") {
       deps.removeMessage(reviewId);
       deps.setThinking(true);
+      phase1Pass = false; // ★ 下次 Phase 1 跳过缓存，真正重新生成
       continue; // 重新走 Phase 1
     }
 
@@ -178,10 +183,13 @@ export async function runPipeline(
 
 // ── Phase 1 ──
 
-async function refineSpec(userText: string, deps: PipelineDeps): Promise<RefinedSpecT | null> {
+async function refineSpec(userText: string, deps: PipelineDeps, skipCache = false): Promise<RefinedSpecT | null> {
   const existingObjs = deps.getApi()?.getAllObjectNames() ?? [];
-  const cached = lookupCachedSpec(userText, deps.domain, deps.appMode, existingObjs);
-  if (cached) return cached;
+  const storage = deps.specCacheStorage;
+  if (!skipCache) {
+    const cached = lookupCachedSpec(userText, deps.domain, deps.appMode, existingObjs, storage);
+    if (cached) return cached;
+  }
 
   const chatRawFn = deps.chatRawImpl ?? defaultChatRaw;
   const phase1Messages: ChatMessage[] = [
@@ -199,7 +207,7 @@ async function refineSpec(userText: string, deps: PipelineDeps): Promise<Refined
 
   const spec = parseRefinedSpec(rawSpec);
   if (spec && !spec.ask) {
-    storeCachedSpec(userText, deps.domain, deps.appMode, existingObjs, spec);
+    storeCachedSpec(userText, deps.domain, deps.appMode, existingObjs, spec, storage);
   }
   return spec;
 }
@@ -737,6 +745,8 @@ export async function runAgentPipeline(
   let result: AgentLoopResult | null = null;
   // ★ 是否已回滚：true 时本轮命令未生效，不写入 constructionLog（否则 undo 重放出错）
   let rollbackHappened = false;
+  // ★ 轨迹已持久化的标记（供 finally 回填 known_traps 前等待写入完成）
+  let trajectorySaved = false;
   try {
     result = await runAgentLoop(userText, {
       config: deps.config,
@@ -747,7 +757,9 @@ export async function runAgentPipeline(
       getMessages: deps.getMessages,
       agentModel: resolveModel(deps.config, "agent"),
       // ★ 改造五：ReAct 轨迹持久化（IndexedDB；非浏览器环境静默跳过）
-      persistTrajectory: rec => { void saveTrajectory(rec); },
+      persistTrajectory: rec => {
+        void saveTrajectory(rec).then(() => { trajectorySaved = true; }).catch(() => {});
+      },
       // ★ 透传思考步骤到 UI（减少等待焦虑）
       onThinking: msg => cb.onAgentStep?.(msg),
     });
@@ -783,6 +795,15 @@ export async function runAgentPipeline(
     return;
   } finally {
     unregisterConfirmationHandler();
+    // ★ known_traps 回填：Agent 失败轨迹 → 陷阱（等轨迹写入完成，避免读不到刚保存的记录）
+    //    若在 catch 中已 return，此处仍在 finally 执行（catch return 后 finally 照样跑）
+    void (async () => {
+      // 等待本轮轨迹落库（最多 ~1s），随后回填陷阱（幂等、静默失败）
+      for (let i = 0; i < 20 && !trajectorySaved; i++) {
+        await new Promise<void>(r => setTimeout(r, 50));
+      }
+      await backfillTrapsFromTrajectories().catch(() => {});
+    })();
   }
 
   // ★ 构建 agent 结果摘要消息
@@ -792,29 +813,53 @@ export async function runAgentPipeline(
 
   // ★ 从工具调用历史提取可重放的 eval 命令（供 undo 回放 + constructionLog 兜底）
   //    回滚后本轮命令未生效 → 不提取（constructionLog 保持一致）
-  const agentEvalCommands: Array<{ op: "eval"; cmd: string }> = [];
+  //    同时记录每个 tool_call 的真实成败，供 pseudoResults 标记（不再一律 ok:true，
+  //    避免把"实际失败的工具导致的可重放命令"当作成功写入 constructionLog）
+  const agentEvalCommands: Array<{ op: "eval"; cmd: string; toolCallId?: string }> = [];
   if (!rollbackHappened) {
     for (const m of result.messages) {
       if (m.role === "assistant" && m.tool_calls) {
         for (const tc of m.tool_calls) {
           const cmds = toolCallToEvalCommands(tc.function.name, tc.function.arguments);
           for (const cmd of cmds) {
-            agentEvalCommands.push({ op: "eval", cmd });
+            agentEvalCommands.push({ op: "eval", cmd, toolCallId: tc.id });
           }
         }
       }
     }
   }
 
+  // ★ 各 tool_call 的真实结果：tool_call_id → { success, error? }（从对话流中的 tool 响应解析）
+  const toolResults = new Map<string, { success: boolean; error?: string }>();
+  for (const m of result.messages) {
+    if (m.role === "tool" && m.tool_call_id && typeof m.content === "string") {
+      try {
+        const p = JSON.parse(m.content) as { success?: boolean; error?: string };
+        toolResults.set(m.tool_call_id, {
+          success: p.success !== false,
+          error: p.error,
+        });
+      } catch { /* 无法解析的 tool 响应按成功计（保守） */ }
+    }
+  }
+
   // ★ 追加 assistant 消息（用 appendAIResponse 写入 constructionLog，使 undo 能回滚）
-  //    将可重放命令映射为 ExecResult[] 以便 appendAIResponse 写入日志
-  const pseudoResults: ExecResult[] = agentEvalCommands.map(c => ({
-    ok: true,
-    command: c,
-    expanded: [c.cmd],
-  }));
+  const pseudoResults: ExecResult[] = agentEvalCommands.map(c => {
+    const tr = c.toolCallId ? toolResults.get(c.toolCallId) : undefined;
+    const ok = tr ? tr.success : true;
+    return {
+      ok,
+      command: { op: "eval", cmd: c.cmd },
+      expanded: [c.cmd],
+      error: tr && !tr.success ? tr.error : undefined,
+    };
+  });
+  // 仅把可重放命令中"真正成功"的写入 constructionLog（undo 回放才会一致）
+  const successfulEvalCommands = agentEvalCommands
+    .filter(c => (c.toolCallId ? (toolResults.get(c.toolCallId)?.success ?? true) : true))
+    .map(c => ({ op: "eval" as const, cmd: c.cmd }));
   deps.appendAIResponse(
-    { explanation: summary, commands: agentEvalCommands },
+    { explanation: summary, commands: successfulEvalCommands },
     pseudoResults
   );
 

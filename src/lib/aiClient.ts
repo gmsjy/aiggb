@@ -20,10 +20,8 @@ export interface AIConfig {
   model: string;
   /** 轻量模型（精炼/评估）。不设置时回退到 flashModel → model */
   lightModel?: string;
-  /** Agent 模式模型。不设置时回退到 heavyModel → model */
+  /** Agent 模式模型。不设置时回退到 model */
   agentModel?: string;
-  /** 主力任务的独立模型。不设置时回退到 model */
-  heavyModel?: string;
   /** @deprecated 使用 lightModel 代替；迁移后保留用于向前兼容 */
   flashModel?: string;
   temperature?: number;
@@ -34,10 +32,10 @@ export function resolveModel(config: AIConfig, role: "light" | "heavy" | "agent"
   switch (role) {
     case "light":
       return config.lightModel ?? config.flashModel ?? config.model;
-    case "heavy":
-      return config.heavyModel ?? config.model;
+    case "heavy": // 编译/修复/降级 → 主力模型
+      return config.model;
     case "agent":
-      return config.agentModel ?? config.heavyModel ?? config.model;
+      return config.agentModel ?? config.model;
   }
 }
 
@@ -595,7 +593,7 @@ export async function ping(config: AIConfig, signal?: AbortSignal): Promise<void
 
 function stripCodeFence(s: string): string {
   // 先剥离 BOM 与首尾空白，再尝试去除 ```json 代码块
-  const t = s.replace(/^﻿/, "").trim();
+  const t = s.replace(/^\uFEFF/, "").trim();
   const m = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
   return m ? m[1].trim() : t;
 }
