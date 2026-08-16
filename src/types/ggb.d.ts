@@ -65,6 +65,8 @@ export interface GGBAppletApi {
   getPointStyle: (label: string) => number;
   getPointSize: (label: string) => number;
   getFilling: (label: string) => number;
+  /** 对象 XML 表示（含 lineOpacity/fillOpacity 等样式属性，透明度精确读取用） */
+  getXML?: (label: string) => string;
   getCaption: (label: string, substitutePlaceholders?: boolean) => string;
   getLabelStyle: (label: string) => number;
   getLabelVisible: (label: string) => boolean;

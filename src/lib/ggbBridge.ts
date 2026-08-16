@@ -606,6 +606,45 @@ export function exportPDF(api: GGBAppletApi, scale = 1): Promise<string> {
 // ──── 画布快照（供满足度评估使用） ────
 
 /**
+ * 读取对象透明度（0~1），区分"线透明度"与"填充透明度"。
+ *
+ * 背景：AI 设置透明度走 SetLineOpacity（线透明度），但 GGB API 的 getFilling 只返回
+ * "填充透明度"——0 表示无内部填充（点/线/空心对象默认），**不代表对象不可见**。
+ * 用 getFilling 当作整体透明度会把所有无填充对象标成 opacity=0（即历史 bug：审查误报"透明度为零"）。
+ *
+ * 正确读取：GGB 官方 getXML(label) 的对象 XML 含 lineOpacity / fillOpacity 属性（0-100）。
+ * - lineOpacity：AI 用 SetLineOpacity 设置的真实线透明度（默认 100 = 不透明）
+ * - fillOpacity：内部填充透明度（默认 0 = 无填充），XML 缺失时回退 getFilling()
+ * 两者均返回 0~1；无法读取时返回 undefined（调用方据此跳过，不产生误报）。
+ */
+function readOpacity(
+  api: GGBAppletApi, name: string
+): { lineOpacity?: number; fillOpacity?: number } {
+  const anyApi = api as unknown as { getXML?: (label: string) => string };
+  let lineOpacity: number | undefined;
+  let fillOpacity: number | undefined;
+
+  if (typeof anyApi.getXML === "function") {
+    try {
+      const xml = anyApi.getXML(name);
+      const line = /lineOpacity="([\d.]+)"/.exec(xml)?.[1];
+      const fill = /fillOpacity="([\d.]+)"/.exec(xml)?.[1];
+      if (line !== undefined) lineOpacity = Math.min(1, Math.max(0, parseFloat(line) / 100));
+      if (fill !== undefined) fillOpacity = Math.min(1, Math.max(0, parseFloat(fill) / 100));
+    } catch { /* getXML 不可用时走 getFilling 回退 */ }
+  }
+
+  if (fillOpacity === undefined) {
+    try {
+      const filling = api.getFilling?.(name);
+      if (filling !== undefined) fillOpacity = Math.min(1, Math.max(0, filling));
+    } catch { /* 无填充读取能力 */ }
+  }
+
+  return { lineOpacity, fillOpacity };
+}
+
+/**
  * 生成画布富文本快照：对象名 → 类型 → 定义 → 值 → 样式 → 标注 → 可见性。
  * 包含完整的样式元数据（颜色/粗细/线型/透明度/点样式），
  * 供纯文本模型做逻辑审查——不需要"看"图形，读快照即可核对。
@@ -645,8 +684,11 @@ export function getRichSnapshot(api: GGBAppletApi): string {
       if (thickness && thickness > 1) styleMeta.push(`thickness=${thickness}`);
       const lineStyle = api.getLineStyle?.(name);
       if (lineStyle && lineStyle > 0) styleMeta.push(`dashed`);
-      const filling = api.getFilling?.(name);
-      if (filling !== undefined && filling < 1) styleMeta.push(`opacity=${filling.toFixed(2)}`);
+      // ★ 透明度：区分"线透明度"（AI 用 SetLineOpacity 设置的）与"填充透明度"。
+      //   无填充（=0）是点/线/空心对象的默认，绝不输出——否则模型误判对象不可见。
+      const { lineOpacity, fillOpacity } = readOpacity(api, name);
+      if (lineOpacity !== undefined && lineOpacity < 1) styleMeta.push(`lineOpacity=${lineOpacity.toFixed(2)}`);
+      if (fillOpacity !== undefined && fillOpacity > 0 && fillOpacity < 1) styleMeta.push(`fillOpacity=${fillOpacity.toFixed(2)}`);
       const ptSize = api.getPointSize?.(name);
       // Point size default varies; report only if set
       const ptStyle = api.getPointStyle?.(name);
