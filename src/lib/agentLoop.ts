@@ -211,6 +211,8 @@ export async function runAgentLoop(
   // ★ DeepSeek 适配: user-role 指令遵从度显著高于 system-role
   //    在首条 user message 前拼接指令前缀，强制优先工具调用而非输出分析文本
   const quirks = getProviderQuirks(deps.config);
+  // ★ 是否回传 reasoning_content：仅 provider 明确要求时（V4）。其他 provider 无该字段，回传即 no-op
+  const roundtripReasoning = quirks.mustRoundtripReasoning === true;
 
   const systemPrompt = buildAgentSystemPrompt(deps.domain, deps.appMode, initialObjs.length === 0, quirks.maxToolsPerTurn);
 
@@ -270,12 +272,18 @@ export async function runAgentLoop(
     // 截断历史（保留 system + 最近 N 条，保证 tool_calls/tool 配对完整）
     const truncated = truncateHistory(messages, getHistoryWindow(quirks.contextWindow));
 
-    // 调用 AI（流式：content 增量经 onThinking 实时展示）
+    // 调用 AI（流式：content 增量经 onThinking 实时展示；V4 reasoning 增量经 🧠 展示）
     let response: AgentResponse;
     try {
+      // ★ V4 thinking 实时展示：累积推理增量（截尾 400 字符），经 onThinking 显示"🧠 思考中…"
+      let reasoningPreview = "";
       response = await agentChatFn(
         deps.config, truncated, TOOL_DEFINITIONS, deps.signal, deps.agentModel,
-        text => deps.onThinking?.(text)
+        text => deps.onThinking?.(text),
+        (delta) => {
+          reasoningPreview = (reasoningPreview + delta).slice(-400);
+          deps.onThinking?.(`🧠 ${reasoningPreview}`);
+        }
       );
     } catch (err) {
       if (err instanceof AIError) throw err;
@@ -292,7 +300,7 @@ export async function runAgentLoop(
     // 情况 1：纯文本回复 → 结束
     if (!response.toolCalls.length && response.content) {
       finalText = response.content;
-      messages.push({ role: "assistant", content: response.content, reasoning_content: response.reasoningContent });
+      messages.push({ role: "assistant", content: response.content, reasoning_content: roundtripReasoning ? response.reasoningContent : undefined });
       emptyResponseRetried = false; // 成功后复位
       break;
     }
@@ -306,7 +314,9 @@ export async function runAgentLoop(
 
       if (!emptyResponseRetried) {
         emptyResponseRetried = true;
-        const reasonHint = response.finishReason === "length"
+        // ★ 仅当 provider 的 finish_reason 可靠时才信任 "length" 截断提示（DeepSeek 流式偶发缺失）
+        const truncated = response.finishReason === "length" && quirks.streamsFinishReason === true;
+        const reasonHint = truncated
           ? "[系统] 你的上一条回复因长度限制被截断（max_tokens 不足）。请缩短输出或分步执行。继续构造或输出文本总结。"
           : "[系统] 请继续：调用下一步工具完成构造，或输出文本总结当前画布状态。不要返回空响应。";
         messages.push({ role: "user", content: reasonHint });
@@ -314,7 +324,8 @@ export async function runAgentLoop(
       }
 
       // 重试后仍空 → 放弃，输出诊断信息
-      const diag = response.finishReason === "length"
+      const truncated = response.finishReason === "length" && quirks.streamsFinishReason === true;
+      const diag = truncated
         ? "（输出超长被截断，可尝试增加 max_tokens 或简化构造）"
         : response.finishReason === "content_filter"
         ? "（内容被安全过滤拦截）"
@@ -348,7 +359,7 @@ export async function runAgentLoop(
       role: "assistant",
       content: response.content,
       tool_calls: toolCalls,
-      reasoning_content: response.reasoningContent
+      reasoning_content: roundtripReasoning ? response.reasoningContent : undefined
     });
 
     // 未知工具错误注入（在 assistant 之后，满足 API 消息顺序要求）

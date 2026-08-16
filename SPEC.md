@@ -825,6 +825,26 @@ Agent 模式的 `toolExecutor.ts` 同样包含 3D 防护：
 
 `truncateHistory(messages, windowSize)` 保留最近 N 条消息，并修复截断边界处的消息配对问题（孤立 tool/tool_calls 消息会被移除），确保 AI 始终收到完整可理解的上下文。
 
+### 4C.6 思考深度（thinking）与 A/B 验证
+
+DeepSeek V4 原生内嵌 thinking（流式返回 `reasoning_content`）。系统通过 `AIConfig.reasoningEffort`（SettingsDialog「思考深度」下拉）控制：
+
+- **默认关闭（baseline）**：`reasoningEffort` 未设置 → 三个调用点（`chat` 编译/修复、`chatRaw` 精炼/评估、`agentChat` Agent 模式）均**不发送** `reasoning_effort` 参数
+- **开启**：设置后对支持 thinking 的 provider（`quirks.supportsThinking` = DeepSeek V4）发送 `reasoning_effort`（low/medium/high）
+- **Agent 模式实时展示**：`agentChat` 的 `reasoning_content` 增量经 `onReasoning` 回调 → `onThinking` 在 UI 显示 `🧠 思考中…`（截尾 400 字符，经 ChatPanel 120ms 节流），V4 思考阶段不再干等
+- **回传门控**：`reasoning_content` 多轮回传受 `quirks.mustRoundtripReasoning` 控制（V4=true，其他 provider 无该字段，回传即 no-op）
+- **空响应诊断**：按 `quirks.streamsFinishReason` 判断 `finish_reason="length"` 截断提示是否可信（DeepSeek 流式偶发缺失）
+
+**A/B 验证结论（2026-08，DeepSeek v4-flash，N=10×6 用例，`npm run test:ab`）**：
+
+| 指标 | baseline | thinking(high) | Δ |
+|---|---|---|---|
+| 端到端通过率 | 85.0% | 76.7% | **−8.3%** |
+| completion tokens | 5000 | 5017 | +0.3% |
+| 平均延迟 | 44647ms | 44362ms | −285ms |
+
+结论：**`reasoning_effort=high` 在 v4-flash 上损害编译质量（困难物理用例过度思考产出更差命令），token/延迟无收益 → 默认保持关闭**。Agent 模式的 `🧠` 推理展示保留（展示 V4 本来就产生的思考，与质量结论无关）。
+
 ---
 
 ## 5. 用户交互流程
@@ -1254,6 +1274,17 @@ npm run test:hash        # 查看当前 prompt 指纹
 | v4-pro | 42/49 (85.7%) | 37/49 (75.5%) | 18.7s |
 
 **结论**：v4-pro 提升微弱（+2%）但慢 63%。日常推荐 v4-flash，复杂动态 / 3D 场景切 v4-pro。模型对比原始报告见 `tests/report-v4-flash.json` / `report-v4-pro.json`。
+
+### 10C.7 A/B 测试（`test:ab`）与 runDrift 复用
+
+`drift-monitor.ts` 的核心跑批已抽为可复用的 **`runDrift(config, opts)`**（用例选取 → N 次重复 → 分层统计 → 返回完整报告），供 A/B 对比脚本直接调用：
+
+- **`npm run test:ab`**：同用例同次数跑两组——baseline（`reasoningEffort` 未设）vs thinking（`AB_EFFORT`，默认 high），对比端到端/Schema/执行/延迟/**token 成本**，输出 `tests/ab-report.json`。`DRIFT_N` / `DRIFT_SAMPLE` 调规模。
+- **`DRIFT_THINKING=high npm run test:drift`**：漂移监控单开 thinking 跑（写报告时带 `thinking=` 标注）。
+- **token 统计**：`chat()` 新增 `onUsage` 回调，`DriftRun.tokens` 记录 prompt/completion 用量（此前 `usage` 字段声明但从未填充）。
+- **修复的既有 bug**：原版 drift-monitor **从未 `runs.push(run)`**——`computeStats` 对空数组计算，所有统计恒为 0%、质量门禁（e2e<85% 阻塞）从未真正生效。本次重构已修复。
+
+首次 A/B 结论（v4-flash，N=10×6，2026-08）：`reasoning_effort=high` 端到端 **−8.3%**（85.0%→76.7%），token 持平（5000→5017）→ **thinking 默认关闭**。详见 §4C.6。
 
 ---
 

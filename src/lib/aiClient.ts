@@ -25,6 +25,9 @@ export interface AIConfig {
   /** @deprecated 使用 lightModel 代替；迁移后保留用于向前兼容 */
   flashModel?: string;
   temperature?: number;
+  /** 思考深度（V4 通过 reasoning_effort 控制）。仅对支持 thinking 的 provider 生效；
+   *  留空 = 不发该参数（provider 默认 / baseline），用于 A/B 对比 */
+  reasoningEffort?: "low" | "medium" | "high";
 }
 
 /** 解析实际使用的模型（含回退链） */
@@ -59,8 +62,6 @@ export interface ProviderQuirks {
   reasoningEffort?: "low" | "medium" | "high";
   /** 多轮对话中是否必须把 reasoning_content 原样回传 API（V4 = true，否则 400） */
   mustRoundtripReasoning?: boolean;
-  /** 是否支持 tool_choice: "required"（V4 拒绝，只能 auto） */
-  supportsToolChoiceRequired?: boolean;
   /** 上下文窗口 token 数（V4 = 1M，用于压缩策略调参） */
   contextWindow?: number;
 }
@@ -76,7 +77,7 @@ export function getProviderQuirks(config: AIConfig): ProviderQuirks {
     (config.agentModel ?? "").toLowerCase(),
   ].join(" ");
 
-  // DeepSeek V4 全系：thinking 内嵌 + reasoning_content 需回传 + 拒绝 tool_choice=required
+  // DeepSeek V4 全系：thinking 内嵌 + reasoning_content 需回传（拒绝 tool_choice=required，故不使用 tool_choice 功能）
   if (/deepseek/.test(fingerprint)) {
     return {
       agentTemperature: 0.05,
@@ -86,7 +87,6 @@ export function getProviderQuirks(config: AIConfig): ProviderQuirks {
       supportsThinking: true,          // V4 原生 thinking
       reasoningEffort: "medium",
       mustRoundtripReasoning: true,    // ★ 多轮必须回传 reasoning_content
-      supportsToolChoiceRequired: false, // ★ V4 拒绝 tool_choice: required
       contextWindow: 1_000_000,        // V4 百万上下文
     };
   }
@@ -179,6 +179,11 @@ interface ChatCompletionResponse {
     };
     finish_reason?: string;
   }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 }
 
 /** 发起 chat/completions POST 请求，统一处理网络 / HTTP 错误，返回 Response（兼容流式） */
@@ -293,20 +298,28 @@ const AI_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
 /**
  * 调用 OpenAI 兼容的 chat completions 接口（优先 json_schema 结构化输出，降级 json_object）。
  * 网络 / 鉴权问题抛 AIError；JSON / schema 问题抛 AISchemaError（可重试）。
+ * @param onUsage 可选：回传本次调用的 token 用量（AB 测试统计成本用）
  */
 export async function chat(
   config: AIConfig,
   messages: ChatMessage[],
   signal?: AbortSignal,
-  modelOverride?: string
+  modelOverride?: string,
+  onUsage?: (usage: { prompt: number; completion: number }) => void
 ): Promise<AIResponseT> {
   const caps = getProviderCapabilities(config);
+  const quirks = getProviderQuirks(config);
   const body: Record<string, unknown> = {
     model: modelOverride ?? config.model,
     messages,
     temperature: config.temperature ?? 0.2,
     stream: false
   };
+
+  // ★ 思考深度：仅对支持 thinking 的 provider（V4）生效；config 留空 = 不发参数（baseline）
+  if (config.reasoningEffort && quirks.supportsThinking) {
+    body.reasoning_effort = config.reasoningEffort;
+  }
 
   // ★ 优先 json_schema（结构化约束更强），降级 json_object
   const usedJsonSchema = caps.jsonSchema;
@@ -365,6 +378,14 @@ export async function chat(
       formatZodError(result.error)
     );
   }
+
+  // ★ token 用量回传（AB 测试统计 thinking 成本）
+  if (onUsage && data.usage) {
+    onUsage({
+      prompt: data.usage.prompt_tokens ?? 0,
+      completion: data.usage.completion_tokens ?? 0
+    });
+  }
   return result.data;
 }
 
@@ -390,6 +411,7 @@ interface StreamChunk {
 /**
  * 发送带工具定义的【流式】对话请求，返回 AI 的文本回复或工具调用请求。
  * - stream:true + SSE 增量解析，content 经 onContent 实时回调（UI 展示减少等待）
+ * - V4 thinking：reasoning_content 增量经 onReasoning 实时回调（UI 展示思考过程）
  * - tool_calls 按 delta.index 累积合并为完整 JSON 字符串
  * - 不使用 response_format: json_object（与 tools 不兼容）
  * - 兼容回退：部分 provider 忽略 stream:true 返回普通 JSON → 自动按 JSON 解析
@@ -400,11 +422,12 @@ export async function agentChat(
   tools: ToolDefinition[],
   signal?: AbortSignal,
   modelOverride?: string,
-  onContent?: (text: string) => void
+  onContent?: (text: string) => void,
+  onReasoning?: (text: string) => void
 ): Promise<AgentResponse> {
   const quirks = getProviderQuirks(config);
   const maxTokField = quirks.maxTokensField ?? "max_tokens";
-  const body = {
+  const body: Record<string, unknown> = {
     model: modelOverride ?? config.model,
     messages,
     tools,
@@ -414,6 +437,10 @@ export async function agentChat(
     // 工具 JSON 参数可能较长（create_parametric / eval_raw / eval_sequence），给足空间防截断
     [maxTokField]: 8192
   };
+  // ★ 思考深度（Agent 模式同样生效）
+  if (config.reasoningEffort && quirks.supportsThinking) {
+    body.reasoning_effort = config.reasoningEffort;
+  }
 
   const resp = await fetchCompletion(config, body, signal);
 
@@ -430,7 +457,9 @@ export async function agentChat(
       function: { name: tc.function.name, arguments: tc.function.arguments }
     }));
     if (onContent && content) onContent(content);
-    return { content, toolCalls, finishReason, reasoningContent: msg?.reasoning_content ?? undefined };
+    const reasoning = msg?.reasoning_content ?? undefined;
+    if (onReasoning && reasoning) onReasoning(reasoning);
+    return { content, toolCalls, finishReason, reasoningContent: reasoning };
   }
 
   if (!resp.body) {
@@ -471,9 +500,10 @@ export async function agentChat(
       onContent?.(delta.content);
     }
 
-    // ★ V4 thinking：累积 reasoning_content（多轮需回传，不入 UI 流式展示）
+    // ★ V4 thinking：累积 reasoning_content（多轮需回传），增量经 onReasoning 实时展示
     if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
       reasoningContent += delta.reasoning_content;
+      onReasoning?.(delta.reasoning_content);
     }
 
     if (Array.isArray(delta.tool_calls)) {
@@ -550,6 +580,10 @@ export async function chatRaw(
     // ★ V4 文档明确要求：json_object 模式需合理设置 max_tokens 防 JSON 被截断
     //    未显式传入时给 4K 默认（Phase 1 规格 / 满足度评估输出均远小于此）
     if (!maxTokens) body.max_tokens = 4096;
+  }
+  // ★ 思考深度（同上，支持 thinking 的 provider 才发）
+  if (config.reasoningEffort && getProviderQuirks(config).supportsThinking) {
+    body.reasoning_effort = config.reasoningEffort;
   }
 
   const data = await callAPI(config, body, signal);

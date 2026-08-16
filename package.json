@@ -17,6 +17,7 @@
     "test:record": "cross-env TEST_MODE=record tsx tests/runner.ts",
     "test:smoke": "cross-env TEST_MODE=smoke tsx tests/runner.ts",
     "test:drift": "cross-env DRIFT_BASELINE=0 tsx tests/drift-monitor.ts",
+    "test:ab": "tsx tests/ab-think.ts",
     "test:baseline": "cross-env DRIFT_BASELINE=1 tsx tests/drift-monitor.ts",
     "test:hash": "tsx tests/show-hash.ts",
     "prompt:iterate": "tsx tests/prompt-iterate.ts full",

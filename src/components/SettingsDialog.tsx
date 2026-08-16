@@ -35,6 +35,10 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
   // ★ 角色专用模型（可选，留空则回退到主力模型）
   const [lightModel, setLightModel] = useState<string>(existing?.lightModel ?? existing?.flashModel ?? "");
   const [agentModel, setAgentModel] = useState<string>(existing?.agentModel ?? "");
+  // ★ 思考深度（V4 reasoning_effort；留空 = 不发参数 = baseline）
+  const [reasoningEffort, setReasoningEffort] = useState<"low" | "medium" | "high" | "">(
+    existing?.reasoningEffort ?? ""
+  );
 
   const preset = findProvider(providerId);
 
@@ -68,6 +72,7 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
     apiKey: apiKey.trim(),
     model: model.trim(),
     temperature,
+    reasoningEffort: reasoningEffort || undefined,
     lightModel: lightModel.trim() || undefined,
     agentModel: agentModel.trim() || undefined,
   });
@@ -297,6 +302,22 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
                 />
               )}
               <small className="hint">用于 Agent 模式的 ReAct 循环。需支持 Function Calling。</small>
+            </label>
+            <label>
+              <span>思考深度 (Thinking)</span>
+              <select
+                value={reasoningEffort}
+                onChange={e => setReasoningEffort(e.target.value as "low" | "medium" | "high" | "")}
+              >
+                <option value="">跟随 provider 默认（关闭）</option>
+                <option value="low">低</option>
+                <option value="medium">中</option>
+                <option value="high">高</option>
+              </select>
+              <small className="hint">
+                V4 思考深度（reasoning_effort）。默认关闭；开启后编译/评估/Agent 均发送该参数，
+                提升质量但增加 token 成本与延迟。用 <code>npm run test:ab</code> 可对比开启前后效果。
+              </small>
             </label>
           </details>
 

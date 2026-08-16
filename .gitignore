@@ -17,3 +17,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# generated test reports（漂移/A-B 结果，可随时重跑生成）
+tests/drift-report.json
+tests/ab-report.json

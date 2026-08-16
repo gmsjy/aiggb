@@ -4,6 +4,7 @@
  * 使用方式：
  *   npm run test:drift           # N=10 漂移抽样（需要 DEEPSEEK_API_KEY）
  *   npm run test:drift-baseline  # 建立/更新基线
+ *   DRIFT_THINKING=high npm run test:drift   # 开 thinking 跑（A/B 用）
  *
  * 输出 tests/drift-report.json + 更新 tests/versions.json
  *
@@ -26,7 +27,7 @@ import "./load-env.js";
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { chat, AISchemaError, type AIConfig } from "../src/lib/aiClient";
 import { buildSystemPrompt } from "../src/lib/prompts";
@@ -72,6 +73,9 @@ interface DriftStats {
   e2ePassRate: number;
   avgLatencyMs: number;
   p95LatencyMs: number;
+  /** 平均 token 用量（含 reasoning；部分 provider 不返回 usage 时为 null） */
+  avgPromptTokens: number | null;
+  avgCompletionTokens: number | null;
 }
 
 interface DriftReport {
@@ -91,28 +95,20 @@ interface DriftReport {
   cases: DriftCaseResult[];
 }
 
-// ============ 主流程 ============
+export interface DriftRunOptions {
+  nRepeat: number;
+  sampleSize: number;
+}
 
-async function main() {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) {
-    console.error("缺少 DEEPSEEK_API_KEY 环境变量。漂移监控需要调真实 API。");
-    console.error("用法: DEEPSEEK_API_KEY=sk-xxx npm run test:drift");
-    process.exit(1);
-  }
+// ============ 核心跑批（AB 测试可复用） ============
 
-  const config: AIConfig = {
-    provider: "deepseek",
-    baseURL: process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com",
-    apiKey,
-    model: process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash",
-    temperature: 0.05
-  };
-
-  const pv = promptVersion();
-  console.log(`\n[Drift Monitor] prompt=${pv.hash} N=${N_REPEAT}`);
-  console.log(`  通用: ${pv.generalTokens}t  物理: ${pv.physicsTokens}t`);
-  console.log(`  模型: ${config.model}\n`);
+/**
+ * 运行漂移抽样的核心逻辑：选取用例 → 逐条 N 次重复 → 汇总统计。
+ * 返回完整报告，供 test:drift 与 AB 测试（tests/ab-think.ts）复用。
+ * @param config 已解析的 AIConfig（AB 测试可通过设置 config.reasoningEffort 开 thinking）
+ */
+export async function runDrift(config: AIConfig, opts: DriftRunOptions): Promise<DriftReport> {
+  const { nRepeat, sampleSize } = opts;
 
   // 选取漂移敏感用例
   const allCases = JSON.parse(readFileSync(CASES_FILE, "utf8")).cases as Array<{
@@ -121,19 +117,7 @@ async function main() {
   }>;
   const sample = allCases
     .filter((c: { category: string }) => DRIFT_CATEGORIES.has(c.category))
-    .slice(0, SAMPLE_SIZE);
-
-  // 检查 baseline
-  const isBaseline = process.env.DRIFT_BASELINE === "1";
-  let baseline: DriftReport | null = null;
-  if (!isBaseline && existsSync(DRIFT_REPORT_FILE)) {
-    baseline = JSON.parse(readFileSync(DRIFT_REPORT_FILE, "utf8"));
-    if (baseline!.promptVersion.hash === pv.hash) {
-      console.log(`⚠ prompt 未变更 (hash=${pv.hash})，本次结果将覆盖旧报告`);
-    } else {
-      console.log(`prompt 已变更: ${baseline!.promptVersion.hash} → ${pv.hash}`);
-    }
-  }
+    .slice(0, sampleSize);
 
   const cases: DriftCaseResult[] = [];
 
@@ -142,7 +126,7 @@ async function main() {
     console.log(`[${ci + 1}/${sample.length}] ${tc.id}…`);
     const runs: DriftRun[] = [];
 
-    for (let r = 0; r < N_REPEAT; r++) {
+    for (let r = 0; r < nRepeat; r++) {
       const t0 = Date.now();
       const run: DriftRun = {
         pass: false,
@@ -158,10 +142,17 @@ async function main() {
         // ★ highschool 用例跑在 3D 画布：显式传 appMode="3d"
         const appMode: "2d" | "3d" = tc.category === "highschool" ? "3d" : "2d";
         const systemPrompt = buildSystemPrompt(tc.domain as "general" | "physics", appMode);
-        const response = await chat(config, [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: tc.input }
-        ]);
+        const response = await chat(
+          config,
+          [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: tc.input }
+          ],
+          undefined,
+          undefined,
+          // ★ 捕获 token 用量（A/B 对比 thinking 成本）
+          (usage) => { run.tokens = { prompt: usage.prompt, completion: usage.completion }; }
+        );
 
         run.latencyMs = Date.now() - t0;
 
@@ -201,9 +192,11 @@ async function main() {
         }
         run.pass = false;
         process.stdout.write("✗");
+        runs.push(run); // ★ 修复：原版漏掉 push，统计恒为 0
         continue;
       }
       process.stdout.write(run.pass ? "." : "✗");
+      runs.push(run);   // ★ 修复：原版漏掉 push，统计恒为 0
     }
 
     const stats = computeStats(runs);
@@ -223,29 +216,85 @@ async function main() {
     ).length
   };
 
-  const report: DriftReport = {
+  return {
     timestamp: Date.now(),
-    promptVersion: pv,
-    nRepeat: N_REPEAT,
+    promptVersion: promptVersion(),
+    nRepeat,
     sampleCases: cases.length,
     summary: { ...summaryStats, breakdown },
     cases
   };
+}
+
+// ============ 主流程 ============
+
+async function main() {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) {
+    console.error("缺少 DEEPSEEK_API_KEY 环境变量。漂移监控需要调真实 API。");
+    console.error("用法: DEEPSEEK_API_KEY=sk-xxx npm run test:drift");
+    process.exit(1);
+  }
+
+  const config: AIConfig = {
+    provider: "deepseek",
+    baseURL: process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com",
+    apiKey,
+    model: process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash",
+    temperature: 0.05
+  };
+
+  // ★ A/B：DRIFT_THINKING=low|medium|high → 给所有调用开 thinking（reasoning_effort）
+  const thinking = process.env.DRIFT_THINKING;
+  if (thinking) {
+    if (!["low", "medium", "high"].includes(thinking)) {
+      console.error(`DRIFT_THINKING 必须为 low|medium|high（实际: ${thinking}）`);
+      process.exit(1);
+    }
+    config.reasoningEffort = thinking as "low" | "medium" | "high";
+  }
+
+  const report = await runDrift(config, { nRepeat: N_REPEAT, sampleSize: SAMPLE_SIZE });
+  const pv = report.promptVersion;
+  const allRuns = report.cases.flatMap(c => c.runs);
+  const summaryStats = report.summary;
+  const breakdown = summaryStats.breakdown;
+
+  console.log(`\n[Drift Monitor] prompt=${pv.hash} N=${N_REPEAT}${thinking ? ` thinking=${thinking}` : ""}`);
+  console.log(`  通用: ${pv.generalTokens}t  物理: ${pv.physicsTokens}t`);
+  console.log(`  模型: ${config.model}\n`);
+
+  // 检查 baseline
+  const isBaseline = process.env.DRIFT_BASELINE === "1";
+  let baseline: DriftReport | null = null;
+  if (!isBaseline && existsSync(DRIFT_REPORT_FILE)) {
+    baseline = JSON.parse(readFileSync(DRIFT_REPORT_FILE, "utf8"));
+    if (baseline!.promptVersion.hash === pv.hash) {
+      console.log(`⚠ prompt 未变更 (hash=${pv.hash})，本次结果将覆盖旧报告`);
+    } else {
+      console.log(`prompt 已变更: ${baseline!.promptVersion.hash} → ${pv.hash}`);
+    }
+  }
 
   writeFileSync(DRIFT_REPORT_FILE, JSON.stringify(report, null, 2));
 
   // 更新版本记录
-  appendVersion(pv, summaryStats, cases.length);
+  appendVersion(pv, summaryStats, report.sampleCases);
 
   // ====== 控制台摘要 ======
   console.log(`\n${"=".repeat(56)}`);
-  console.log(`漂移监控报告  prompt=${pv.hash.slice(0, 8)}  N=${N_REPEAT}×${cases.length}`);
+  console.log(`漂移监控报告  prompt=${pv.hash.slice(0, 8)}  N=${N_REPEAT}×${report.cases.length}`);
   console.log(`${"=".repeat(56)}`);
   console.log(`端到端首轮通过率:  ${pct(summaryStats.e2ePassRate)}`);
   console.log(`格式漂移率:        ${pct(summaryStats.formatDriftRate)}  (目标 < 1%)`);
   console.log(`Schema 通过率:     ${pct(summaryStats.schemaPassRate)}`);
   console.log(`执行成功率:        ${pct(summaryStats.execSuccessRate)}  (目标 ≥ 95%)`);
   console.log(`平均延迟:          ${summaryStats.avgLatencyMs.toFixed(0)}ms  p95: ${summaryStats.p95LatencyMs.toFixed(0)}ms`);
+  if (summaryStats.avgCompletionTokens !== null) {
+    console.log(`平均 token:        prompt ${summaryStats.avgPromptTokens!.toFixed(0)} / completion ${summaryStats.avgCompletionTokens.toFixed(0)}`);
+  } else {
+    console.log(`平均 token:        （provider 未返回 usage）`);
+  }
   console.log(`\n漂移细分:`);
   console.log(`  格式漂移: ${breakdown.formatDriftCount}/${allRuns.length}`);
   console.log(`  Schema 失败: ${breakdown.schemaFailCount}/${allRuns.length}`);
@@ -284,7 +333,11 @@ async function main() {
 
 function computeStats(runs: DriftRun[]): DriftStats {
   const n = runs.length;
-  if (n === 0) return { formatDriftRate: 0, schemaPassRate: 0, execSuccessRate: 0, e2ePassRate: 0, avgLatencyMs: 0, p95LatencyMs: 0 };
+  const empty = {
+    formatDriftRate: 0, schemaPassRate: 0, execSuccessRate: 0, e2ePassRate: 0,
+    avgLatencyMs: 0, p95LatencyMs: 0, avgPromptTokens: null, avgCompletionTokens: null
+  };
+  if (n === 0) return empty;
 
   const p = runs.filter(r => r.pass).length;
   const f = runs.filter(r => r.layers.cleaning.needed).length;
@@ -294,13 +347,24 @@ function computeStats(runs: DriftRun[]): DriftStats {
     .filter(r => r.layers.execution.total > 0)
     .map(r => r.layers.execution.okCount / r.layers.execution.total);
 
+  // token 统计：仅统计返回了 usage 的 run
+  const withTokens = runs.filter(r => r.tokens && r.tokens.completion > 0);
+  const avgPrompt = withTokens.length > 0
+    ? withTokens.reduce((a, r) => a + (r.tokens?.prompt ?? 0), 0) / withTokens.length
+    : null;
+  const avgCompletion = withTokens.length > 0
+    ? withTokens.reduce((a, r) => a + (r.tokens?.completion ?? 0), 0) / withTokens.length
+    : null;
+
   return {
     formatDriftRate: f / n,
     schemaPassRate: s / n,
     execSuccessRate: exec.length > 0 ? exec.reduce((a, b) => a + b, 0) / exec.length : 0,
     e2ePassRate: p / n,
     avgLatencyMs: lats.reduce((a, b) => a + b, 0) / n,
-    p95LatencyMs: lats[Math.ceil(n * 0.95) - 1] ?? lats[n - 1]
+    p95LatencyMs: lats[Math.ceil(n * 0.95) - 1] ?? lats[n - 1],
+    avgPromptTokens: avgPrompt,
+    avgCompletionTokens: avgCompletion
   };
 }
 
@@ -365,7 +429,11 @@ function appendVersion(
   writeFileSync(VERSIONS_FILE, JSON.stringify(ledger, null, 2));
 }
 
-main().catch(e => {
-  console.error(e);
-  process.exit(1);
-});
+// ★ 直接执行时才跑 main（被 ab-think.ts import 时只导出 runDrift，避免重复跑批）
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isDirectRun) {
+  main().catch(e => {
+    console.error(e);
+    process.exit(1);
+  });
+}

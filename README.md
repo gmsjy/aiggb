@@ -71,6 +71,7 @@ AI 逐步调用工具（创建点/滑块/矢量/执行命令/查询对象…）�
 - **参数归一化**：Zod 校验 → 安全拦截 → **preFlight 语义预检**（负半径、min≥max、除零、依赖对象缺失在调用 GGB 前拦截，可读错误喂回 AI 自行修正）
 - **未知工具过滤**：AI 臆造的工具名直接返回错误，不执行
 - **连续失败熔断**：3 轮执行失败自动中止（参数类错误不计入，给模型自我修正机会）
+- **思考实时展示**：V4 thinking 的 `reasoning_content` 增量经 `🧠` 气泡实时呈现，思考阶段不再干等
 - **可重放**：工具调用 → `toolCallToEvalCommands` 映射为 GGB 命令，undo 回滚与训练回放复用同一套
 
 ---
@@ -223,6 +224,8 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
 
 > 日常推荐 `deepseek-v4-flash`（快、便宜）；复杂动图 + 3D 切 `deepseek-v4-pro`。Flash Model 用于 Phase 1 精炼和满足度评估（建议 v4-flash）。
 
+> 💡 **思考深度（Thinking）**：设置面板高级区可调 V4 思考深度（跟随默认 / 低 / 中 / 高），对编译/评估/Agent 均发送 `reasoning_effort`。**默认关闭**——A/B 实测（N=10×6）显示 `high` 在 v4-flash 上端到端 −8.3%，无 token/延迟收益，不建议开启。Agent 模式仍会实时展示模型思考过程（`🧠` 气泡）。
+
 ---
 
 ## 工具栏
@@ -309,7 +312,8 @@ React 19 · Vite 8 · TypeScript 5 · Zustand 5 · Zod 3 · GeoGebra deployggb.j
 | `npm run test:trajectory` | 用当前执行层重放历史失败轨迹，统计"越用越强"修复率（离线） |
 | `npm run test:record` | 在线全量 + 录制 fixtures（需 `.env` 配置 Key） |
 | `npm run test:smoke` | 在线冒烟（static + clarify 子集） |
-| `npm run test:drift` / `test:baseline` | 漂移监控 N=10 / 更新基线（需 `.env` Key） |
+| `npm run test:drift` / `test:baseline` | 漂移监控 N=10 / 更新基线（需 `.env` Key）；`DRIFT_THINKING=high` 可单开 thinking 跑 |
+| `npm run test:ab` | **A/B 对比**：thinking 开/关 同用例对比（端到端 + 延迟 + token 成本），输出 `tests/ab-report.json` |
 | `npm run test:hash` | 查看 prompt 指纹 |
 | `npm run prompt:iterate` / `analyze` / `golden` / `compare` | Prompt 迭代工作流 |
 | `npm run test:visual` / `test:visual-all` | Playwright 截图回归 |
