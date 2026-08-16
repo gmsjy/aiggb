@@ -53,7 +53,10 @@ export function fitViewToAspect(
   xmin: number, xmax: number, ymin: number, ymax: number
 ): { xmin: number; xmax: number; ymin: number; ymax: number } {
   const size = getViewSizePx(api);
-  if (!size) return { xmin, xmax, ymin, ymax };
+  if (!size) {
+    console.warn("[AiGGB:DIAG] fitViewToAspect: 无法获取绘图区尺寸，视窗原样应用");
+    return { xmin, xmax, ymin, ymax };
+  }
 
   const xRange = xmax - xmin;
   const yRange = ymax - ymin;
@@ -67,28 +70,52 @@ export function fitViewToAspect(
   const finalXRange = Math.max(xRange, yRange * aspect);
   const finalYRange = finalXRange / aspect;
 
-  return {
+  const fitted = {
     xmin: xMid - finalXRange / 2,
     xmax: xMid + finalXRange / 2,
     ymin: yMid - finalYRange / 2,
     ymax: yMid + finalYRange / 2,
   };
+
+  console.log(
+    `[AiGGB:DIAG] fitViewToAspect: canvas=${size.w.toFixed(0)}×${size.h.toFixed(0)} aspect=${aspect.toFixed(3)} | ` +
+    `请求 [${xmin},${xmax}]×[${ymin},${ymax}] → 应用 [${fitted.xmin.toFixed(2)},${fitted.xmax.toFixed(2)}]×[${fitted.ymin.toFixed(2)},${fitted.ymax.toFixed(2)}]`
+  );
+  return fitted;
 }
 
-/** 获取画布当前像素尺寸（优先 GGB 原生 getWidth/getHeight，回退 DOM 容器 rect） */
+/**
+ * 获取画布当前绘图区像素尺寸（宽/高），用于视窗宽高比校正。
+ *
+ * 测量优先级：
+ *   1. #ggb-container 内最大的 <canvas> —— 真正的绘图区（GGB 图形区由 canvas 承载，
+ *      canvas 宽高比 == setCoordSystem 实际映射区；容器 rect 含轴标签边距，比例有偏差）
+ *   2. 容器 rect（canvas 尚未布局 / 隐藏时回退）
+ *   3. GGB 原生 getWidth/getHeight（可能返回注入时的初始尺寸，resize 后过时——最不可靠）
+ */
 function getViewSizePx(api: GGBAppletApi): { w: number; h: number } | null {
+  if (typeof document !== "undefined") {
+    const container = document.getElementById("ggb-container");
+    if (container) {
+      // ★ 首选：绘图 canvas（取面积最大者，排除小 UI canvas）
+      let best: { w: number; h: number } | null = null;
+      for (const canvas of container.querySelectorAll("canvas")) {
+        const r = canvas.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && (!best || r.width * r.height > best.w * best.h)) {
+          best = { w: r.width, h: r.height };
+        }
+      }
+      if (best) return best;
+      // 回退：容器 rect
+      const rect = container.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) return { w: rect.width, h: rect.height };
+    }
+  }
   const anyApi = api as unknown as { getWidth?: () => number; getHeight?: () => number };
   if (typeof anyApi.getWidth === "function" && typeof anyApi.getHeight === "function") {
     const w = anyApi.getWidth();
     const h = anyApi.getHeight();
     if (w > 0 && h > 0) return { w, h };
-  }
-  if (typeof document !== "undefined") {
-    const el = document.getElementById("ggb-container");
-    if (el) {
-      const rect = el.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) return { w: rect.width, h: rect.height };
-    }
   }
   return null;
 }
