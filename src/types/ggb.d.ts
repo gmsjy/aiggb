@@ -74,6 +74,9 @@ export interface GGBAppletApi {
   setCoordSystem3D?: (xmin: number, xmax: number, ymin: number, ymax: number, zmin: number, zmax: number, yVertical: boolean) => void;
   /** 同步 applet 内部尺寸（resize 时更新 viewWidth/viewHeight，坐标系据此重算缩放） */
   setSize?: (width: number, height: number) => void;
+  /** 当前 applet 像素尺寸（视窗宽高比校正用）。GGB 官方 API。 */
+  getWidth?: () => number;
+  getHeight?: () => number;
   setAxesVisible: (xAxis: boolean, yAxis: boolean, zAxis?: boolean) => void;
   setAxisLabels: (view: number, xLabel: string, yLabel: string, zLabel: string) => void;
   setAxisUnits: (view: number, xUnit: string, yUnit: string, zUnit: string) => void;

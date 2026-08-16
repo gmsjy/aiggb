@@ -11,7 +11,7 @@
 import type { GGBAppletApi } from "../types/ggb";
 import { TOOL_SCHEMAS } from "./tools";
 import { GGB_FORBIDDEN_COMMANDS } from "./commands";
-import { hexToRgb } from "./ggbBridge";
+import { hexToRgb, fitViewToAspect } from "./ggbBridge";
 import { correctCommand } from "./commandCorrect";
 import { PHYSICS_CONSTANTS } from "./physics";
 
@@ -361,8 +361,10 @@ function dispatch(
       };
       const changes: string[] = [];
       if (xmin !== undefined && xmax !== undefined && ymin !== undefined && ymax !== undefined) {
-        api.setCoordSystem(xmin, xmax, ymin, ymax);
-        changes.push(`视窗=[${xmin},${xmax}]×[${ymin},${ymax}]`);
+        // ★ 视窗宽高比校正：以画布实际宽高比适配，避免圆变椭圆/比例失真
+        const fit = fitViewToAspect(api, xmin, xmax, ymin, ymax);
+        api.setCoordSystem(fit.xmin, fit.xmax, fit.ymin, fit.ymax);
+        changes.push(`视窗=[${fit.xmin},${fit.xmax}]×[${fit.ymin},${fit.ymax}]（按画布宽高比适配）`);
       }
       if (xUnit && yUnit && api.setAxisUnits) {
         api.setAxisUnits(1, xUnit, yUnit, "");

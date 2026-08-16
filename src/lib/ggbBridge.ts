@@ -34,6 +34,65 @@ export interface ExecResult {
   error?: string;
 }
 
+// ──── 视窗宽高比校正 ────
+
+/**
+ * 视窗适配：把 AI 请求的视窗范围调整为与画布实际宽高比一致。
+ *
+ * GeoGebra 的 setCoordSystem 将 xmin..xmax 线性映射到画布像素宽、ymin..ymax 映射到高；
+ * 若 AI 给出的范围比例与画布宽高比不符（画布通常宽 > 高，AI 却常给近方形范围），
+ * 圆会变椭圆、角度与比例失真。
+ * 本函数以 AI 范围中心为锚点，保持中心不变，向外扩展其中一维，使
+ *   (xmax-xmin) : (ymax-ymin) == 画布像素宽 : 画布像素高，
+ * 且结果范围【包含】AI 请求范围（只扩不缩，不裁剪内容）。
+ *
+ * @returns 调整后的四元组；无法获取画布尺寸（mock/测试环境）时原样返回。
+ */
+export function fitViewToAspect(
+  api: GGBAppletApi,
+  xmin: number, xmax: number, ymin: number, ymax: number
+): { xmin: number; xmax: number; ymin: number; ymax: number } {
+  const size = getViewSizePx(api);
+  if (!size) return { xmin, xmax, ymin, ymax };
+
+  const xRange = xmax - xmin;
+  const yRange = ymax - ymin;
+  if (!(xRange > 0) || !(yRange > 0)) return { xmin, xmax, ymin, ymax };
+
+  const aspect = size.w / size.h; // 画布像素宽高比
+  const xMid = (xmin + xmax) / 2;
+  const yMid = (ymin + ymax) / 2;
+
+  // 保持中心：取「xRange」与「yRange*aspect」中较大者作最终 x 范围，y 按 aspect 补足
+  const finalXRange = Math.max(xRange, yRange * aspect);
+  const finalYRange = finalXRange / aspect;
+
+  return {
+    xmin: xMid - finalXRange / 2,
+    xmax: xMid + finalXRange / 2,
+    ymin: yMid - finalYRange / 2,
+    ymax: yMid + finalYRange / 2,
+  };
+}
+
+/** 获取画布当前像素尺寸（优先 GGB 原生 getWidth/getHeight，回退 DOM 容器 rect） */
+function getViewSizePx(api: GGBAppletApi): { w: number; h: number } | null {
+  const anyApi = api as unknown as { getWidth?: () => number; getHeight?: () => number };
+  if (typeof anyApi.getWidth === "function" && typeof anyApi.getHeight === "function") {
+    const w = anyApi.getWidth();
+    const h = anyApi.getHeight();
+    if (w > 0 && h > 0) return { w, h };
+  }
+  if (typeof document !== "undefined") {
+    const el = document.getElementById("ggb-container");
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) return { w: rect.width, h: rect.height };
+    }
+  }
+  return null;
+}
+
 /** 把所有命令逐条执行，失败不停。批量操作期间暂停重绘以提升性能。 */
 export function executeCommands(api: GGBAppletApi, commands: Command[], appMode?: "2d" | "3d"): ExecResult[] {
   // ★ 批量执行：暂停重绘 → 逐条执行 → 恢复重绘（一次性渲染，避免逐条重绘闪烁）
@@ -229,7 +288,9 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
       }
 
       case "view": {
-        api.setCoordSystem(cmd.xmin, cmd.xmax, cmd.ymin, cmd.ymax);
+        // ★ 视窗宽高比校正：以画布实际宽高比适配 AI 请求范围，避免圆变椭圆/比例失真
+        const fit = fitViewToAspect(api, cmd.xmin, cmd.xmax, cmd.ymin, cmd.ymax);
+        api.setCoordSystem(fit.xmin, fit.xmax, fit.ymin, fit.ymax);
         if (cmd.axesUnit && api.setAxisUnits) {
           api.setAxisUnits(1, cmd.axesUnit[0], cmd.axesUnit[1], "");
         }
