@@ -105,7 +105,8 @@ code {
 
 .main-split {
   display: grid;
-  grid-template-columns: minmax(340px, 380px) minmax(0, 1fr) minmax(320px, 420px);
+  /* ★ 侧栏收窄、画布让出更多空间：聊天 300~360、脚本 280~380（原 340~380 / 320~420） */
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(280px, 380px);
   /* ★ 必须定义行占满剩余高度：grid-auto-rows:auto 时行高由内容决定，
        窗口变高 → main-split 变高但行不填满 → GGB 容器不随窗口 resize。 */
   grid-template-rows: minmax(0, 1fr);
@@ -115,7 +116,7 @@ code {
   position: relative;
 }
 .main-split.script-collapsed {
-  grid-template-columns: minmax(340px, 380px) minmax(0, 1fr);
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
 }
 
 /* ============ Toolbar ============ */
@@ -150,8 +151,50 @@ code {
 
 .toolbar-actions {
   display: flex;
-  gap: var(--space-2);
+  gap: var(--space-1);
   align-items: center;
+}
+
+/* 工具栏分组：同类操作聚合成组，组间用细分隔线区隔 */
+.tb-group {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+.tb-sep {
+  width: 1px;
+  height: 22px;
+  background: var(--border);
+  margin: 0 var(--space-1);
+  flex-shrink: 0;
+}
+
+/* token 用量统计（会话累计，悬停看明细） */
+.token-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  margin-left: var(--space-2);
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  font-size: 12px;
+  color: var(--fg-2);
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+.token-stat-total {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--fg-1);
+}
+.token-stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--fg-3);
 }
 
 .domain-switch {
@@ -955,3 +998,92 @@ code {
   transition: opacity 0.15s;
 }
 .session-item:hover .session-actions { opacity: 1; }
+
+/* ============ Token 用量统计（设置面板） ============ */
+.usage-summary-inline {
+  color: var(--fg-3);
+  font-size: 12px;
+  font-weight: 400;
+  margin-left: 4px;
+}
+.usage-totals {
+  display: flex;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-3);
+}
+.usage-total {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.usage-total-label {
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.usage-total-value {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg-0);
+}
+
+.token-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-1) 0 var(--space-2);
+}
+.token-chart-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.token-chart-title {
+  font-size: 12px;
+  color: var(--fg-2);
+}
+.token-chart-block svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.token-chart-empty {
+  padding: var(--space-4) var(--space-2);
+  color: var(--fg-3);
+  font-size: 12px;
+  font-style: italic;
+  text-align: center;
+}
+.token-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-1) 0;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.legend-swatch.legend-line {
+  height: 3px;
+  width: 14px;
+  border-radius: 1px;
+  background: var(--warn) !important;
+}

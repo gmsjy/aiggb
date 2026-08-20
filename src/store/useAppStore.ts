@@ -51,6 +51,43 @@ function writeSessionIndexState(s: SessionIndexState): void {
   } catch { /* 容量/隐私模式异常静默 */ }
 }
 
+// ── token 用量历史（每轮对话一条，localStorage 独立 key，设置面板统计图消费） ──
+const TOKEN_HISTORY_KEY = "aiggb_token_usage";
+/** 最多保留的对话轮次（每条 ~50 字节，100 条约 5KB） */
+const MAX_TOKEN_HISTORY = 100;
+
+/** 一轮对话的 token 用量记录 */
+export interface TokenRecord {
+  /** 轮次结束时间戳（毫秒） */
+  ts: number;
+  /** 输入 token */
+  prompt: number;
+  /** 输出 token */
+  completion: number;
+}
+
+function readTokenHistory(): TokenRecord[] {
+  try {
+    const raw = localStorage.getItem(TOKEN_HISTORY_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw) as unknown;
+    return Array.isArray(arr)
+      ? arr.filter((r): r is TokenRecord =>
+          r != null && typeof (r as TokenRecord).ts === "number" &&
+          typeof (r as TokenRecord).prompt === "number" &&
+          typeof (r as TokenRecord).completion === "number"
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+function writeTokenHistory(h: TokenRecord[]): void {
+  try {
+    localStorage.setItem(TOKEN_HISTORY_KEY, JSON.stringify(h.slice(-MAX_TOKEN_HISTORY)));
+  } catch { /* 容量异常静默 */ }
+}
+
 export interface AssistantPayload {
   explanation: string;
   commands: Command[];
@@ -101,6 +138,12 @@ interface AppState extends PersistedState {
    */
   symbolTable: Array<{ name: string; type: string; cmd: string }>;
   isThinking: boolean;
+  /** 会话累计 token 用量（prompt/completion，运行期不持久化，随会话清空） */
+  tokenUsage: { prompt: number; completion: number };
+  /** 本轮对话累计 token（runRound 结束入历史，不持久化） */
+  roundTokenUsage: { prompt: number; completion: number };
+  /** token 用量历史（每轮对话一条，持久化，设置面板统计图消费） */
+  tokenHistory: TokenRecord[];
 
   // ── 会话历史（多会话管理） ──
   /** 当前会话 id（IndexedDB sessionStore 的 Session.id） */
@@ -125,6 +168,16 @@ interface AppState extends PersistedState {
   setAgentMode: (on: boolean) => void;
   setSymbolTable: (symbols: Array<{ name: string; type: string; cmd: string }>) => void;
   recordTemplateUse: (id: string) => void;
+  /** 累加一次 AI 调用的 token 用量 */
+  addTokenUsage: (u: { prompt: number; completion: number }) => void;
+  /** 重置 token 累计（清空/新建会话时调用） */
+  resetTokenUsage: () => void;
+  /** 一轮对话开始：清零本轮累计 */
+  startRound: () => void;
+  /** 一轮对话结束：本轮累计入历史（持久化）并清零 */
+  finishRound: () => void;
+  /** 启动时从 localStorage 装载 token 历史 */
+  loadTokenHistory: () => void;
 
   appendMessage: (t: ChatTurn) => void;
   clearMessages: () => void;
@@ -174,6 +227,9 @@ export const useAppStore = create<AppState>()(
       constructionLog: [],
       symbolTable: [],
       isThinking: false,
+      tokenUsage: { prompt: 0, completion: 0 },
+      roundTokenUsage: { prompt: 0, completion: 0 },
+      tokenHistory: [],
       currentSessionId: null,
       sessionTitle: "新会话",
       sessionCreatedAt: 0,
@@ -192,6 +248,28 @@ export const useAppStore = create<AppState>()(
       recordTemplateUse: id => set(state => ({
         templateUsage: { ...(state.templateUsage ?? {}), [id]: ((state.templateUsage ?? {})[id] ?? 0) + 1 }
       })),
+      addTokenUsage: u => set(state => ({
+        tokenUsage: {
+          prompt: state.tokenUsage.prompt + u.prompt,
+          completion: state.tokenUsage.completion + u.completion
+        },
+        roundTokenUsage: {
+          prompt: state.roundTokenUsage.prompt + u.prompt,
+          completion: state.roundTokenUsage.completion + u.completion
+        }
+      })),
+      resetTokenUsage: () => set({ tokenUsage: { prompt: 0, completion: 0 } }),
+      startRound: () => set({ roundTokenUsage: { prompt: 0, completion: 0 } }),
+      finishRound: () => {
+        const round = get().roundTokenUsage;
+        if (round.prompt > 0 || round.completion > 0) {
+          const record: TokenRecord = { ts: Date.now(), prompt: round.prompt, completion: round.completion };
+          const history = [...get().tokenHistory, record].slice(-MAX_TOKEN_HISTORY);
+          writeTokenHistory(history);
+          set({ tokenHistory: history, roundTokenUsage: { prompt: 0, completion: 0 } });
+        }
+      },
+      loadTokenHistory: () => set({ tokenHistory: readTokenHistory() }),
 
       // ── 会话历史 actions ──
       initSessionFromStorage: async () => {
@@ -279,6 +357,7 @@ export const useAppStore = create<AppState>()(
         set({
           currentSessionId: id, sessionTitle: "新会话", sessionCreatedAt: now,
           messages: [], constructionLog: [], symbolTable: [], pendingCanvasSnapshot: null,
+          tokenUsage: { prompt: 0, completion: 0 },
         });
         get().ggbApi?.newConstruction();
         const metas = await listSessions();
@@ -303,6 +382,7 @@ export const useAppStore = create<AppState>()(
           domain: loaded.domain,
           agentMode: loaded.agentMode,
           pendingCanvasSnapshot: loaded.canvasSnapshot ?? null,
+          tokenUsage: { prompt: 0, completion: 0 },
         });
         // 画布模式：目标会话模式与当前不同 → 触发 applet 重建（appletOnLoad 恢复快照）
         if (loaded.ggbAppName !== get().ggbAppName) {
@@ -362,6 +442,7 @@ export const useAppStore = create<AppState>()(
         set({
           currentSessionId: id, sessionTitle: "新会话", sessionCreatedAt: now,
           messages: [], constructionLog: [], symbolTable: [], pendingCanvasSnapshot: null,
+          tokenUsage: { prompt: 0, completion: 0 },
         });
         get().ggbApi?.newConstruction();
         const metas = await listSessions();
@@ -395,7 +476,7 @@ export const useAppStore = create<AppState>()(
           };
         }),
 
-      clearMessages: () => set({ messages: [], constructionLog: [] }),
+      clearMessages: () => set({ messages: [], constructionLog: [], tokenUsage: { prompt: 0, completion: 0 } }),
 
       undoLastTurn: () =>
         set(state => {

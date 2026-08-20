@@ -6,6 +6,8 @@ import { X, ExternalLink, ShieldAlert } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import { PROVIDER_PRESETS, findProvider } from "../lib/providers";
 import { ping, AIError, type AIConfig } from "../lib/aiClient";
+import { TokenUsageChart } from "./TokenUsageChart";
+import { fmtTokens } from "../lib/format";
 
 interface Props {
   onClose: () => void;
@@ -19,6 +21,10 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
   const setConfig = useAppStore(s => s.setConfig);
   const clearKey = useAppStore(s => s.clearKey);
   const acknowledgePrivacy = useAppStore(s => s.acknowledgePrivacy);
+  const tokenHistory = useAppStore(s => s.tokenHistory);
+  const totalPrompt = tokenHistory.reduce((a, r) => a + r.prompt, 0);
+  const totalCompletion = tokenHistory.reduce((a, r) => a + r.completion, 0);
+  const totalAll = totalPrompt + totalCompletion;
 
   const [providerId, setProviderId] = useState<string>(existing?.provider ?? "deepseek");
   const [baseURL, setBaseURL] = useState<string>(
@@ -319,6 +325,33 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
                 提升质量但增加 token 成本与延迟。用 <code>npm run test:ab</code> 可对比开启前后效果。
               </small>
             </label>
+          </details>
+
+          {/* ── 用量统计 ── */}
+          <details className="form-details usage-details" open={tokenHistory.length > 0}>
+            <summary>
+              用量统计
+              {tokenHistory.length > 0 && (
+                <span className="usage-summary-inline">
+                  · {tokenHistory.length} 次对话 · 累计 {fmtTokens(totalAll)} tok
+                </span>
+              )}
+            </summary>
+            <div className="usage-totals">
+              <div className="usage-total">
+                <span className="usage-total-label">累计输入</span>
+                <span className="usage-total-value">{fmtTokens(totalPrompt)}</span>
+              </div>
+              <div className="usage-total">
+                <span className="usage-total-label">累计输出</span>
+                <span className="usage-total-value">{fmtTokens(totalCompletion)}</span>
+              </div>
+              <div className="usage-total">
+                <span className="usage-total-label">合计</span>
+                <span className="usage-total-value">{fmtTokens(totalAll)}</span>
+              </div>
+            </div>
+            <TokenUsageChart history={tokenHistory} />
           </details>
 
           <label className="row">

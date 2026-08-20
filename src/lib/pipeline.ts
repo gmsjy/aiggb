@@ -106,6 +106,8 @@ export interface PipelineDeps {
   lightModel: string;
   /** 解析后的主力模型名（用于编译/修复/降级） */
   heavyModel: string;
+  /** 每次 AI 调用的 token 用量回传（累计到 UI 统计） */
+  onTokenUsage?: (usage: { prompt: number; completion: number }) => void;
 }
 
 export interface PipelineCallbacks {
@@ -196,13 +198,13 @@ async function refineSpec(userText: string, deps: PipelineDeps, skipCache = fals
     { role: "system", content: buildRefinePrompt(deps.domain) },
     { role: "user", content: userText }
   ];
-  let rawSpec = await chatRawFn(deps.config, phase1Messages, deps.signal, deps.lightModel, undefined, true);
+  let rawSpec = await chatRawFn(deps.config, phase1Messages, deps.signal, deps.lightModel, undefined, true, u => deps.onTokenUsage?.(u));
 
   // ★ V4 json_object 模式有概率返回空 content（官方已知问题）→ 重试 1 次
   //    避免空规格直接降级 single-phase（浪费 heavy model 重新做整轮）
   if (!rawSpec.trim()) {
     console.warn(`[Pipeline] ${getTraceId()} Phase 1 空响应，重试 1 次`);
-    rawSpec = await chatRawFn(deps.config, phase1Messages, deps.signal, deps.lightModel, undefined, true);
+    rawSpec = await chatRawFn(deps.config, phase1Messages, deps.signal, deps.lightModel, undefined, true, u => deps.onTokenUsage?.(u));
   }
 
   const spec = parseRefinedSpec(rawSpec);
@@ -324,7 +326,7 @@ async function evaluateAndRepair(finalSpec: string, deps: PipelineDeps): Promise
 
   let evalResult;
   try {
-    evalResult = await evalFn(deps.config, finalSpec, snapshot, deps.signal, deps.lightModel);
+    evalResult = await evalFn(deps.config, finalSpec, snapshot, deps.signal, deps.lightModel, undefined, u => deps.onTokenUsage?.(u));
   } catch (err) {
     if (deps.signal.aborted) throw err;
     console.warn("[Pipeline] 满足度评估失败，跳过", err);
@@ -509,7 +511,7 @@ async function chatWithFormatRetry(
   let conv = msgs;
   for (let i = 0; i <= MAX_FORMAT_RETRY; i++) {
     try {
-      return await chatFn(deps.config, conv, deps.signal, deps.heavyModel);
+      return await chatFn(deps.config, conv, deps.signal, deps.heavyModel, u => deps.onTokenUsage?.(u));
     } catch (err) {
       if (err instanceof AISchemaError && i < MAX_FORMAT_RETRY) {
         deps.appendMessage({
@@ -762,6 +764,8 @@ export async function runAgentPipeline(
       },
       // ★ 透传思考步骤到 UI（减少等待焦虑）
       onThinking: msg => cb.onAgentStep?.(msg),
+      // ★ token 统计
+      onTokenUsage: u => deps.onTokenUsage?.(u),
     });
 
     // ★ 失败回滚：AgentLoopResult.failed（熔断/超限/空响应放弃）→ 恢复本轮开始前快照
@@ -908,7 +912,7 @@ async function evaluateAgentResult(result: AgentLoopResult, deps: PipelineDeps):
 
   let evalResult;
   try {
-    evalResult = await evalFn(deps.config, specForEval, snapshot, deps.signal, deps.lightModel);
+    evalResult = await evalFn(deps.config, specForEval, snapshot, deps.signal, deps.lightModel, undefined, u => deps.onTokenUsage?.(u));
   } catch (err) {
     if (deps.signal.aborted) throw err;
     console.warn("[Pipeline] agent 满足度评估失败，跳过", err);

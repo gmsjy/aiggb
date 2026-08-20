@@ -164,6 +164,8 @@ export function ChatPanel() {
     if (runningRef.current) return;
     runningRef.current = true;
     setThinking(true);
+    // ★ token 统计：一轮对话开始，清零本轮累计
+    useAppStore.getState().startRound();
     const signal = beginRun();
     try {
       const appMode: "2d" | "3d" = useAppStore.getState().ggbAppName === "3d" ? "3d" : "2d";
@@ -189,6 +191,7 @@ export function ChatPanel() {
         newMessageId,
         heavyModel: resolveModel(config!, "heavy"),
         lightModel: resolveModel(config!, "light"),
+        onTokenUsage: u => useAppStore.getState().addTokenUsage(u),
       };
       // ★ Agent mode vs Two-stage pipeline
       if (useAppStore.getState().agentMode) {
@@ -223,6 +226,8 @@ export function ChatPanel() {
       setThinking(false);
       setAgentStep(""); // 重置 Agent 步骤
       agentStepRef.current = "";
+      // ★ token 统计：一轮对话结束，本轮累计入历史（持久化）
+      useAppStore.getState().finishRound();
       // ★ 轮结束落盘：保存当前会话（消息 + 画布快照）到 IndexedDB。
       //    fire-and-forget 不阻塞 UI；任何路径（两阶段/agent/异常/中止）都会经过这里。
       void useAppStore.getState().persistCurrentSession();

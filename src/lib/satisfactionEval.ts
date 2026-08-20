@@ -67,7 +67,8 @@ export async function evaluateSatisfaction(
   snapshot: string,
   signal?: AbortSignal,
   lightModel?: string,
-  chatRawImpl?: typeof defaultChatRaw
+  chatRawImpl?: typeof defaultChatRaw,
+  onUsage?: (usage: { prompt: number; completion: number }) => void
 ): Promise<SatisfactionResult> {
   // 短规格跳过评估（如"画一个点 A 在 (1,2)" → 无需审查）
   const SPEC_MIN_LENGTH = 25;
@@ -85,10 +86,10 @@ export async function evaluateSatisfaction(
   try {
     // ★ V4 json_object 模式有概率返回空 content → 重试 1 次
     //    否则空响应被 JSON.parse("") 当异常吞掉，错误图形被静默标记为 satisfied
-    let raw = await chatRawFn(config, messages, signal, lightModel ?? config.model, undefined, true);
+    let raw = await chatRawFn(config, messages, signal, lightModel ?? config.model, undefined, true, onUsage);
     if (!raw.trim()) {
       console.warn(`[satisfactionEval] ${getTraceId()} 空响应，重试 1 次`);
-      raw = await chatRawFn(config, messages, signal, lightModel ?? config.model, undefined, true);
+      raw = await chatRawFn(config, messages, signal, lightModel ?? config.model, undefined, true, onUsage);
     }
     const cleaned = raw.trim()
       .replace(/^```json?\s*/, "").replace(/\s*```$/, "")

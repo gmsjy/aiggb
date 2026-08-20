@@ -1,5 +1,8 @@
 /**
  * 顶栏工具栏 —— 见 SPEC.md §5.4
+ *
+ * 布局：品牌（左）｜ 操作区（右，按「模式 / 内容 / 编辑 / 导出 / 系统」分组）
+ * 最右为会话累计 token 用量统计（悬停看 prompt/completion 明细）。
  */
 import { useEffect, useState } from "react";
 import {
@@ -19,6 +22,7 @@ import {
 import { useAppStore } from "../store/useAppStore";
 import { executeCommands, exportGGB, exportPNG, resetTmpIds, applyCanvasConfig } from "../lib/ggbBridge";
 import { abortCurrentRun } from "../lib/runControl";
+import { fmtTokens } from "../lib/format";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -42,7 +46,10 @@ export function Toolbar({ onOpenSettings, onOpenGallery, onOpenSessions }: Props
   const messages = useAppStore(s => s.messages);
   const clearMessages = useAppStore(s => s.clearMessages);
   const undoLastTurn = useAppStore(s => s.undoLastTurn);
+  const tokenUsage = useAppStore(s => s.tokenUsage);
   const [domainToast, setDomainToast] = useState<string | null>(null);
+
+  const totalTokens = tokenUsage.prompt + tokenUsage.completion;
 
   const switchDomain = (d: typeof domain) => {
     if (d === domain) return;
@@ -158,70 +165,105 @@ export function Toolbar({ onOpenSettings, onOpenGallery, onOpenSessions }: Props
       {domainToast && <div className="domain-toast">{domainToast}</div>}
 
       <div className="toolbar-actions">
-        <div className="domain-switch">
+        {/* ── 组：模式 ── */}
+        <div className="tb-group">
+          <div className="domain-switch">
+            <button
+              className={domain === "general" ? "active" : ""}
+              onClick={() => switchDomain("general")}
+              title="数学模式：几何、函数、圆锥曲线、数列、3D 几何体"
+            >
+              <Sigma size={14} /> 数学
+            </button>
+            <button
+              className={domain === "physics" ? "active" : ""}
+              onClick={() => switchDomain("physics")}
+              title="物理域：矢量、常量、受力分析、电场"
+            >
+              <Atom size={14} /> 物理
+            </button>
+          </div>
+
           <button
-            className={domain === "general" ? "active" : ""}
-            onClick={() => switchDomain("general")}
-            title="数学模式：几何、函数、圆锥曲线、数列、3D 几何体"
+            className={ggbAppName === "3d" ? "active" : ""}
+            onClick={toggleMode}
+            title={ggbAppName === "3d" ? "当前 3D 模式 · 点击切回平面" : "当前平面模式 · 点击切换到 3D"}
           >
-            <Sigma size={14} /> 数学
+            <Box size={14} /> {ggbAppName === "3d" ? "3D" : "平面"}
           </button>
+
           <button
-            className={domain === "physics" ? "active" : ""}
-            onClick={() => switchDomain("physics")}
-            title="物理域：矢量、常量、受力分析、电场"
+            className={agentMode ? "active agent-on" : ""}
+            onClick={() => setAgentMode(!agentMode)}
+            title={agentMode
+              ? "当前：代理模式（逐步构造）— 点击切换回两阶段模式"
+              : "当前：两阶段模式 — 点击切换为代理模式（逐步构造+实时反馈）"}
           >
-            <Atom size={14} /> 物理
+            🤖 {agentMode ? "代理" : "两阶段"}
           </button>
         </div>
 
-        <button
-          className={ggbAppName === "3d" ? "active" : ""}
-          onClick={toggleMode}
-          title={ggbAppName === "3d" ? "当前 3D 模式 · 点击切回平面" : "当前平面模式 · 点击切换到 3D"}
-        >
-          <Box size={14} /> {ggbAppName === "3d" ? "3D" : "平面"}
-        </button>
+        <div className="tb-sep" />
 
-        <button
-          className={agentMode ? "active agent-on" : ""}
-          onClick={() => setAgentMode(!agentMode)}
-          title={agentMode
-            ? "当前：代理模式（逐步构造）— 点击切换回两阶段模式"
-            : "当前：两阶段模式 — 点击切换为代理模式（逐步构造+实时反馈）"}
-        >
-          🤖 {agentMode ? "代理" : "两阶段"}
-        </button>
-
-        <button onClick={onOpenGallery} title="物理 / 数学模板">
-          <LayoutGrid size={16} /> 模板
-        </button>
-        <button onClick={onOpenSessions} title="会话历史（保存/切换/删除）">
-          <MessagesSquare size={16} /> 会话
-        </button>
-        <button onClick={onUndo} disabled={messages.length === 0} title="撤销上一轮 AI 命令">
-          <Undo2 size={16} />
-        </button>
-        <button onClick={onClear} title="清空画布与聊天">
-          <Trash2 size={16} />
-        </button>
-        <button onClick={onExportGGB} disabled={!ggbApi} title="导出 .ggb 文件">
-          <Download size={16} />
-        </button>
-        <button onClick={onScreenshot} disabled={!ggbApi} title="截图 PNG">
-          <Camera size={16} />
-        </button>
-        <button onClick={onCopyScript} title="复制 GGB 脚本">
-          <ClipboardCopy size={16} />
-        </button>
-        {installEvt && (
-          <button onClick={onInstall} className="install" title="安装到桌面">
-            <MonitorDown size={16} /> 安装
+        {/* ── 组：内容 ── */}
+        <div className="tb-group">
+          <button onClick={onOpenSessions} title="会话历史（保存/切换/删除）">
+            <MessagesSquare size={16} /> 会话
           </button>
-        )}
-        <button onClick={onOpenSettings} title="API 设置">
-          <Settings size={16} />
-        </button>
+          <button onClick={onOpenGallery} title="物理 / 数学模板">
+            <LayoutGrid size={16} /> 模板
+          </button>
+        </div>
+
+        <div className="tb-sep" />
+
+        {/* ── 组：编辑 ── */}
+        <div className="tb-group">
+          <button onClick={onUndo} disabled={messages.length === 0} title="撤销上一轮 AI 命令">
+            <Undo2 size={16} />
+          </button>
+          <button onClick={onClear} title="清空画布与聊天">
+            <Trash2 size={16} />
+          </button>
+        </div>
+
+        <div className="tb-sep" />
+
+        {/* ── 组：导出 ── */}
+        <div className="tb-group">
+          <button onClick={onExportGGB} disabled={!ggbApi} title="导出 .ggb 文件">
+            <Download size={16} />
+          </button>
+          <button onClick={onScreenshot} disabled={!ggbApi} title="截图 PNG">
+            <Camera size={16} />
+          </button>
+          <button onClick={onCopyScript} title="复制 GGB 脚本">
+            <ClipboardCopy size={16} />
+          </button>
+        </div>
+
+        <div className="tb-sep" />
+
+        {/* ── 组：系统 ── */}
+        <div className="tb-group">
+          {installEvt && (
+            <button onClick={onInstall} className="install" title="安装到桌面">
+              <MonitorDown size={16} /> 安装
+            </button>
+          )}
+          <button onClick={onOpenSettings} title="API 设置">
+            <Settings size={16} />
+          </button>
+        </div>
+
+        {/* ── token 统计 ── */}
+        <div
+          className="token-stat"
+          title={`会话累计 token 用量\n输入（prompt）: ${fmtTokens(tokenUsage.prompt)}\n输出（completion）: ${fmtTokens(tokenUsage.completion)}`}
+        >
+          <span className="token-stat-total">{fmtTokens(totalTokens)}</span>
+          <span className="token-stat-label">tok</span>
+        </div>
       </div>
     </header>
   );

@@ -57,6 +57,8 @@ export function App() {
   //    画布快照由 GGBCanvas appletOnLoad 消费 pendingCanvasSnapshot 恢复）
   useEffect(() => {
     void useAppStore.getState().initSessionFromStorage();
+    // ★ 装载 token 用量历史（设置面板统计图消费）
+    useAppStore.getState().loadTokenHistory();
   }, []);
 
   return (

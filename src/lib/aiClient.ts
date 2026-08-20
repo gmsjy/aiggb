@@ -134,6 +134,8 @@ export interface AgentResponse {
   finishReason: string | null;
   /** V4 thinking 模式的推理过程（多轮回传用） */
   reasoningContent?: string;
+  /** 本次调用 token 用量（provider 返回 usage 时） */
+  usage?: { prompt: number; completion: number };
 }
 
 // ──── 错误类型 ────
@@ -406,6 +408,8 @@ interface StreamChunk {
     };
     finish_reason?: string | null;
   }>;
+  /** 流式 token 用量（需请求 stream_options.include_usage=true，出现在最后一块） */
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null;
 }
 
 /**
@@ -434,6 +438,8 @@ export async function agentChat(
     // ★ DeepSeek 对温度敏感，低 temp 减少 tool name 拼写幻觉，同时不抑制多样性
     temperature: quirks.agentTemperature ?? config.temperature ?? 0.2,
     stream: true,
+    // ★ 流式也要 token 统计（usage 在最后一块返回）
+    stream_options: { include_usage: true },
     // 工具 JSON 参数可能较长（create_parametric / eval_raw / eval_sequence），给足空间防截断
     [maxTokField]: 8192
   };
@@ -474,6 +480,7 @@ export async function agentChat(
   let reasoningContent = "";
   const toolCalls: ToolCallDelta[] = [];
   let finishReason: string | null = null;
+  let usage: { prompt: number; completion: number } | undefined;
 
   const handleLine = (line: string): void => {
     const trimmed = line.trim();
@@ -491,6 +498,14 @@ export async function agentChat(
     // ★ 捕获 finish_reason（通常在最后一块的 choice 级别）
     const choiceFinish = chunk.choices?.[0]?.finish_reason;
     if (choiceFinish) finishReason = choiceFinish;
+
+    // ★ 捕获流式 usage（include_usage 时在最后一块返回）
+    if (chunk.usage) {
+      usage = {
+        prompt: chunk.usage.prompt_tokens ?? 0,
+        completion: chunk.usage.completion_tokens ?? 0
+      };
+    }
 
     const delta = chunk.choices?.[0]?.delta;
     if (!delta) return;
@@ -550,7 +565,7 @@ export async function agentChat(
     );
   }
 
-  return { content: content || null, toolCalls: finalToolCalls, finishReason, reasoningContent: reasoningContent || undefined };
+  return { content: content || null, toolCalls: finalToolCalls, finishReason, reasoningContent: reasoningContent || undefined, usage };
 }
 
 // ──── Phase 1 精炼（纯文本） ────
@@ -566,7 +581,9 @@ export async function chatRaw(
   modelOverride?: string,
   maxTokens?: number,
   /** 约束 AI 输出为 JSON（用于 Phase 1 精炼和满足度评估，降低非 JSON 输出率） */
-  jsonMode?: boolean
+  jsonMode?: boolean,
+  /** 可选：回传本次调用 token 用量（统计用） */
+  onUsage?: (usage: { prompt: number; completion: number }) => void
 ): Promise<string> {
   const body: Record<string, unknown> = {
     model: modelOverride ?? config.model,
@@ -588,6 +605,12 @@ export async function chatRaw(
 
   const data = await callAPI(config, body, signal);
 
+  if (onUsage && data.usage) {
+    onUsage({
+      prompt: data.usage.prompt_tokens ?? 0,
+      completion: data.usage.completion_tokens ?? 0
+    });
+  }
   return data.choices?.[0]?.message?.content ?? "";
 }
 

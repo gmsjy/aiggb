@@ -71,6 +71,8 @@ export interface AgentLoopDeps {
   getMessages(): ChatTurn[];
   /** 流式展示 AI 的中间思考（可选） */
   onThinking?(message: string): void;
+  /** 每次 AI 调用的 token 用量回传（累计到 UI 统计） */
+  onTokenUsage?(usage: { prompt: number; completion: number }): void;
   /** Agent 模式专用模型名（已解析，含回退链） */
   agentModel: string;
   // ── 可注入依赖（测试用 mock 替换，生产环境使用默认实现） ──
@@ -285,6 +287,8 @@ export async function runAgentLoop(
           deps.onThinking?.(`🧠 ${reasoningPreview}`);
         }
       );
+      // ★ token 统计：每轮 agent 调用累计到 UI
+      if (response.usage) deps.onTokenUsage?.(response.usage);
     } catch (err) {
       if (err instanceof AIError) throw err;
       throw new AIError(`Agent 调用失败 (iter ${iterations})`, err);
