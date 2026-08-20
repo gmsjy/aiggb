@@ -893,3 +893,65 @@ code {
     display: none;
   }
 }
+
+/* ============ Session Dialog ============ */
+.session-new {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
+}
+.session-new:hover { background: var(--accent-soft); }
+.session-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  color: var(--fg-2);
+  font-size: 13px;
+  padding: 24px 0;
+}
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+.session-item:hover { background: var(--bg-1); }
+.session-item.active {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+}
+.session-title {
+  flex: 1;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-meta { color: var(--fg-2); font-size: 12px; white-space: nowrap; }
+.session-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.session-item:hover .session-actions { opacity: 1; }

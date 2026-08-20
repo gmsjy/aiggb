@@ -223,6 +223,9 @@ export function ChatPanel() {
       setThinking(false);
       setAgentStep(""); // 重置 Agent 步骤
       agentStepRef.current = "";
+      // ★ 轮结束落盘：保存当前会话（消息 + 画布快照）到 IndexedDB。
+      //    fire-and-forget 不阻塞 UI；任何路径（两阶段/agent/异常/中止）都会经过这里。
+      void useAppStore.getState().persistCurrentSession();
     }
   };
 

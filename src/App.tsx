@@ -3,6 +3,7 @@ import { useAppStore } from "./store/useAppStore";
 import { registerAppNameSetter } from "./lib/ggbBridge";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { TrainingDialog } from "./components/TrainingDialog";
+import { SessionDialog } from "./components/SessionDialog";
 import { ChatPanel } from "./components/ChatPanel";
 import { GGBCanvas } from "./components/GGBCanvas";
 import { ScriptPanel } from "./components/ScriptPanel";
@@ -17,6 +18,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [galleryOpen, setGalleryOpen] = useState<boolean>(false);
   const [trainingOpen, setTrainingOpen] = useState<boolean>(false);
+  const [sessionsOpen, setSessionsOpen] = useState<boolean>(false);
   const [offline, setOffline] = useState<boolean>(typeof navigator !== "undefined" && !navigator.onLine);
   const [scriptCollapsed, setScriptCollapsed] = useState<boolean>(
     () => typeof localStorage !== "undefined" && localStorage.getItem(SCRIPT_COLLAPSED_KEY) === "1"
@@ -51,11 +53,18 @@ export function App() {
     registerAppNameSetter(name => useAppStore.getState().setAppName(name));
   }, []);
 
+  // ★ 启动恢复会话历史：从 localStorage 索引装载当前会话（消息入 store，
+  //    画布快照由 GGBCanvas appletOnLoad 消费 pendingCanvasSnapshot 恢复）
+  useEffect(() => {
+    void useAppStore.getState().initSessionFromStorage();
+  }, []);
+
   return (
     <div className="app-shell">
       <Toolbar
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenGallery={() => setGalleryOpen(true)}
+        onOpenSessions={() => setSessionsOpen(true)}
       />
 
       {offline && (
@@ -77,6 +86,7 @@ export function App() {
         />
       )}
       {galleryOpen && <TemplateGallery onClose={() => setGalleryOpen(false)} />}
+      {sessionsOpen && <SessionDialog onClose={() => setSessionsOpen(false)} />}
       {trainingOpen && <TrainingDialog onClose={() => setTrainingOpen(false)} />}
       <PWAUpdatePrompt />
     </div>

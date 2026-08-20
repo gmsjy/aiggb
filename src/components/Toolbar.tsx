@@ -13,7 +13,8 @@ import {
   Atom,
   Sigma,
   MonitorDown,
-  Box
+  Box,
+  MessagesSquare
 } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import { executeCommands, exportGGB, exportPNG, resetTmpIds, applyCanvasConfig } from "../lib/ggbBridge";
@@ -27,9 +28,10 @@ interface BeforeInstallPromptEvent extends Event {
 interface Props {
   onOpenSettings: () => void;
   onOpenGallery: () => void;
+  onOpenSessions: () => void;
 }
 
-export function Toolbar({ onOpenSettings, onOpenGallery }: Props) {
+export function Toolbar({ onOpenSettings, onOpenGallery, onOpenSessions }: Props) {
   const ggbApi = useAppStore(s => s.ggbApi);
   const ggbAppName = useAppStore(s => s.ggbAppName);
   const setAppName = useAppStore(s => s.setAppName);
@@ -193,6 +195,9 @@ export function Toolbar({ onOpenSettings, onOpenGallery }: Props) {
 
         <button onClick={onOpenGallery} title="物理 / 数学模板">
           <LayoutGrid size={16} /> 模板
+        </button>
+        <button onClick={onOpenSessions} title="会话历史（保存/切换/删除）">
+          <MessagesSquare size={16} /> 会话
         </button>
         <button onClick={onUndo} disabled={messages.length === 0} title="撤销上一轮 AI 命令">
           <Undo2 size={16} />

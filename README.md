@@ -235,12 +235,25 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
 | 📐 **数学** / ⚛ **物理** | 切换 System Prompt domain（影响 AI 的行为偏好） |
 | 📐 **平面** / 📦 **3D** | 手动切换 2D/3D 画布（切换时清空当前会话） |
 | 📚 模板 | 打开场景模板库（按当前 domain + 模式过滤） |
+| 💬 会话 | 会话历史：多会话新建/切换/删除/重命名，随浏览器保存（含画布快照） |
 | ↶ 撤销 | 撤销上一轮 AI 产生的全部命令 |
 | 🗑 清空 | 清空画布与聊天历史，重置回平面模式 |
 | 💾 导出 .ggb | 下载当前画布为 GeoGebra 文件 |
 | 📷 截图 | 导出 PNG |
 | 📋 复制脚本 | 把所有 eval 命令拼接复制到剪贴板 |
 | ⚙ 设置 | 重新打开 API 配置面板 |
+
+---
+
+## 会话历史（浏览器本地保存）
+
+每次对话自动保存为**会话**，刷新 / 重开页面后恢复，可随时回到任意历史场景继续编辑：
+
+- **自动保存**：每轮 AI 构造完成后，消息 + 画布 base64 快照写入 IndexedDB（`aiggb` 库 v3），不阻塞 UI
+- **恢复**：启动时自动装载上次会话（消息 + 画布）；画布快照优先恢复，失败回退重放构造命令
+- **多会话管理**：工具栏「💬 会话」→ 新建 / 切换 / 删除 / 重命名
+- **存储分离**：会话数据（`aiggb_sessions` 索引 + IndexedDB）与 API Key 配置（`aiggb_config`）完全隔离，不含任何凭据；「清除全部会话」可一键清空
+- 容量上限 30 个会话，超出自动淘汰最旧
 
 ---
 
@@ -335,6 +348,7 @@ src/
 │   ├── TemplateGallery.tsx     模板库（按 domain + 模式双重过滤）
 │   ├── ScriptPanel.tsx         实时脚本展示
 │   ├── SettingsDialog.tsx      API 配置
+│   ├── SessionDialog.tsx       会话历史弹层（列表/新建/切换/删除/重命名）
 │   └── MessageBubble.tsx / PWAUpdatePrompt.tsx
 ├── lib/
 │   ├── pipeline.ts             两阶段管线状态机（Phase 1→确认→Phase 2→修复→评估）
@@ -358,6 +372,7 @@ src/
 │   ├── providers.ts            AI 预置 provider
 │   ├── trainingStore.ts        训练数据闭环（IndexedDB 轨迹持久化）
 │   ├── trajectoryStore.ts      ReAct 轨迹构造（供回放/训练）
+│   ├── sessionStore.ts         会话历史存储（IndexedDB + localStorage 索引分离）
 │   └── trapStore.ts            分层记忆系统（prompt_hash / L2场景 / known_traps / 符号表 / 偏好）
 ├── store/useAppStore.ts        Zustand (persist v3)
 ├── styles/                     CSS Variables + 全局样式
@@ -370,7 +385,7 @@ tests/
 ├── agentLoop.test.ts           Agent 状态机 13 用例
 ├── agentSmoke.test.ts          Agent 端到端冒烟 4 场景（单摆/电场/3D/负例）
 ├── pipeline.test.ts / specCache.test.ts / ggbBridge.test.ts / ggbKB.test.ts / satisfactionEval.test.ts
-├── trainingStore.test.ts / trajectory-replay.test.ts / trapStore.test.ts
+├── trainingStore.test.ts / trajectory-replay.test.ts / trapStore.test.ts / sessionStore.test.ts
 └── fixtures/                   录制的 AI 响应基线
 ```
 

@@ -532,8 +532,8 @@ async function chatWithFormatRetry(
 
 // ── 快照与回滚 ──
 
-/** 保存画布 base64 快照（超时 3s 返回 null，防止挂死） */
-function takeSnapshot(api: GGBAppletApi | null): Promise<string | null> {
+/** 保存画布 base64 快照（超时 3s 返回 null，防止挂死）。会话历史/心跳恢复共用 */
+export function takeSnapshot(api: GGBAppletApi | null): Promise<string | null> {
   return new Promise(resolve => {
     if (!api) return resolve(null);
     let settled = false;
@@ -554,8 +554,8 @@ function takeSnapshot(api: GGBAppletApi | null): Promise<string | null> {
   });
 }
 
-/** 恢复快照；回调在超时前触发返回 true，超时/异常返回 false */
-function restoreSnapshot(api: GGBAppletApi | null, snapshot: string): Promise<boolean> {
+/** 恢复快照；回调在超时前触发返回 true，超时/异常返回 false。会话历史/心跳恢复共用 */
+export function restoreSnapshot(api: GGBAppletApi | null, snapshot: string): Promise<boolean> {
   return new Promise(resolve => {
     if (!api) return resolve(false);
     let settled = false;
@@ -577,8 +577,8 @@ function restoreSnapshot(api: GGBAppletApi | null, snapshot: string): Promise<bo
 /** 构造类命令（赋值 / 函数定义）匹配——回滚兜底重放只重放这类 */
 const CONSTRUCTION_RE = /^[\w]+\s*(?:\([^)]*\))?\s*=/;
 
-/** 快照不可用时的兜底重建：重放历史成功命令中的构造类 */
-function replayConstructionLog(api: GGBAppletApi, log: string[]): void {
+/** 快照不可用时的兜底重建：重放历史成功命令中的构造类。会话恢复共用 */
+export function replayConstructionLog(api: GGBAppletApi, log: string[]): void {
   for (const cmd of log) {
     if (CONSTRUCTION_RE.test(cmd)) api.evalCommand(cmd);
   }

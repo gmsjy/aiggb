@@ -11,6 +11,7 @@
 import { useEffect, useRef } from "react";
 import { useAppStore } from "../store/useAppStore";
 import { resetTmpIds, applyCanvasConfig } from "../lib/ggbBridge";
+import { restoreSnapshot } from "../lib/pipeline";
 import type { GGBAppletApi } from "../types/ggb";
 
 const CONTAINER_ID = "ggb-container";
@@ -142,6 +143,17 @@ export function GGBCanvas() {
             injectingRef.current = false;
             clearLoadTimer(); // 加载成功：取消超时守卫
             console.log("[AiGGB] " + mode + " loaded");
+
+            // ★ 会话恢复：消费 pendingCanvasSnapshot（initSessionFromStorage /
+            //   switchToSession 在模式重建时缓存的画布快照）
+            const pending = useAppStore.getState().pendingCanvasSnapshot;
+            if (pending) {
+              console.log("[AiGGB] 恢复会话画布快照（" + pending.length + " 字符）");
+              void restoreSnapshot(api, pending).then(ok => {
+                if (ok) useAppStore.setState({ pendingCanvasSnapshot: null });
+                else console.warn("[AiGGB] 会话画布快照恢复失败（回退到画布空状态）");
+              });
+            }
 
             // ★ 3D 模式：监听 WebGL context 丢失/恢复（3D 渲染崩溃时画布可能白屏）
             if (mode === "3d") {
