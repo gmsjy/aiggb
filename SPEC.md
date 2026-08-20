@@ -138,8 +138,9 @@ e:\Project\AiGGB\
     │   ├── MessageBubble.tsx ← 消息气泡（user/assistant/ask/error）
     │   ├── GGBCanvas.tsx    ← 中栏：GeoGebra applet，监听 ggbAppName 重建（2D↔3D）
     │   ├── ScriptPanel.tsx  ← 右栏：实时脚本陈列（可折叠）
-    │   ├── SettingsDialog.tsx ← API 配置面板（Provider/Key/模型/温度/测试）
-    │   ├── Toolbar.tsx      ← 顶栏：domain 切换 / 模板 / 撤销 / 导出 / 安装
+    │   ├── SettingsDialog.tsx ← API 配置面板（Provider/Key/模型/温度/测试 + 用量统计图）
+    │   ├── TokenUsageChart.tsx ← token 用量统计图（SVG 手绘：堆叠柱状图 + 累计折线）
+    │   ├── Toolbar.tsx      ← 顶栏：domain 切换 / 模板 / 撤销 / 导出 / 安装 + token 胶囊
     │   ├── TemplateGallery.tsx ← 物理+数学模板卡片（含 3D）
     │   └── PWAUpdatePrompt.tsx ← SW 更新提示
     ├── lib\
@@ -914,7 +915,20 @@ AI: {
 | 📐/⚛ **领域** | 切换 `数学 / 物理`（Sigma / Atom 图标），影响 System Prompt 与默认配色，切换时弹出 toast |
 | 📚 **模板** | 打开 `<TemplateGallery>`，点击模板先清空画布与聊天再发送 |
 | 📥 **安装应用** | 仅在捕获到 `beforeinstallprompt` 时出现，触发系统安装提示 |
-| ⚙ 设置 | 重新打开 API 配置面板 |
+| 🔢 **token 统计** | 顶栏右侧胶囊，实时显示会话累计 token（悬停看 prompt/completion 明细）|
+| ⚙ 设置 | 重新打开 API 配置面板（含「用量统计」历史图表）|
+
+### 5.5 Token 用量统计
+
+每次 AI 调用的 token 用量（`usage.prompt_tokens`/`completion_tokens`）经 `onUsage` 回传，累计到 store：
+
+- **数据流**：`chat`/`chatRaw`/`agentChat`/`evaluateSatisfaction` 四个调用点均回传 `onUsage`；`agentChat` 通过 `stream_options.include_usage` 解析流式最后一块的 usage
+- **store 三层状态**（`useAppStore.ts`）：
+  - `tokenUsage`：会话累计（顶栏胶囊显示，随会话切换/清空重置）
+  - `roundTokenUsage`：本轮累计（ChatPanel `runRound` 开始 `startRound` 清零）
+  - `tokenHistory`：持久化历史（每轮对话一条 `{ts, prompt, completion}`，`runRound` 结束 `finishRound` 落一条）
+- **持久化**：localStorage 独立 key `aiggb_token_usage`，最多保留 100 轮（每条 ~50 字节，约 5KB），与 `aiggb_config`（含 API Key）完全隔离
+- **统计图**：设置面板「用量统计」区（`TokenUsageChart.tsx`）——SVG 手绘堆叠柱状图（prompt 蓝 / completion 绿分色）+ 累计折线（橙），两个小图各持单一 Y 轴，原生 `<title>` hover tooltip，含累计输入/输出/合计 stat 卡片
 
 ---
 

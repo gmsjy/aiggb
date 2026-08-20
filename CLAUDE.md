@@ -57,6 +57,7 @@
 | `tools.ts` | 工具 Function Calling 定义 | `TOOL_DEFINITIONS`（OpenAI tool schemas）、`TOOL_SCHEMAS`（Zod 校验）、`getToolSafety(name)` → `"safe"\|"dangerous"`；dangerous 工具（eval_raw/delete/clear）需用户确认 |
 | `satisfactionEval.ts` | Phase 3.1 满足度评估 | `evaluateSatisfaction(config, spec, snapshot, signal?, modelOverride?)` — 轻量模型对比画布快照与精炼规格，输出 `SatisfactionResult{satisfied, issues[], summary}`；失败不阻断流程 |
 | `providers.ts` | 6 预置 provider + 自定义 | `PROVIDER_PRESETS`（DeepSeek/Moonshot/GLM/SiliconFlow/OpenAI/Ollama） |
+| `format.ts` | 数字格式化工具 | `fmtTokens(n)` — token 用量 k/M 缩写（顶栏 + 统计图共用） |
 
 ### src/components/（React UI）
 
@@ -65,8 +66,9 @@
 | `ChatPanel.tsx` | 编排已提取至 pipeline.ts，本组件只负责：输入 UI、消息渲染、**store 依赖注入成 `PipelineDeps`**、spec 确认事件桥接（`reviewHandleRef`）、**Agent 思考步骤实时显示**（`agentStep` state + `onAgentStep` → thinking 区域）|
 | `MessageBubble.tsx` | 消息气泡：user/assistant/error/ask/**spec-review**（规格确认 UI：编辑/重新生成/确认绘制）+ **assistant 渲染 self_check 报告** |
 | `GGBCanvas.tsx` | GeoGebra applet 注入，监听 `ggbAppName` 重建（2D↔3D）；**心跳监控**（2s 间隔 canvas 计数 + DockGlassPane 检测）+ **自动恢复**（保存 base64 快照 → `inject(force=true)` 强制重建 → 恢复快照）；MutationObserver DOM 监控 + WebGL context loss 监听；诊断日志前缀 `[AiGGB:DIAG]` |
-| `Toolbar.tsx` | 顶栏：domain 切换/模板/撤销/清空/导出/截图/复制/安装；清空/切模式/撤销时调用 `abortCurrentRun()` |
-| `SettingsDialog.tsx` | API 配置（Provider/Key/**3-role 模型**：主力/轻量/Agent/**思考深度**/温度/测试连接）|
+| `Toolbar.tsx` | 顶栏：domain 切换/模板/撤销/清空/导出/截图/复制/安装 + **token-stat 会话累计用量胶囊**；清空/切模式/撤销时调用 `abortCurrentRun()` |
+| `SettingsDialog.tsx` | API 配置（Provider/Key/**3-role 模型**：主力/轻量/Agent/**思考深度**/温度/测试连接）+ **「用量统计」区**（累计输入/输出/合计 + TokenUsageChart）|
+| `TokenUsageChart.tsx` | token 用量统计图（SVG 手绘：堆叠柱状图 prompt/completion 分色 + 累计折线，两个小图单一 Y 轴 + 原生 hover tooltip）|
 | `ScriptPanel.tsx` | 右侧实时 GGB 脚本展示（可折叠/复制/下载）|
 | `TemplateGallery.tsx` | 模板卡片，点击发 `aiggb:send` 事件 |
 | `PWAUpdatePrompt.tsx` | SW 更新提示 |
@@ -77,6 +79,7 @@
 - 持久化：`config`（含 3-role 模型 `model`/`lightModel`/`agentModel`）、`domain`、`privacyAcknowledged`
 - 迁移 v2→v3：`flashModel` → `lightModel` 自动迁移
 - 运行期：`ggbApi`、`ggbAppName`（"classic"\|"3d"）、`messages`、**`constructionLog`**（成功命令日志，供回滚兜底重建）、`isThinking`
+- **token 用量统计**：`tokenUsage`（会话累计，顶栏显示）、`roundTokenUsage`（本轮累计）、`tokenHistory`（每轮对话一条，持久化 localStorage `aiggb_token_usage`，最多 100 轮）；`addTokenUsage`/`startRound`/`finishRound`/`loadTokenHistory`；轮次边界由 ChatPanel `runRound` 开始/结束驱动
 - `ChatTurn` 五类：`user` / `assistant`（含 `self_check?`）/ `ask` / `error` / **`spec-review`**
 - `appendAIResponse` 维护 constructionLog（成功命令追加）；`clearMessages`/`undoLastTurn` 同步清空/重建日志（`logFromMessages`）
 
