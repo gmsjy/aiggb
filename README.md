@@ -1,6 +1,6 @@
 # AiGGB · AI 驱动的 GeoGebra 动态图像生成器
 
-> 说人话 → 出动图。React 19 + Vite 8 + GeoGebra + 任意 OpenAI 兼容大模型，纯前端，可装 PWA。
+> 说人话 / 拍题 → 出动图。React 19 + Vite 8 + GeoGebra + 任意 OpenAI 兼容大模型，纯前端，可装 PWA。
 
 ---
 
@@ -38,9 +38,10 @@ npm run dev        # → http://localhost:5173
 | 设置项 | 值 |
 |---|---|
 | Provider | DeepSeek |
-| 精炼模型 (Flash) | `deepseek-v4-flash` |
+| 模型（主力） | `deepseek-v4-pro`（复杂动图）或 `deepseek-v4-flash`（日常） |
+| 轻量模型（精炼/评估，可选） | `deepseek-v4-flash` |
+| 视觉模型（题目识别，可选） | `deepseek-v4-flash-vision-exp` |
 | API Key | `sk-...`（从 [platform.deepseek.com](https://platform.deepseek.com/api_keys) 获取） |
-| 模型 | `deepseek-v4-pro`（复杂动图）或 `deepseek-v4-flash`（日常） |
 
 点「测试连接」通过后保存，即可开始对话。
 
@@ -76,6 +77,53 @@ AI 逐步调用工具（创建点/滑块/矢量/执行命令/查询对象…）�
 
 ---
 
+## 多模态题目识别（拍题出动图）
+
+把高中数学 / 物理题目**拍照或截图**发给 AiGGB，AI 自动读题、设计并构造动图。纯文字输入行为完全不变。
+
+### 加图方式（三选一，可混用）
+
+- 点输入框左侧 **📎 按钮**选择图片（可多选）
+- **Ctrl+V** 直接粘贴剪贴板截图
+- 把图片文件**拖拽**到输入区
+
+每条消息最多 **3 张**（同一题的多张图会合并解读）；自动等比压缩至最长边 1280px 并转 JPEG 后上传，点击缩略图可放大查看。
+
+### 前置配置：视觉模型
+
+**设置 → 高级：角色专用模型 → 视觉模型（题目识别）**，选择支持图片输入的模型：
+
+| Provider | 视觉模型候选 |
+|---|---|
+| DeepSeek | `deepseek-v4-flash-vision-exp` |
+| 智谱 GLM | `glm-4.5v` |
+| SiliconFlow | `Qwen/Qwen2.5-VL-72B-Instruct` |
+| OpenAI | `gpt-4o` / `gpt-4.1` |
+| Ollama 本地 | `qwen2.5vl:7b` / `llama3.2-vision` |
+
+> 留空则跟随主力模型（主力须本身多模态）。「测试连接」会顺带验证视觉模型可用性。识别与构造分离：视觉模型只负责读题，绘图仍由主力 / Agent 模型完成。
+
+### 使用流程
+
+1. 附加题目图片（可附一句补充说明，如"画出运动过程"）
+2. 视觉模型识别 → 弹出**题目确认气泡**：题干转写、已知量、目标、图示信息、动画要素建议
+   - 识别有误 → **编辑题干**直接改正（比重新识别快）
+   - 图片不清 → **重新识别**
+   - 确认无误 → **确认并绘制**
+3. AI 以 Agent 工具循环逐步构造（右侧脚本面板可实时观察）
+4. 构造完成时自动**画布状态核对**：画布与题目解读逐项对照，发现偏差自动回喂修正（最多 2 轮）
+5. 结束后附满足度评估报告
+
+### 降级与边界
+
+- 识别失败但消息里有文字 → 提示后**直接按文字构造**
+- 纯图片识别失败 → 提示到设置中配置视觉模型
+- 题意存疑（图片不清）→ 以普通反问气泡呈现，回复后继续
+- 带图轮固定走 Agent 构造，与「代理/两阶段」开关无关；3D 题目请先手动切到 3D 模式
+- 历史会话中的图片随消息保存（IndexedDB），刷新后可回看
+
+---
+
 ## 如何写好提示词
 
 > AiGGB 将你的自然语言转译为 GeoGebra 命令。描述越精确，结果越接近预期。下面是从入门到进阶的完整指南。
@@ -92,6 +140,8 @@ AI 逐步调用工具（创建点/滑块/矢量/执行命令/查询对象…）�
 | 画个三角锥 | 3D 正四面体边长 3，标注体积 |
 
 > AiGGB 会对**确实缺少核心参数**的请求反问（如"画个圆"没给半径），但能合理默认的不会追问——圆心默认原点、角速度默认 slider=1。
+
+> 📷 也可以直接**上传题目图片**（📎 按钮 / Ctrl+V 粘贴 / 拖拽到输入区），AI 识别题意后自动设计动图——见下文「多模态题目识别」章节。
 
 ### 二、让图像动起来
 
@@ -222,7 +272,9 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o` / `gpt-4.1` |
 | Ollama 本地 | `http://localhost:11434/v1` | `qwen2.5:7b` 等 |
 
-> 日常推荐 `deepseek-v4-flash`（快、便宜）；复杂动图 + 3D 切 `deepseek-v4-pro`。Flash Model 用于 Phase 1 精炼和满足度评估（建议 v4-flash）。
+> 日常推荐 `deepseek-v4-flash`（快、便宜）；复杂动图 + 3D 切 `deepseek-v4-pro`。轻量模型用于 Phase 1 精炼和满足度评估（建议 v4-flash）。
+
+> 💡 **四类角色模型**（设置 → 高级，均可留空跟随主力）：轻量模型（精炼/评估）、Agent 模型（工具调用代理）、**视觉模型（题目图片识别，需支持图片输入）**。各 provider 视觉候选见「多模态题目识别」章节。
 
 > 💡 **思考深度（Thinking）**：设置面板高级区可调 V4 思考深度（跟随默认 / 低 / 中 / 高），对编译/评估/Agent 均发送 `reasoning_effort`。**默认关闭**——A/B 实测（N=10×6）显示 `high` 在 v4-flash 上端到端 −8.3%，无 token/延迟收益，不建议开启。Agent 模式仍会实时展示模型思考过程（`🧠` 气泡）。
 
@@ -286,6 +338,20 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
     → 全部失败 → 快照回滚 + 重放构造日志
 ```
 
+### 带图输入（多模态）
+
+```
+上传/粘贴/拖拽图片（≤3 张）
+  → 视觉模型识别 → 题目解读 JSON（题干/已知量/目标/图示/动画建议）
+  → 题目确认气泡（编辑题干 / 重新识别 / 确认并绘制）
+  → Agent 工具循环构造（复用全部 Agent 机制：熔断/危险工具确认/快照回滚）
+  → AI 输出总结时触发画布状态核对：画布结构化快照 vs 题目解读
+    → 有偏差 → 问题清单注入循环继续修正（≤2 轮，共享 30 次迭代预算）
+    → 通过 / 预算耗尽 → 满足度评估报告 → 完成
+```
+
+识别失败但有文字 → 降级为普通 Agent 轮；纯图片失败 → 提示配置视觉模型。
+
 ### 六层防漂移
 
 1. **提示层**：RAG 过滤的命令参考 + 臆造警告 + 五阶段流程 + Point/Vector 类型铁律
@@ -331,7 +397,7 @@ React 19 · Vite 8 · TypeScript 5 · Zustand 5 · Zod 3 · GeoGebra deployggb.j
 
 | 命令 | 说明 |
 |---|---|
-| `npm run test:unit` | **103 单测（0 API）**：pipeline 状态机 / specCache / ggbBridge / ggbKB / toolExecutor / agentLoop / agentSmoke / satisfactionEval / trainingStore / trajectory-replay / trapStore |
+| `npm run test:unit` | **139 单测（0 API）**：pipeline 状态机（含视觉管线）/ specCache / ggbBridge / ggbKB / toolExecutor / agentLoop / agentSmoke / satisfactionEval / sessionStore / trainingStore / trajectory-replay / trapStore / runControl / problemSchema / imageInput |
 | `npm run test:replay` | 离线回归 63 用例（当前 **63/63, 100%**） |
 | `npm run test:trajectory` | 用当前执行层重放历史失败轨迹，统计"越用越强"修复率（离线） |
 | `npm run test:record` | 在线全量 + 录制 fixtures（需 `.env` 配置 Key） |
@@ -353,20 +419,20 @@ React 19 · Vite 8 · TypeScript 5 · Zustand 5 · Zod 3 · GeoGebra deployggb.j
 src/
 ├── main.tsx / App.tsx         入口 + 顶层布局
 ├── components/
-│   ├── ChatPanel.tsx           对话面板（输入/消息渲染/store 依赖注入）
+│   ├── ChatPanel.tsx           对话面板（输入 + 图片附件 / 消息渲染 / store 依赖注入 / 发送路由）
 │   ├── GGBCanvas.tsx           GeoGebra applet 嵌入（2D/3D 切换 + ResizeObserver 跟随 + 心跳自愈）
 │   ├── Toolbar.tsx             工具栏（domain 切换/2D-3D/清空/撤销/导出）
 │   ├── TemplateGallery.tsx     模板库（按 domain + 模式双重过滤）
 │   ├── ScriptPanel.tsx         实时脚本展示
-│   ├── SettingsDialog.tsx      API 配置
+│   ├── SettingsDialog.tsx      API 配置（4-role 模型 + 思考深度 + 用量统计）
 │   ├── SessionDialog.tsx       会话历史弹层（列表/新建/切换/删除/重命名）
 │   └── MessageBubble.tsx / PWAUpdatePrompt.tsx
 ├── lib/
-│   ├── pipeline.ts             两阶段管线状态机（Phase 1→确认→Phase 2→修复→评估）
-│   ├── agentLoop.ts            Agent 模式 ReAct 循环（工具调用 + 熔断 + 未知工具过滤）
+│   ├── pipeline.ts             两阶段管线 + 视觉管线状态机（Phase 1→确认→Phase 2→修复→评估；识别→题目确认→Agent 构造+状态核对）
+│   ├── agentLoop.ts            Agent 模式 ReAct 循环（工具调用 + 熔断 + 未知工具过滤 + 画布状态核对）
 │   ├── toolExecutor.ts         Agent 工具执行（Zod 校验 + 安全拦截 + preFlight 语义预检 + 可重放映射）
 │   ├── tools.ts                Agent 工具定义（Function Calling schema + 安全分级）
-│   ├── aiClient.ts             OpenAI 兼容客户端（chat/chatRaw/agentChat 流式工具调用 + 3-role 模型）
+│   ├── aiClient.ts             OpenAI 兼容客户端（chat/chatRaw/agentChat 流式工具调用 + 4-role 模型 + 多模态消息）
 │   ├── ggbBridge.ts            op→GGB API 执行器 + 画布快照 + 批量渲染
 │   ├── schema.ts               Zod 校验 + CoordExpr 注入防护
 │   ├── prompts.ts              System/Compile/Checker Prompt（few-shot 示例驱动）
@@ -383,9 +449,12 @@ src/
 │   ├── providers.ts            AI 预置 provider
 │   ├── trainingStore.ts        训练数据闭环（IndexedDB 轨迹持久化）
 │   ├── trajectoryStore.ts      ReAct 轨迹构造（供回放/训练）
+│   ├── problemSchema.ts        题目识别输出校验（ProblemAnalysis + 确定性序列化）
+│   ├── visionPrompt.ts         视觉模型题目识别 Prompt
+│   ├── imageInput.ts           图片输入预处理（校验 + 缩放编码）
 │   ├── sessionStore.ts         会话历史存储（IndexedDB + localStorage 索引分离）
 │   └── trapStore.ts            分层记忆系统（prompt_hash / L2场景 / known_traps / 符号表 / 偏好）
-├── store/useAppStore.ts        Zustand (persist v3)
+├── store/useAppStore.ts        Zustand (persist v4)
 ├── styles/                     CSS Variables + 全局样式
 └── types/ggb.d.ts              GGBAppletApi 类型
 

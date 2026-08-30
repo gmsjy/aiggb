@@ -1,9 +1,9 @@
 # AiGGB 规格书
 
 > **AI 驱动的 GeoGebra 动态图像生成器**
-> 版本：v1.6
-> 日期：2026-08-10
-> 状态：MVP 完成，已扩展 Agent 模式、3D 画布稳定性修复、3-Role 模型配置，进入迭代优化
+> 版本：v1.7
+> 日期：2026-08-30
+> 状态：MVP 完成，已扩展 Agent 模式、3D 画布稳定性修复、4-Role 模型配置、多模态题目识别（§4D，已实施），进入迭代优化
 
 ---
 
@@ -134,37 +134,40 @@ e:\Project\AiGGB\
     ├── main.tsx             ← React 19 createRoot + StrictMode
     ├── App.tsx              ← 三栏布局 + offline 检测 + 注册 3D 切换回调
     ├── components\
-    │   ├── ChatPanel.tsx    ← 左栏：对话 + [ASK] + 格式重试 + 执行自修复 + 3D 升级
-    │   ├── MessageBubble.tsx ← 消息气泡（user/assistant/ask/error）
+    │   ├── ChatPanel.tsx    ← 左栏：对话 + [ASK] + 格式重试 + 执行自修复 + 图片输入（上传/粘贴/拖拽）+ 发送路由（带图→视觉管线）
+    │   ├── MessageBubble.tsx ← 消息气泡（user+附件缩略图 / assistant / ask / error / spec-review / problem-review + Lightbox 灯箱）
     │   ├── GGBCanvas.tsx    ← 中栏：GeoGebra applet，监听 ggbAppName 重建（2D↔3D）
     │   ├── ScriptPanel.tsx  ← 右栏：实时脚本陈列（可折叠）
-    │   ├── SettingsDialog.tsx ← API 配置面板（Provider/Key/模型/温度/测试 + 用量统计图）
+    │   ├── SettingsDialog.tsx ← API 配置面板（Provider/Key/4-role 模型/思考深度/温度/测试 + 用量统计图）
     │   ├── TokenUsageChart.tsx ← token 用量统计图（SVG 手绘：堆叠柱状图 + 累计折线）
     │   ├── Toolbar.tsx      ← 顶栏：domain 切换 / 模板 / 撤销 / 导出 / 安装 + token 胶囊
     │   ├── TemplateGallery.tsx ← 物理+数学模板卡片（含 3D）
     │   └── PWAUpdatePrompt.tsx ← SW 更新提示
     ├── lib\
-    │   ├── aiClient.ts      ← OpenAI 兼容适配器 + 3-role 模型解析 + AIError/AISchemaError + ping
+    │   ├── aiClient.ts      ← OpenAI 兼容适配器 + 4-role 模型解析 + ContentPart 多模态消息 + AIError/AISchemaError + ping
     │   ├── ggbBridge.ts     ← op→GGB API 执行器 + 容错 + 诊断 + 2D/3D batch 统一启用 + 3D 检测/切换/导出
-    │   ├── pipeline.ts      ← 两阶段流水线状态机（纯 TS，可 node 单测）
+    │   ├── pipeline.ts      ← 两阶段流水线 + 多模态视觉管线状态机（纯 TS，可 node 单测）
     │   ├── schema.ts        ← Zod discriminatedUnion + NumLike/BoolLike/IntLike + ask
     │   ├── prompts.ts       ← System Prompt（通用+物理域+3D 规则+白/黑名单+5阶段）
     │   ├── commands.ts      ← GGB 命令白名单（含 3D）+ 黑名单 + 5阶段流程
     │   ├── physics.ts       ← 物理常量库 + 配色
     │   ├── templates.ts     ← 12 个一键模板（物理 2D 4 + 数学 2D 4 + 3D 4）
-    │   ├── agentLoop.ts     ← ReAct Agent 工具调用循环（observe→plan→act）
+    │   ├── agentLoop.ts     ← ReAct Agent 工具调用循环（observe→plan→act + 画布状态核对钩子）
     │   ├── toolExecutor.ts  ← Agent 工具→GGB API 分发（含 3D DockGlassPane 防护 + RAG 纠正）
     │   ├── tools.ts         ← 工具 Function Calling 定义（18 工具 + safe/dangerous 分级）
     │   ├── satisfactionEval.ts ← 满足度评估（画布快照 vs 精炼规格逻辑审查）
     │   ├── specCache.ts     ← 意图→规格缓存（LRU + TTL + 画布指纹键）
     │   ├── specSchema.ts    ← Phase 1 输出校验
     │   ├── refinePrompt.ts  ← Phase 1 精炼 prompt
+    │   ├── problemSchema.ts ← 题目识别输出校验（ProblemAnalysis + 确定性序列化）
+    │   ├── visionPrompt.ts  ← 视觉模型题目识别 prompt
+    │   ├── imageInput.ts    ← 图片输入预处理（校验 + 缩放编码）
     │   ├── runControl.ts    ← 单轮运行生命周期（AbortSignal + 取消）
     │   ├── ggbKB.ts         ← RAG 命令知识库（~126 条 + 臆造映射）
     │   ├── commandCorrect.ts ← 后置命令纠正器（Levenshtein + 臆造查表）
-    │   └── providers.ts     ← 6 预置 Provider + 自定义（含模型清单与 apiKeyUrl）
+    │   └── providers.ts     ← 6 预置 Provider + 自定义（含模型清单、visionModels 与 apiKeyUrl）
     ├── store\
-    │   └── useAppStore.ts   ← Zustand persist v3：config/domain/privacy/messages/constructionLog/ggbApi/ggbAppName
+    │   └── useAppStore.ts   ← Zustand persist v4：config/domain/privacy/messages/constructionLog/ggbApi/ggbAppName（v3→v4 no-op 里程碑）
     ├── types\
     │   └── ggb.d.ts         ← GGBAppletApi + GGBAppletParameters 类型补丁
     └── styles\
@@ -834,7 +837,7 @@ DeepSeek V4 原生内嵌 thinking（流式返回 `reasoning_content`）。系统
 - **开启**：设置后对支持 thinking 的 provider（`quirks.supportsThinking` = DeepSeek V4）发送 `reasoning_effort`（low/medium/high）
 - **Agent 模式实时展示**：`agentChat` 的 `reasoning_content` 增量经 `onReasoning` 回调 → `onThinking` 在 UI 显示 `🧠 思考中…`（截尾 400 字符，经 ChatPanel 120ms 节流），V4 思考阶段不再干等
 - **回传门控**：`reasoning_content` 多轮回传受 `quirks.mustRoundtripReasoning` 控制（V4=true，其他 provider 无该字段，回传即 no-op）
-- **空响应诊断**：按 `quirks.streamsFinishReason` 判断 `finish_reason="length"` 截断提示是否可信（DeepSeek 流式偶发缺失）
+- **空响应诊断**：`finish_reason="length"` 截断提示无条件信任（v1.7 修复：此前受 `quirks.streamsFinishReason` 门控导致 DeepSeek 截断时误报为"不支持 Function Calling"）；thinking 模式下 Agent `max_tokens` 提升至 16384 防截断
 
 **A/B 验证结论（2026-08，DeepSeek v4-flash，N=10×6 用例，`npm run test:ab`）**：
 
@@ -845,6 +848,466 @@ DeepSeek V4 原生内嵌 thinking（流式返回 `reasoning_content`）。系统
 | 平均延迟 | 44647ms | 44362ms | −285ms |
 
 结论：**`reasoning_effort=high` 在 v4-flash 上损害编译质量（困难物理用例过度思考产出更差命令），token/延迟无收益 → 默认保持关闭**。Agent 模式的 `🧠` 推理展示保留（展示 V4 本来就产生的思考，与质量结论无关）。
+
+---
+
+## 4D. 多模态题目识别（已实施 · Agent 基底 + 画布状态核对）
+
+通过多模态大模型读取高中数学 / 物理**题目图片**，自动完成题目解读，随后**以 Agent 模式（ReAct 工具调用循环）为构造基底**生成动图，并以 **GeoGebra 画布状态作为状态核对反馈**：AI 宣称构造完成时，系统用画布结构化快照与确认后的题目解读逐项核对，发现偏差即回喂循环内继续修正。文字绘制行为不变：纯文字输入仍走现有流水线（跟随工具栏 代理/两阶段 开关）。
+
+> 本节于 2026-08-29 基于代码核对完成需求细化并实施（基线：master@4c66137 → 多模态 M-A~M-E 全里程碑完成，139 单测 / 63 回放全绿）。§4D.0 列出核对确认的代码现状；§4D.11 记录实施后发现并修复的运行时问题。
+
+### 4D.0 代码现状核对（实施基线）
+
+| 现状事实 | 对本功能的含义 |
+|---|---|
+| `agentLoop.runAgentLoop(userText, deps)`：ReAct 循环，`MAX_AGENT_ITERATIONS=30`、`MAX_CONSECUTIVE_FAILURES=3`（参数校验/预检失败不计熔断）；工具执行结果作为 observation 注入；`compressHistory` 定期用**真实画布状态**（名/类型/定义）替换旧消息；`list_objects`/`get_object_info` 观察工具可供 AI 主动查询 | Agent 循环本就内置画布状态反馈基础设施；状态核对接入点 = AI 纯文本结束分支（「情况 1」）加终止校验钩子 |
+| `pipeline.runAgentPipeline`：轮前 `takeSnapshot` + 失败回滚 + `toolCallToEvalCommands` 按工具真实成败提取重放命令写 constructionLog + 陷阱回填（`backfillTrapsFromTrajectories`）+ `evaluateAgentResult`（**仅报告不修复**，审查基准用 `finalText`——agent 模式没有精炼规格） | 带图轮整体复用此骨架；两个升级点：① 审查基准换为确认后的题目解读；② 「仅报告」升级为**循环内修正反馈** |
+| `satisfactionEval.evaluateSatisfaction(config, spec, snapshot, signal?, lightModel?, chatRawImpl?, onUsage?)` 返回 `{satisfied, issues[], summary}`（失败不阻断，默认通过）；`ggbBridge.getRichSnapshot(api)` 输出全对象结构化文本（名/类型/定义/坐标/值/颜色/线型/透明度） | **画布状态核对 = 这对现成函数的组合**：基准 = 序列化题目解读，快照 = `getRichSnapshot`；零新评估逻辑 |
+| `agentChat` 为流式 Function Calling（`AgentMessage` 与 `ChatMessage` 是两套类型）；`ChatMessage.content: string`；`chatRaw(config, msgs, signal?, modelOverride?, maxTokens?, jsonMode?, onUsage?)` 已支持 jsonMode/模型覆盖/用量回传 | 图片只进识别调用（`chatRaw`），只需把 `ChatMessage.content` 放宽为多模态 parts；**agentChat / 工具协议 / Agent 消息类型零改动** |
+| `resolveModel(config, role)` 支持 `light / heavy / agent`；`AIConfig` 尚无 `visionModel` | 新增第 4 角色 |
+| `agentLoop.convertHistory`（WINDOW=12）只转换 user/assistant/ask，不处理附件；`pipeline.collectHistory` 同样 | 两处 user turn 有 `attachments` 时折叠为 `[附件:图片×N]` 占位，防 token 爆炸 |
+| `pipeline.waitReview`/`ReviewHandle`（AbortSignal 模式）是确认机制范本 | 题目确认完全仿此模式，不发明新机制 |
+| store persist **v3**（v2→v3 迁移 flashModel→lightModel）；`ChatTurn` 五类 role，user 无附件字段 | 新增 `problem-review` role；user turn 加 `attachments?` |
+| **会话持久化已实现**：`sessionStore.ts`（IndexedDB `sessions`，30 个上限），`runRound` finally 里 `persistCurrentSession()` | 图片 base64 随 messages 自动入库，**无需新增持久化**；但 `titleFromMessages` 只取 `content`，纯图消息会得到空标题，需适配 |
+| **2D↔3D 已是工具栏手动切换 + 会话级持久化**（无意图检测自动升级） | 识别与构造流程**不触碰 applet 模式**；3D 题目只在气泡中提示用户手动切换 |
+| 轨迹（`trajectoryStore`）已在 `runAgentLoop` 内持久化；陷阱回填在 `runAgentPipeline` finally | 带图轮自然复用（含状态核对反馈消息，它们就在对话流里），零改动 |
+| `SettingsDialog`「高级」区已有 轻量模型 / Agent 模型 / 思考深度 三行（state + customMode + buildConfig 三件套） | 视觉模型行完全复用该模式 |
+| `ChatPanel.send(text)` 单参；`canSend` 要求 `input.trim().length > 0`；`updateSpecReview` 以**内联 `setState`** 在 deps 闭包实现（非 store action） | send 需加图片参数；canSend 放行纯图消息；`updateProblemReview` 同样内联实现 |
+| 单测 `npm run test:unit`（`node --test`，基线 119 用例）；`tests/agentLoop.test.ts` 已有 harness（注入 `agentChatImpl`/`executeToolCallsImpl` 脚本）；回放 63 条 | 新逻辑全部走依赖注入可单测；prompt 零改动保住回放基线 |
+
+### 4D.1 设计原则
+
+1. **文字模式为主、原样保留**：纯文字输入行为、prompt、缓存键、确认流程 100% 不变（跟随工具栏现有 代理/两阶段 开关）。`buildRefinePrompt` / `buildCompilePrompt` / `prompts.ts` / Agent system prompt 不做任何修改（prompt 零漂移 → promptHash 稳定 → specCache 键与 63 条回放不受影响）
+2. **多模态 = 消息级附加通道，带图轮恒走 Agent 构造**：不新增工具栏模式开关。消息附加图片（上传/粘贴/拖拽）时，该轮自动走「题目识别 → 确认 → Agent 构造 + 状态核对」分支——题目到图形的不确定性高，Agent 逐步工具反馈比一次性编译更适合；不带图消息与现状完全一致
+3. **Agent 基底**：构造阶段复用 `runAgentLoop` 全部机制（工具观察反馈、熔断、危险工具确认、历史压缩、失败快照回滚、轨迹持久化），不新写构造循环
+4. **画布状态 = 核对反馈**：AI 输出纯文本（宣称完成）时触发终止校验——`getRichSnapshot(画布)` 对照**确认后的题目解读**（含 `animation_hints`）；未通过则把问题清单 + 画布状态作为 user observation 注入**同一循环**继续修正（≤2 次核对反馈，共享 30 迭代预算）。核对在循环内而非循环外报告，修正时全部工具调用上下文仍在
+5. **视觉模型独立配置**：`AIConfig` 新增第 4 角色 `visionModel`；回退链 `visionModel → 主力模型`
+6. **图片只被识别阶段消费一次，下游全纯文本**：Agent 循环、工具协议、历史压缩、轨迹存储均不承载 base64
+7. **序列化确定性**：`serializeProblem` 对同一解读输出恒定文本（固定分节、固定顺序、无时间戳/随机量）——核对基准、轨迹复现、多轮历史的稳定性都依赖它
+8. **零 3D 耦合**：识别与构造不调用任何 applet 模式切换；立体几何题仅在气泡提示用户手动切 3D
+
+### 4D.2 总体架构
+
+```
+纯文字输入 ────────────────→ 现有流水线（原样，零改动；跟随工具栏 代理/两阶段 开关）
+
+带图片输入（上传/粘贴/拖拽，≤3 张/条）
+  → [题目识别] extractProblem：视觉模型读图 → ProblemAnalysis JSON（chatRaw，图片唯一消费点）
+  → 题目确认气泡（编辑题干 / 重新识别 / 确认）             ← 仅带图轮出现
+  → taskText = 用户文字 + serializeProblem(确认后解读)
+  → [Agent 构造] runAgentLoop(taskText, deps + stateCheck)
+       ├─ 循环内（现有机制）：工具执行结果作为 observation 逐步反馈
+       └─ 终止核对（新增钩子）：AI 输出文本总结欲结束
+            → getRichSnapshot(画布) vs serializeProblem 逐项核对
+              （复用 evaluateSatisfaction，轻量模型，基准 = 题目解读）
+            → 未通过 → issues + 画布状态注入循环 → AI 继续调用工具修正
+            → 通过 / 核对预算用尽（≤2 次反馈）→ 结束
+  → 快照回滚 / constructionLog / 陷阱回填 / 轨迹（复用 runAgentPipeline 骨架）
+```
+
+**核心决策**：
+
+- **识别与构造解耦**：视觉模型只产出结构化解读，不参与绘图；绘图由既有 Agent 模型完成（无视觉能力的 provider 也可用——识别换配第 4 角色视觉模型即可）
+- **状态核对是循环内终止门**，不是外部报告：核对失败的 issues 成为 AI 的下一条 observation，与「工具失败读 error 重试」同构；`runAgentPipeline` 现有的轮后 `evaluateAgentResult` 对带图轮改为以序列化解读为基准（有真实基准后仍仅报告，修复已由循环内核对承担）
+- **识别失败降级**：有文字 → error 气泡「题目识别失败（<原因>），将直接按文字绘制」→ 本轮降级为普通 Agent 轮（taskText = 原文字）；纯图 → error 气泡指向设置，本轮终止
+
+### 4D.3 题目识别输出 Schema
+
+视觉模型只输出一个 JSON（**`jsonMode=false`**——多数视觉模型不支持 `response_format: json_object`，改用 prompt 指令 + `parseProblemAnalysis` 容错解析），新 `src/lib/problemSchema.ts`（仿 `specSchema.ts` 的剥 code fence + 容错）：
+
+```ts
+// src/lib/problemSchema.ts
+export interface ProblemKnown { name: string; value?: number | string; unit?: string }
+export interface AnimationHint { type: "slider" | "animate" | "trace" | "other"; desc: string }
+export interface ProblemAnalysis {
+  problem_text: string;          // 题干转写（公式用 LaTeX），≤3000
+  knowns: ProblemKnown[];        // 已知量，缺省 []
+  goal?: string;                 // 求解/绘制目标，≤300
+  figure?: string;               // 图示信息（几何关系/坐标系/矢量方向/接触面等），≤500
+  animation_hints: AnimationHint[]; // 动图要素建议，缺省 []
+  ask?: string;                  // 图片不清/题意存疑时反问，≤300，与 problem_text 互斥
+}
+/** 剥 fence + JSON.parse + zod 容错；失败返回 null（由调用方走降级） */
+export function parseProblemAnalysis(raw: string): ProblemAnalysis | null;
+/** 确定性序列化为下游纯文本（见下） */
+export function serializeProblem(p: ProblemAnalysis): string;
+```
+
+视觉模型输出示例：
+
+```json
+{
+  "problem_text": "如图所示，小球以初速度 $v_0=20\\,\\mathrm{m/s}$、仰角 45° 斜抛，不计空气阻力…",
+  "knowns": [
+    { "name": "初速度 v0", "value": 20, "unit": "m/s" },
+    { "name": "仰角", "value": 45, "unit": "°" }
+  ],
+  "goal": "演示抛体运动全过程并标出最高点与速度矢量",
+  "figure": "示意图含地面水平线、抛出点、初速度矢量与水平夹角 45°",
+  "animation_hints": [
+    { "type": "slider", "desc": "v0、theta 做成可调滑块" },
+    { "type": "animate", "desc": "t 为时间滑块并开启动画演示飞行过程" },
+    { "type": "trace", "desc": "P 点留下轨迹；可加频闪采样" }
+  ]
+}
+```
+
+容错规则（对齐 `NumLike`/`BoolLike` 精神，不因局部漂移毙整条）：
+
+| 输入情况 | 处理 |
+|---|---|
+| `knowns` / `animation_hints` 缺省或非数组 | 归一为 `[]` |
+| `knowns[].value` 为数字字符串（`"20"`） | 接受，保留原类型 |
+| `animation_hints[].type` 非法枚举 | 降级为 `"other"`，保留 `desc`（不毙整条） |
+| `problem_text` 空且无 `ask` | 识别失败（返回 null → 降级） |
+| 外层 ```json fence / 首尾空白 | 剥离（同 `stripCodeFence`） |
+| `JSON.parse` 失败 | 带格式说明重试 1 次；再失败 → null |
+
+`serializeProblem(p)` 固定格式（空节省略、分节顺序恒定——**确定性是核对基准与轨迹复现的前提**）：
+
+```
+【题干】
+{problem_text}
+【已知量】
+初速度 v0 = 20 m/s
+仰角 = 45 °
+【目标】…
+【图示信息】…
+【动画要素建议】
+[slider] v0、theta 做成可调滑块
+[animate] t 为时间滑块并开启动画演示飞行过程
+[trace] P 点留下轨迹；可加频闪采样
+```
+
+### 4D.4 视觉模型配置（第 4 角色）
+
+| 项 | 设计 |
+|---|---|
+| 配置字段 | `AIConfig.visionModel?: string` |
+| 解析 | `resolveModel(config, role)` 的 role 联合类型加 `"vision"` → `config.visionModel ?? config.model` |
+| 预置 | `ProviderPreset` 新增可选 `visionModels?: string[]`（候选见下表；**实现时按各官方文档逐一核对模型名**，模型清单变化快） |
+| UI | SettingsDialog「高级：角色专用模型」内新增「视觉模型（题目识别）」行，完全复用 轻量/Agent 的 state + customMode + buildConfig 三件套；选项 = 跟随主力模型 + `preset.visionModels` + 自定义 |
+| hint 文案 | "用于题目图片识别，需支持图片输入。DeepSeek 可选 deepseek-v4-flash-vision-exp；留空跟随主力模型（须为多模态模型）" |
+| 测试连接 | `ping(config, signal?, modelOverride?)` 增加可选模型覆盖；配置了 `visionModel` 时，`onTest` 在主力模型之外追加一次视觉模型 ping，结果分别展示（文本 ping 只验证模型存在可调用，图片能力以首次使用为准） |
+
+Provider 视觉模型候选（待核对）：
+
+| Provider | `visionModels` 候选 | 备注 |
+|---|---|---|
+| DeepSeek | `deepseek-v4-flash-vision-exp` | 视觉理解实验版 |
+| 智谱 GLM | `glm-4.5v` | 视觉理解 |
+| Moonshot | 未预置（可在「自定义」手填） | providers.ts 未含 Moonshot 视觉候选，以控制台实时清单为准 |
+| OpenAI | `gpt-4o` / `gpt-4.1` | 主力本身多模态，也可留空跟随主力 |
+| SiliconFlow | `Qwen/Qwen2.5-VL-72B-Instruct` 等 | 聚合平台，以控制台模型 ID 为准 |
+| Ollama 本地 | `qwen2.5vl:7b` / `llama3.2-vision` | 本地部署视觉模型 |
+
+> 主力为纯文本模型且未配置 visionModel 时，带图轮会在识别调用时报 4xx——错误文案明确指向设置项，不静默假装成功。
+
+### 4D.5 图片输入 UI 规范
+
+**输入通道（三合一）**：📎 附件按钮（隐藏 file input，`accept="image/*"` multiple）+ textarea `onPaste` 拦截 `clipboardData.items` 中的图片 + `.chat-input-area` `onDragOver/onDrop`。每条消息 ≤3 张（超出时 error 气泡「最多附加 3 张图片」，不截断已选）。
+
+**图片预处理**（新 `src/lib/imageInput.ts`）：
+
+```ts
+export const MAX_IMAGES = 3;
+export const MAX_FILE_MB = 10;
+/** 纯校验（node 可测）：非 image/* / 超 10MB 返回错误原因，通过返回 null */
+export function validateImageFile(file: File): string | null;
+/** createImageBitmap → canvas 等比缩放（最长边 1280）→ 白底填充 → toDataURL("image/jpeg", 0.85)。
+ *  HEIC / 解码失败抛 Error("无法解析该图片（可能为 HEIC 或已损坏）") —— 需 typeof document 守卫，仅浏览器可用 */
+export async function fileToDataUrl(file: File, opts?: { maxDim?: number; quality?: number }): Promise<string>;
+```
+
+重编码后单张约 100~300KB；透明底图（PNG 截图）先填白底再编码，避免 JPEG 透明区变黑。
+
+**统一设计规范**（暗/亮主题自动适配——只用 `tokens.css` 变量；图标统一 lucide-react 14px，新引入 `Paperclip`、`FileSearch`）：
+
+| 新部件 | 规格 |
+|---|---|
+| 附件按钮 `.attach-btn` | 输入区内、textarea 左侧；复用全局 button 底样式，`width:40px; align-self:stretch` |
+| 拖拽态 `.chat-input-area.dragover` | `border-color: var(--accent); background: var(--accent-soft)` |
+| 预览条 `.attach-strip` | `.input-stack`（flex:1 列容器，包住预览条 + textarea）内横排 wrap，gap space-2 |
+| 缩略图 `.attach-thumb` | 56×56、radius-sm、1px border-strong、object-fit:cover；右上 18px 圆形 X 移除钮（rgba(0,0,0,.6)）；点击开灯箱 |
+| 用户气泡图 `.msg-images img` | 96×96、radius-sm、accent 系边框、wrap 横排；点击开灯箱 |
+| 灯箱 `.lightbox-overlay` | fixed 全屏 rgba(0,0,0,.75)、img max 90vw/90vh、点击或 Esc 关闭（z-index 100，同 modal 规范） |
+| 题目气泡 `.bubble-problem-review` | 与 `.bubble-spec-review` 同构：bg-2 底 + accent 描边 + accent 图标（FileSearch）；标签复用 spec-review-label 样式值 |
+| 分节 `.problem-section(-title)` | 标题 11px/600/--fg-3/大写字距；正文复用 `.spec-preview`（题干） |
+| 已知量 chips `.problem-chip` | 11px mono、bg-1 底、border、999px 药丸 |
+| 动画建议 `.problem-list` | 12px、--fg-1、标准 ul 缩进 |
+| 操作按钮 | **零新样式**：复用 `.spec-review-actions` + `.spec-btn edit/retry/confirm`（编辑题干 / 重新识别 / 确认并绘制） |
+| 设置行 | 完全复用 `.form label + select + small.hint` 与 `<details class="form-details">` 折叠 |
+
+> **灯箱而非 `<a target="_blank">`**：Chrome 禁止顶层 `data:` URL 导航，缩略图点击必须用页内遮罩层放大。灯箱做成 `MessageBubble.tsx` 内的 `Lightbox` 组件（fixed 遮罩，组件内局部 state 即可），预览条 / 用户气泡 / 题目气泡共用。
+
+**ChatPanel 侧改动**：`images` state（dataURL 数组）；发送后清空；`canSend = key && ggbApi && !thinking && !running && (文字非空 || images.length > 0)`（放行纯图消息）。
+
+### 4D.6 改动清单（文件级）
+
+**`aiClient.ts`** —— 类型放宽（现有字符串调用点编译不变）：
+
+```ts
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string | ContentPart[];
+}
+// resolveModel：role 加 "vision"
+// ping(config, signal?, modelOverride?)
+// agentChat / AgentMessage：零改动
+```
+
+**`agentLoop.ts`** —— 状态核对钩子（新机制核心）：
+
+```ts
+export const MAX_STATE_CHECK_ROUNDS = 2;
+
+/** 画布状态核对规格（由 pipeline 注入；缺省 = 无终止核对，行为与现状完全一致） */
+export interface StateCheckSpec {
+  /** 核对基准（确认后的序列化题目解读） */
+  basis: string;
+  /** 最大核对反馈次数，缺省 MAX_STATE_CHECK_ROUNDS */
+  maxRounds?: number;
+  /** 返回 null = 跳过本次核对（如 signal 已 abort / 评估异常），按通过结束 */
+  check(canvasState: string, signal: AbortSignal):
+    Promise<{ satisfied: boolean; issues: string[]; summary: string } | null>;
+}
+// AgentLoopDeps += stateCheck?: StateCheckSpec
+// 新 import：getRichSnapshot from "./ggbBridge"（lib 层，无 React 依赖）
+
+/** 核对反馈消息文案（导出供单测断言） */
+export function buildStateCheckFeedback(basis: string, issues: string[], snapshot: string): string;
+// 格式：「[状态核对] 画布与题目要求核对后发现 N 个问题：\n1. …\n【题目要求】<basis 摘要>\n【当前画布状态】<snapshot>\n请用工具逐项修正，完成后重新总结。」
+```
+
+主循环「情况 1：纯文本回复」分支改为：
+
+```
+push assistant 最终文本
+若 stateCheck 存在 && checkRounds < maxRounds && !signal.aborted && !forceStop：
+  checkRounds++
+  onThinking?.("正在核对画布状态…")
+  r = await stateCheck.check(getRichSnapshot(api), signal)   // api 为本轮已刷新句柄
+  若 r && !r.satisfied && r.issues.length：
+    onThinking?.(`状态核对发现 ${r.issues.length} 个问题，继续修正…`)
+    messages.push({ role: "user", content: buildStateCheckFeedback(basis, issues, snapshot) })
+    continue                       // 回到循环顶部，AI 带着问题清单 + 画布状态继续调用工具
+结束 → finalText = content; break
+```
+
+要点：
+
+- 核对反馈轮**消耗同一 30 迭代预算**（不新增预算）；`forceStop`（熔断）后不再核对
+- 核对调用本身失败 / 返回 null → 按通过结束（延续 `evaluateSatisfaction` 的「失败不阻断」哲学）
+- `compressHistory` / `truncateHistory` 无需改动——核对反馈就是普通 user 消息
+- 轨迹持久化自动包含核对反馈消息（它们就在 `messages` 里），供失败回放分析
+
+**`pipeline.ts`** —— 识别段 + 入口重组：
+
+```ts
+export type PipelineInput = string | { text: string; images?: string[] };
+
+export interface ProblemHandle {
+  readonly problem: ProblemAnalysis;
+  confirm(final: ProblemAnalysis): void;   // final 可含用户编辑后的 problem_text
+  retry(): void;                            // 重新识别
+}
+// PipelineCallbacks += onProblemReview?(handle: ProblemHandle, reviewId: string): void
+// PipelineDeps += visionModel: string（必填；ChatPanel 用 resolveModel(config,"vision") 注入，测试注入 "vision-m"）
+// PipelineDeps += runAgentLoopImpl?: typeof runAgentLoop（单测 mock 用，生产缺省即真实实现）
+```
+
+**骨架抽取**：现 `runAgentPipeline` 主体（确认处理器注册 → 轮前快照 → `runAgentLoop` → 失败回滚 → 按工具真实成败提取重放命令写 constructionLog → 陷阱回填 → 轮后评估）抽为内部 `runAgentRound(taskText, deps, cb, opts?: { stateCheck?: StateCheckSpec; evalBasis?: string })`：
+
+- `runAgentPipeline(userText, …)` = `runAgentRound(userText, …)` 不传 opts —— **现有文字 Agent 模式行为 100% 不变（回归门禁）**
+- `opts.evalBasis` 供轮后 `evaluateAgentResult` 替换审查基准（缺省仍 `finalText`）
+
+**新入口 `runVisionPipeline(input: { text, images }, deps, cb)`**：
+
+```
+loop:  # 识别段（视觉调用，图片唯一消费点）
+  extractProblem(text, images, deps)
+    = [system(buildVisionExtractPrompt(domain)), user(text + image_url parts)]
+      → chatRaw(jsonMode, deps.visionModel) → 空响应重试 1 次（仿 Phase 1）→ parseProblemAnalysis
+  抛错 / parse 为 null：
+    文字非空 → error 气泡「题目识别失败（<原因>），将直接按文字绘制」
+              → runAgentRound(text, deps, cb)（降级为普通 Agent 轮）→ done
+    纯图     → error 气泡「识别失败：请在 设置 → 高级 中配置支持图片的视觉模型」→ done
+  problem.ask → appendAIResponse({ explanation:"需要确认", commands:[], ask }) → done
+  否则：
+    append problem-review 气泡（payload {problem, status:"pending"}）
+    waitProblemReview（AbortSignal 模式，完全仿 waitReview）
+      retry      → removeMessage(reviewId) → loop（重跑视觉调用）
+      confirm(f) → 气泡置 confirmed → basis = serializeProblem(f)
+                   taskText = [text, basis].filter(Boolean).join("\n\n")
+
+# 构造段（Agent + 状态核对）
+→ runAgentRound(taskText, deps, cb, {
+    stateCheck: {
+      basis,
+      check: (snapshot, signal) =>
+        evaluateSatisfaction(config, basis, snapshot, signal, lightModel, undefined, u => onTokenUsage?.(u))
+    },
+    evalBasis: basis        // 轮后报告也用题目解读为基准
+  })
+```
+
+`collectHistory`（两阶段用）与 `agentLoop.convertHistory`：user turn 有 `attachments` 时，content 末尾追加 `\n[附件:图片×N]`（历史轮永不携带 base64）。两阶段流水线主体、规格确认、训练库/陷阱库注入、满足度评估**零改动**。
+
+**`useAppStore.ts`**：
+
+```ts
+ChatTurn:
+  user turn 加可选字段  attachments?: string[]（重编码后的 base64 JPEG 数组）
+  新增 | { id: string; role: "problem-review";
+          payload: { problem: ProblemAnalysis; status: "pending" | "confirmed" | "rejected" } }
+```
+
+persist v3→v4：`visionModel` 为可选字段，**无字段迁移逻辑**，migrate 保持 no-op，版本号 bump 仅作里程碑记录（与既往 bump 惯例一致）。
+
+**`ChatPanel.tsx`**：
+
+- `send(text: string, images: string[] = [])`：append user turn（`content: text`，`attachments: images.length ? images : undefined`）→ `runRound(text, images)`
+- `runRound` 路由：`images?.length` → `runVisionPipeline({text, images})`（**任何模式开关下带图轮恒走 Agent 构造**）；否则 `agentMode` → `runAgentPipeline`；否则 → `runPipeline`
+- deps 组装加 `visionModel: resolveModel(config!, "vision")`；`problemHandleRef`（finally 置 null，同 `reviewHandleRef`）
+- 事件桥接：`aiggb:problem-confirm`（detail = 修改后的 ProblemAnalysis）/ `aiggb:problem-retry`，与 `aiggb:spec-confirm/retry` 同构
+- `updateProblemReview` 经 deps 内联 `setState` 实现（与 `updateSpecReview` 同款，**不加 store action**）
+- 危险工具确认：`cb.onConfirm` 注入对所有路径无条件生效（带图轮在两阶段开关下也能弹确认）
+- 三通道输入 UI（见 4D.5）
+
+**`MessageBubble.tsx`**：
+
+- user 气泡：渲染 `turn.content`（**可为空**——纯图消息只渲染图）+ `.msg-images` 缩略图（点击开灯箱）
+- `ProblemReviewBubble`：FileSearch 图标 + 分节渲染（题干 `.spec-preview` / 已知量 chips / 目标 / 图示信息 / 动画建议 list）；编辑态只允许改 `problem_text`（textarea）；按钮复用 `.spec-btn`：编辑题干 / 重新识别 / 确认并绘制；已确认态折叠为「已确认题目解读」（同 spec-review 的 isDone 分支）
+- `Lightbox` 组件（本文件内，见 4D.5）
+
+**`sessionStore.ts`**：`titleFromMessages` —— user content 为空且 `attachments` 非空 → 返回「图片题目」；content 与附件皆空 → 跳过该条看下一条。
+
+**`styles/global.css`**：新增 4D.5 表内全部类，仅用 `tokens.css` 变量。
+
+**明确不改的文件**：`App.tsx`、`Toolbar.tsx`、`TemplateGallery.tsx`、`GGBCanvas.tsx`、`ggbBridge.ts`、`prompts.ts`、`refinePrompt.ts`、`specCache.ts`、`templates.ts`、`toolExecutor.ts`、`tools.ts`、`aiClient.agentChat`（Agent 系统 prompt 与工具协议零改动）。
+
+### 4D.7 轨迹、缓存与一致性
+
+- 带图轮**不参与 specCache**（无 Phase 1，Agent 构造不产精炼规格）；文字模式的缓存机制零改动
+- `serializeProblem` 确定性保障：核对基准文本稳定、轨迹记录可复现、多轮历史一致
+- 识别结果不缓存（截图可稳定复现、拍照不稳定，图片指纹不划算）；重新识别 = 重跑视觉调用
+- 轨迹闭环：`runAgentLoop` 内置 `persistTrajectory`（含状态核对反馈消息）；陷阱回填复用 `runAgentRound` finally 的 `backfillTrapsFromTrajectories`
+- `buildRefinePrompt` / `buildCompilePrompt` / Agent system prompt 零改动 → `promptHash` 稳定、63 条回放基线不动
+- 会话存储：重编码图片（单张 ~100-300KB）随 messages 入 IndexedDB `sessions`，30 会话上限天然封顶；`aiggb_config` 不持久化消息，localStorage 无膨胀
+
+### 4D.8 错误与边界
+
+| 场景 | 处置 |
+|---|---|
+| visionModel 留空 + 主力纯文本 + 带图 | 识别调用 4xx → 按降级路径处理；纯图时错误文案指向设置项 |
+| 两阶段开关 + 带图 | 不拦截：该轮恒走 Agent 构造（设计原则 2）；危险工具确认 UI 照常可用 |
+| 识别失败且有文字 | error 气泡 → 降级为普通 Agent 轮（`runAgentRound(text)`，无 stateCheck） |
+| 纯图消息 | `content = ""`，气泡只渲染图片；`canSend` 放行；会话标题「图片题目」 |
+| 图片解码失败（HEIC / 损坏） | `fileToDataUrl` 抛错 → error 气泡「无法解析该图片（可能为 HEIC 或已损坏）」，不进预览条 |
+| 图片超过 3 张 | 追加时 error 气泡「最多附加 3 张图片」，已选保留 |
+| 3D 题目 | 识别与构造不切换 applet 模式；`figure` 含立体信息时气泡「图示信息」区追加提示「该题为 3D 场景，绘制前请先在顶栏切换 3D 画布」（仅提示） |
+| 取消 / 并发 | 题目确认等待中 abort → `waitProblemReview` reject → finally 释放锁；Agent 循环中 abort → 现有 AbortError 路径（核对反馈注入前检查 `signal.aborted`）；思考条「取消」全程生效 |
+| 核对预算 | `maxRounds=2`（可配），共享 30 迭代预算；熔断（`forceStop`）后不再核对，按现有回滚逻辑走 |
+| 核对调用失败 / 返回 null | 按通过结束，不阻断（延续满足度评估「失败不阻断」哲学）；token 已消耗照常计入 |
+| 核对通过但轮后评估仍报问题 | `evaluateAgentResult`（基准 = 题目解读）仅报告，不再触发修复（修复已由循环内核对承担） |
+| 存储 | 图片入 `ChatTurn.attachments` 随会话快照保存；`problem-review` payload 只含解读文本（无 base64），恢复轻量 |
+| SW | `/v1/chat/completions$` 已是 NetworkOnly，base64 上传不受影响 |
+| token 统计 | 视觉调用经 `chatRaw` 的 `onUsage`、核对经 `evaluateSatisfaction` 的 `onUsage` 链路自动计入，无需改动 |
+| 多图（≤3） | 识别 prompt 明示「多张图为同一题的多个页面/部分，合并解读为一道题」 |
+
+### 4D.9 测试要求
+
+**单测**（`npm run test:unit`，全离线、0 API）：
+
+1. `tests/agentLoop.test.ts` 扩展（现有 harness 注入 `stateCheck`，check 用脚本化 mock）：
+   - 无 stateCheck → 行为与现状完全一致（回归锚点）
+   - 文本结束 + 核对通过 → 正常结束，check 恰被调 1 次
+   - 核对未通过 → 反馈消息注入（断言含 issues 条目与画布快照片段）→ AI 再发工具调用 → 再次文本结束 → 二次核对通过 → 结束
+   - 连续未通过达 `maxRounds` → 第 3 次文本结束直接终止，check 不再被调
+   - check 返回 `null` → 视为通过立即结束
+   - `forceStop` 熔断后文本结束 → 不触发核对
+2. `tests/pipeline.test.ts` 扩展（harness deps 加 `visionModel: "vision-m"` 与 `runAgentLoopImpl` mock；视觉调用以 `modelOverride === "vision-m"` 且 user content 为 parts 数组区分）：
+   - 带图全流程：识别 → 题目确认 confirm → `runAgentLoopImpl` 被调，断言 taskText 含序列化解读、`stateCheck.basis` = 序列化解读、`evalBasis` 一致
+   - 重新识别：retry → 视觉调用走 2 次（rawCalls 断言）
+   - 识别输出 `ask` → 展示 ask 气泡，不进构造
+   - 识别失败且有文字 → error 气泡 + 降级普通 Agent 轮（runAgentLoopImpl 收到原文字、无 stateCheck）
+   - 纯图识别失败 → error 气泡指向设置，无任何后续调用
+   - 题目确认等待中 abort → AbortError（同现有确认等待用例）
+   - 视觉空响应 → 自动重试 1 次（rawCalls 断言）
+   - `collectHistory`：user turn 带 attachments → 历史 content 以 `[附件:图片×N]` 结尾、不含 base64（`convertHistory` 同款断言放 agentLoop 测试）
+3. 新 `tests/problemSchema.test.ts`：容错矩阵（knowns 缺省/非数组、value 字符串数字、hint type 非法 → `other`、空 problem_text 且无 ask → null、fence 剥离）+ `serializeProblem` 确定性（同输入两次相等、分节齐全、空节省略）
+4. 新 `tests/imageInput.test.ts`：`validateImageFile`（非 image/*、>10MB 拒绝、边界通过）；编码路径仅浏览器可用，不入 node 单测
+
+**回归门禁**：
+
+- `npm run test:replay` 63/63 全绿（硬要求：`prompts.ts` / `refinePrompt.ts` / Agent system prompt 零 diff → promptHash 不变）
+- `npm run test:unit` 全绿（基线 119 + 新增；含「无 stateCheck 的 runAgentLoop 行为不变」锚点）
+- `npm run lint` 与 `npm run build`（tsc -b）零错误
+
+**手测清单**：
+
+1. 纯文字回归：现有所有交互路径（模板一键、撤销、清空、会话切换、两阶段 / Agent 模式）零变化
+2. 上传 / 粘贴 / 拖拽 → 预览条增删 / 灯箱 → 识别气泡 → 编辑题干 → 确认 → Agent 构造（思考步骤实时显示）→ 出图（动画滑块 / 轨迹存在）
+3. 状态核对可观察：故意确认一个被编辑过的解读（如加入「必须有红色轨迹」）→ 观察思考条出现「状态核对发现 N 个问题，继续修正…」且 AI 继续调用工具
+4. 重新识别；识别反问（ask）；识别中 / 构造中 / 核对中取消（思考条取消按钮）
+5. 两阶段开关下带图：该轮走 Agent 构造；eval_raw 等危险工具确认弹窗正常
+6. 设置面板配置视觉模型 + 测试连接（主力 / 视觉两个结果）+ 保存后重启仍生效
+7. 纯图消息（无文字）全流程
+8. 会话切换 / 重启后图片气泡与题目确认气泡正常恢复；纯图会话标题「图片题目」
+9. 亮色主题下新部件目检无违和
+
+### 4D.10 实施里程碑
+
+| 里程碑 | 涉及文件 | 完成定义（DoD） |
+|---|---|---|
+| **M-A 基建配置** | `aiClient.ts`（ContentPart/resolveModel/ping）、`providers.ts`、`useAppStore.ts`（persist v4）、`SettingsDialog.tsx` | tsc / lint 通过；设置面板可配置视觉模型并测试连接（双结果） |
+| **M-B 输入 UI** | `imageInput.ts`（新）、`ChatPanel.tsx`、`MessageBubble.tsx`（user 图片 + Lightbox）、`global.css` | 三通道附加 / 移除 / 灯箱可用；`send(text, images)` 链路贯通（此时带图等同纯文字发送） |
+| **M-C 识别段** | `visionPrompt.ts`（新）、`problemSchema.ts`（新）、`pipeline.ts`（识别分支）、`useAppStore.ts`（ChatTurn）、`MessageBubble.tsx`（ProblemReviewBubble）、`sessionStore.ts`、`ChatPanel.tsx`（事件桥接 + deps 注入） | 识别 → 确认气泡 → 降级 / 取消 / 重新识别路径正确（构造段暂以普通 Agent 轮占位） |
+| **M-D Agent 构造 + 状态核对** | `agentLoop.ts`（stateCheck 钩子）、`pipeline.ts`（`runAgentRound` 抽取 + `runVisionPipeline`）、`ChatPanel.tsx`（路由）、`agentLoop/pipeline`（历史附件占位） | 带图手测全流程通过；核对反馈可观察；文字两模式行为回归零变化 |
+| **M-E 测试文档** | `tests/agentLoop.test.ts`、`tests/pipeline.test.ts`、`tests/problemSchema.test.ts`（新）、`tests/imageInput.test.ts`（新）、`AGENTS.md` / `README.md` / `SPEC.md` 同步 | test:unit + replay 63 全绿；文档与实现一致 |
+
+**验收总清单**：
+
+1. 纯文字回归：现有单测 + 63 回放全绿，UI 与交互零变化（含无 stateCheck 的 Agent 模式锚点）
+2. 带图手测：上传/粘贴/拖拽 → 预览增删 → 识别气泡 → 编辑题干 → 确认 → Agent 构造 → 出图（含动画滑块/轨迹）
+3. 状态核对：解读与画布不符时出现修正轮（思考条文案 + 继续工具调用），≤2 次反馈后收敛或终止
+4. 设置面板：配置视觉模型 + 测试连接 + 保存后重启仍生效（persist v4）
+5. 取消/重试/并发锁行为与规格确认一致；危险工具确认在带图轮可用；亮色主题下新部件无违和
+6. 纯图消息全流程可用
+7. 会话持久化：带图会话切换/重启恢复完整（图片 + 题目气泡）
+
+**明确不在本期**：文字 Agent 轮接入画布状态核对（本期仅带图轮有核对基准；泛化为所有 Agent 轮是后续项）；画布截图视觉比对（`exportPNG` 让评估模型"看"渲染效果——本期核对仍是结构化文本比对）；URL 远程图片输入；一图多题拆分（按一题处理）；题目文字 OCR 二次校对界面。
+
+### 4D.11 实施后修复：Agent 模式 `finish_reason=length` 截断问题
+
+**现象**：多模态流程中，题目识别成功后进入 Agent 构造阶段，执行 2 次工具调用后报错 `AI 未返回有效响应（finish_reason=length, 模型未生成有效输出，请检查 Agent 模型是否支持 Function Calling）`，画布回滚。
+
+**根因**（两因素叠加）：
+
+1. **Thinking 模式消耗输出 token 预算**：DeepSeek V4 开启 `reasoning_effort` 后，内部推理 tokens 和 tool_calls JSON 共享同一个 `max_tokens` 额度。`agentChat` 固定设 `max_tokens: 8192`，推理用掉大部分后剩余空间不够生成完整的工具调用 JSON，被截断返回 `finish_reason=length`。
+2. **截断重试机制对 DeepSeek 失效**：`agentLoop.ts` 中截断检测要求 `quirks.streamsFinishReason === true`，但 DeepSeek quirks 设为 `false`（因流式偶尔省略 finish_reason）。结果即使模型明确返回了 `"length"`，代码也不信任它，跳过了"请缩短输出"的重试提示，直接报出误导性错误信息。
+
+**修复**（2026-08-30）：
+
+| 文件 | 改动 | 说明 |
+|---|---|---|
+| `aiClient.ts:agentChat` | thinking 模式下 `max_tokens` 从 8192 → 16384 | 给 reasoning + tool_calls 留足空间 |
+| `agentLoop.ts:375,384` | 移除 `&& quirks.streamsFinishReason === true` 条件 | `finish_reason="length"` 是明确的截断信号，应无条件信任；该 flag 仅表示 provider 可能*省略* finish_reason，不代表*返回的值*不可信 |
+
+**推荐配置**（避免触发此问题）：
+
+| 角色 | 推荐模型 | 思考深度 |
+|---|---|---|
+| 主力模型 | `deepseek-v4-pro` | — |
+| 轻量模型 | `deepseek-v4-flash` | — |
+| Agent 模型 | `deepseek-v4-pro` | 留空（关闭）或低 |
+| 视觉模型 | `deepseek-v4-flash-vision-exp` | — |
+
+> 视觉模型必须显式配置——`deepseek-v4-pro/flash` 不支持图片输入，留空回退会导致识别阶段 4xx 错误。
 
 ---
 
@@ -945,11 +1408,12 @@ AI: {
   "baseURL": "https://api.deepseek.com",
   "apiKey": "sk-...",
   "model": "deepseek-v4-pro",
+  "visionModel": "deepseek-v4-flash-vision-exp",
   "temperature": 0.2
 }
 ```
 
-- 持久化键 `aiggb_config`（store v2），仅写入 `localStorage`，不发送到任何非 provider 官方端点
+- 持久化键 `aiggb_config`（store v4），仅写入 `localStorage`，不发送到任何非 provider 官方端点
 - 持久化字段：`config` / `domain` / `privacyAcknowledged`（消息、画布 API、`ggbAppName` 不持久化）
 
 ### 6.2 预置 Provider
@@ -1331,7 +1795,8 @@ npm run test:hash        # 查看当前 prompt 指纹
 | M7 | 3D 几何支持：意图检测 + applet 单向升级 + 3D 白名单/铁律 + 2 个 3D 模板 + highschool 14 用例 | ✅ v1.4 |
 | M8 | 视觉回归测试（Playwright 截图）+ 模板库扩至 16 + 用例扩至 63×14 + store v2 迁移 | ✅ v1.5 |
 | M9 | Agent 模式（ReAct 工具调用回路）+ 3D 画布 DockGlassPane 修复与恢复系统 + 3-role 模型配置（主力/轻量/Agent）+ 满足度评估 | ✅ v1.6 |
-| M10 | 生产缺陷回流管道、在线 N=10 漂移基线、CI/CD 集成、3D→2D 主动降级 | 🔜 v1.7 |
+| M10 | 生产缺陷回流管道、在线 N=10 漂移基线、CI/CD 集成、3D→2D 主动降级 | 🔜 v1.8 |
+| M11 | 多模态题目识别：图片/粘贴/拖拽 → 题目解读 → 确认气泡 → Agent 构造（画布状态核对反馈）出动图；视觉模型第 4 角色；finish_reason=length 截断修复 | ✅ v1.7 |
 
 ---
 

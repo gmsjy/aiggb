@@ -9,24 +9,30 @@
  * Promise 在整个流程（含确认等待 / 降级 / 重试 / 取消）结束前不 resolve。
  */
 import { useEffect, useRef, useState } from "react";
-import { Send, Loader2, X } from "lucide-react";
+import { Send, Loader2, X, Paperclip } from "lucide-react";
 import { useAppStore, newMessageId } from "../store/useAppStore";
 import { AISchemaError } from "../lib/aiClient";
 import { resolveModel } from "../lib/aiClient";
-import { runPipeline, runAgentPipeline, type PipelineDeps, type ReviewHandle } from "../lib/pipeline";
+import { runPipeline, runAgentPipeline, runVisionPipeline, type PipelineDeps, type ReviewHandle, type ProblemHandle } from "../lib/pipeline";
 import { abortCurrentRun, beginRun, endRun, wasAborted, onRunCancelled } from "../lib/runControl";
 import type { ConfirmationRequest, ConfirmationDecision } from "../lib/agentLoop";
+import type { ProblemAnalysis } from "../lib/problemSchema";
+import { validateImageFile, fileToDataUrl, MAX_IMAGES } from "../lib/imageInput";
 import { MessageBubble } from "./MessageBubble";
 
 export function ChatPanel() {
   const [input, setInput] = useState("");
+  const [images, setImages] = useState<string[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // ★ 并发守卫：一轮 runRound 未结束前忽略新的 send/模板触发
   const runningRef = useRef<boolean>(false);
   // ★ 始终指向最新的 send（避免 effect 注册时的 stale closure）
   const sendRef = useRef<(text: string) => void>(() => {});
   // ★ 当前轮的规格确认句柄：spec-review 气泡事件通过此句柄回传决定
   const reviewHandleRef = useRef<ReviewHandle | null>(null);
+  // ★ 当前轮的题目确认句柄：problem-review 气泡事件通过此句柄回传决定
+  const problemHandleRef = useRef<ProblemHandle | null>(null);
 
   const config = useAppStore(s => s.config);
   const domain = useAppStore(s => s.domain);
@@ -93,6 +99,20 @@ export function ChatPanel() {
     };
   }, []);
 
+  // 题目确认气泡事件 → 当前轮 handle
+  useEffect(() => {
+    const onProblemConfirm = (e: Event) => {
+      problemHandleRef.current?.confirm((e as CustomEvent<ProblemAnalysis>).detail);
+    };
+    const onProblemRetry = () => problemHandleRef.current?.retry();
+    window.addEventListener("aiggb:problem-confirm", onProblemConfirm);
+    window.addEventListener("aiggb:problem-retry", onProblemRetry);
+    return () => {
+      window.removeEventListener("aiggb:problem-confirm", onProblemConfirm);
+      window.removeEventListener("aiggb:problem-retry", onProblemRetry);
+    };
+  }, []);
+
   // ★ 取消/组件卸载时清理 confirmDialog，避免 Promise 悬挂
   useEffect(() => {
     const unsub = onRunCancelled(() => {
@@ -126,9 +146,9 @@ export function ChatPanel() {
     }
   };
 
-  const canSend = !!config?.apiKey && !!ggbApi && !isThinking && !runningRef.current && input.trim().length > 0;
+  const canSend = !!config?.apiKey && !!ggbApi && !isThinking && !runningRef.current && (input.trim().length > 0 || images.length > 0);
 
-  const send = (text: string) => {
+  const send = (text: string, imgs: string[] = []) => {
     if (!config?.apiKey) {
       appendMessage({ id: newMessageId(), role: "error", content: "请先在设置中填入 API Key" });
       return;
@@ -143,9 +163,14 @@ export function ChatPanel() {
       return;
     }
 
-    appendMessage({ id: newMessageId(), role: "user", content: text });
+    appendMessage({
+      id: newMessageId(),
+      role: "user",
+      content: text,
+      attachments: imgs.length ? imgs : undefined
+    });
 
-    void runRound(text);
+    void runRound(text, imgs);
   };
   // ★ 必须在 send 声明之后赋值（TDZ：声明前访问 const 会抛 ReferenceError）
   sendRef.current = send;
@@ -160,7 +185,7 @@ export function ChatPanel() {
   };
 
   // ★★ runRound：并发锁 + store 依赖注入 → pipeline ★★
-  const runRound = async (userText: string) => {
+  const runRound = async (userText: string, _imgs: string[] = []) => {
     if (runningRef.current) return;
     runningRef.current = true;
     setThinking(true);
@@ -191,29 +216,37 @@ export function ChatPanel() {
         newMessageId,
         heavyModel: resolveModel(config!, "heavy"),
         lightModel: resolveModel(config!, "light"),
+        visionModel: resolveModel(config!, "vision"),
         onTokenUsage: u => useAppStore.getState().addTokenUsage(u),
+        updateProblemReview: (id, problem, status) =>
+          useAppStore.setState(s => ({
+            messages: s.messages.map(m =>
+              m.role === "problem-review" && m.id === id ? { ...m, payload: { problem, status } } : m
+            )
+          })),
       };
-      // ★ Agent mode vs Two-stage pipeline
-      if (useAppStore.getState().agentMode) {
-        await runAgentPipeline(userText, deps, {
-          onReview: handle => {
-            reviewHandleRef.current = handle;
-          },
-          onConfirm: async (requests) => {
-            // 暂停 agent loop，等待用户确认
-            return new Promise<ConfirmationDecision[]>(resolve => {
-              setConfirmDialog({ requests, resolve });
-            });
-          },
-          // ★ 实时显示 Agent 思考步骤 / 流式文本（节流更新）
-          onAgentStep: pushAgentStep
-        });
+      // ★ 路由：带图 → 视觉识别管线；否则按模式开关
+      const sharedCallbacks = {
+        onReview: (handle: ReviewHandle) => {
+          reviewHandleRef.current = handle;
+        },
+        onConfirm: async (requests: ConfirmationRequest[]) => {
+          return new Promise<ConfirmationDecision[]>(resolve => {
+            setConfirmDialog({ requests, resolve });
+          });
+        },
+        onAgentStep: pushAgentStep,
+        onProblemReview: (handle: ProblemHandle) => {
+          problemHandleRef.current = handle;
+        },
+      };
+
+      if (_imgs.length > 0) {
+        await runVisionPipeline({ text: userText, images: _imgs }, deps, sharedCallbacks);
+      } else if (useAppStore.getState().agentMode) {
+        await runAgentPipeline(userText, deps, sharedCallbacks);
       } else {
-        await runPipeline(userText, deps, {
-          onReview: handle => {
-            reviewHandleRef.current = handle;
-          }
-        });
+        await runPipeline(userText, deps, sharedCallbacks);
       }
     } catch (err) {
       if (!wasAborted()) {
@@ -221,6 +254,7 @@ export function ChatPanel() {
       }
     } finally {
       reviewHandleRef.current = null;
+      problemHandleRef.current = null;
       endRun();
       runningRef.current = false;
       setThinking(false);
@@ -238,8 +272,9 @@ export function ChatPanel() {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       if (canSend) {
-        send(input.trim());
+        send(input.trim(), images);
         setInput("");
+        setImages([]);
       }
     }
   };
@@ -344,29 +379,132 @@ export function ChatPanel() {
         )}
       </div>
 
-      <div className="chat-input-area">
-        <textarea
-          className="chat-input"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={
-            !config?.apiKey
-              ? "请先在右上角『设置』中配置 API Key…"
-              : domain === "physics"
-              ? "描述物理场景：如 斜抛 v0=20 仰角 45° / 单摆 L=1 θ0=π/6 …  (Ctrl+Enter 发送)"
-              : "描述数学图形：如 外接圆 / sin(kx) / 摆线 / 椭圆 a=3 b=2 / 正方体截面 …  (Ctrl+Enter 发送)"
+      <div
+        className="chat-input-area"
+        onDragOver={e => { e.preventDefault(); e.currentTarget.classList.add("dragover"); }}
+        onDragLeave={e => { e.currentTarget.classList.remove("dragover"); }}
+        onDrop={async e => {
+          e.preventDefault();
+          e.currentTarget.classList.remove("dragover");
+          const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/"));
+          if (!files.length) return;
+          const remaining = MAX_IMAGES - images.length;
+          if (remaining <= 0) {
+            appendMessage({ id: newMessageId(), role: "error", content: `最多附加 ${MAX_IMAGES} 张图片` });
+            return;
           }
-          rows={3}
-          disabled={!config?.apiKey}
+          for (const file of files.slice(0, remaining)) {
+            const err = validateImageFile(file);
+            if (err) { appendMessage({ id: newMessageId(), role: "error", content: err }); continue; }
+            try {
+              const url = await fileToDataUrl(file);
+              setImages(prev => [...prev, url]);
+            } catch (e2) {
+              appendMessage({ id: newMessageId(), role: "error", content: e2 instanceof Error ? e2.message : "图片处理失败" });
+            }
+          }
+        }}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: "none" }}
+          onChange={async e => {
+            const files = Array.from(e.target.files ?? []);
+            const remaining = MAX_IMAGES - images.length;
+            if (remaining <= 0) {
+              appendMessage({ id: newMessageId(), role: "error", content: `最多附加 ${MAX_IMAGES} 张图片` });
+              e.target.value = "";
+              return;
+            }
+            for (const file of files.slice(0, remaining)) {
+              const err = validateImageFile(file);
+              if (err) { appendMessage({ id: newMessageId(), role: "error", content: err }); continue; }
+              try {
+                const url = await fileToDataUrl(file);
+                setImages(prev => [...prev, url]);
+              } catch (e2) {
+                appendMessage({ id: newMessageId(), role: "error", content: e2 instanceof Error ? e2.message : "图片处理失败" });
+              }
+            }
+            e.target.value = "";
+          }}
         />
+        <button
+          className="attach-btn"
+          onClick={() => fileInputRef.current?.click()}
+          title={`附加图片（最多 ${MAX_IMAGES} 张）`}
+          disabled={!config?.apiKey || runningRef.current}
+        >
+          <Paperclip size={16} />
+        </button>
+        <div className="input-stack">
+          {images.length > 0 && (
+            <div className="attach-strip">
+              {images.map((url, i) => (
+                <div key={i} className="attach-thumb">
+                  <img src={url} alt={`预览 ${i + 1}`} />
+                  <button
+                    className="attach-thumb-remove"
+                    onClick={() => setImages(prev => prev.filter((_, j) => j !== i))}
+                    aria-label="移除"
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <textarea
+            className="chat-input"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            onPaste={async e => {
+              const items = e.clipboardData?.items;
+              if (!items) return;
+              const imageItems = Array.from(items).filter(it => it.type.startsWith("image/"));
+              if (!imageItems.length) return;
+              e.preventDefault();
+              const remaining = MAX_IMAGES - images.length;
+              if (remaining <= 0) {
+                appendMessage({ id: newMessageId(), role: "error", content: `最多附加 ${MAX_IMAGES} 张图片` });
+                return;
+              }
+              for (const item of imageItems.slice(0, remaining)) {
+                const file = item.getAsFile();
+                if (!file) continue;
+                const err = validateImageFile(file);
+                if (err) { appendMessage({ id: newMessageId(), role: "error", content: err }); continue; }
+                try {
+                  const url = await fileToDataUrl(file);
+                  setImages(prev => [...prev, url]);
+                } catch (e2) {
+                  appendMessage({ id: newMessageId(), role: "error", content: e2 instanceof Error ? e2.message : "图片处理失败" });
+                }
+              }
+            }}
+            placeholder={
+              !config?.apiKey
+                ? "请先在右上角『设置』中配置 API Key…"
+                : domain === "physics"
+                ? "描述物理场景：如 斜抛 v0=20 仰角 45° / 单摆 L=1 θ0=π/6 …  (Ctrl+Enter 发送)"
+                : "描述数学图形：如 外接圆 / sin(kx) / 摆线 / 椭圆 a=3 b=2 / 正方体截面 …  (Ctrl+Enter 发送)"
+            }
+            rows={3}
+            disabled={!config?.apiKey}
+          />
+        </div>
         <button
           className="send-btn"
           disabled={!canSend}
           onClick={() => {
             if (canSend) {
-              send(input.trim());
+              send(input.trim(), images);
               setInput("");
+              setImages([]);
             }
           }}
           title="Ctrl+Enter 发送"

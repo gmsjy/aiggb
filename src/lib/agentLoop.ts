@@ -32,6 +32,7 @@ import type { Domain } from "./prompts";
 import type { ChatTurn } from "../store/useAppStore";
 import { getTraceId } from "./runControl";
 import { buildTrajectoryRecord, type TrajectoryRecord } from "./trajectoryStore";
+import { getRichSnapshot } from "./ggbBridge";
 
 // ──── 常量 ────
 
@@ -40,6 +41,9 @@ export const MAX_AGENT_ITERATIONS = 30;
 
 /** 连续工具失败熔断阈值（连续 N 轮执行全失败即停止重试，避免无效轮转） */
 export const MAX_CONSECUTIVE_FAILURES = 3;
+
+/** 画布状态核对最大反馈次数（共享 30 迭代预算） */
+export const MAX_STATE_CHECK_ROUNDS = 2;
 
 /** 用户拒绝工具调用时返回给 AI 的错误文案（熔断统计据此排除"拒绝"场景） */
 const USER_DENIED_MSG = "用户拒绝了此操作";
@@ -59,6 +63,24 @@ export type ConfirmationDecision =
   | { action: "approve"; toolCallId: string }
   | { action: "deny"; toolCallId: string }
   | { action: "approve_all" }; // 信任此会话
+
+/** 画布状态核对规格（由 pipeline 注入；缺省 = 无终止核对，行为与现状完全一致） */
+export interface StateCheckSpec {
+  /** 核对基准（确认后的序列化题目解读） */
+  basis: string;
+  /** 最大核对反馈次数，缺省 MAX_STATE_CHECK_ROUNDS */
+  maxRounds?: number;
+  /** 返回 null = 跳过本次核对（如 signal 已 abort / 评估异常），按通过结束 */
+  check(canvasState: string, signal: AbortSignal):
+    Promise<{ satisfied: boolean; issues: string[]; summary: string } | null>;
+}
+
+/** 核对反馈消息文案（导出供单测断言） */
+export function buildStateCheckFeedback(basis: string, issues: string[], snapshot: string): string {
+  const issueList = issues.map((s, i) => `${i + 1}. ${s}`).join("\n");
+  const basisSummary = basis.length > 500 ? basis.slice(0, 500) + "…" : basis;
+  return `[状态核对] 画布与题目要求核对后发现 ${issues.length} 个问题：\n${issueList}\n\n【题目要求】\n${basisSummary}\n\n【当前画布状态】\n${snapshot}\n\n请用工具逐项修正，完成后重新总结。`;
+}
 
 /** agent loop 对宿主的依赖 */
 export interface AgentLoopDeps {
@@ -84,6 +106,8 @@ export interface AgentLoopDeps {
   executeToolCallsImpl?: typeof defaultExecuteToolCalls;
   /** 记录 ReAct 轨迹（IndexedDB 持久化，供训练数据闭环 / 失败回放）。不注入则跳过。 */
   persistTrajectory?: (rec: TrajectoryRecord) => void;
+  /** 画布状态核对规格（带图轮注入；缺省 = 无终止核对） */
+  stateCheck?: StateCheckSpec;
 }
 
 /** agent loop 执行结果 */
@@ -249,6 +273,7 @@ export async function runAgentLoop(
   let consecutiveFailures = 0; // ★ 连续工具执行失败计数（熔断）
   let forceStop = false;      // ★ 熔断后禁止继续工具调用
   let emptyResponseRetried = false; // ★ 空响应重试标志（仅重试 1 次）
+  let checkRounds = 0; // ★ 状态核对反馈计数
 
   while (iterations < MAX_AGENT_ITERATIONS) {
     // 检查中断
@@ -301,11 +326,38 @@ export async function runAgentLoop(
       break;
     }
 
-    // 情况 1：纯文本回复 → 结束
+    // 情况 1：纯文本回复 → 结束（或触发状态核对）
     if (!response.toolCalls.length && response.content) {
-      finalText = response.content;
       messages.push({ role: "assistant", content: response.content, reasoning_content: roundtripReasoning ? response.reasoningContent : undefined });
       emptyResponseRetried = false; // 成功后复位
+
+      // ★ 状态核对钩子：AI 宣称完成时，校验画布是否满足题目要求
+      const maxCheck = deps.stateCheck?.maxRounds ?? MAX_STATE_CHECK_ROUNDS;
+      if (deps.stateCheck && checkRounds < maxCheck && !deps.signal.aborted && !forceStop) {
+        checkRounds++;
+        deps.onThinking?.("正在核对画布状态…");
+        const api = deps.getApi();
+        if (api) {
+          try {
+            const snapshot = getRichSnapshot(api);
+            const r = await deps.stateCheck.check(snapshot, deps.signal);
+            if (r && !r.satisfied && r.issues.length) {
+              deps.onThinking?.(`状态核对发现 ${r.issues.length} 个问题，继续修正…`);
+              messages.push({
+                role: "user",
+                content: buildStateCheckFeedback(deps.stateCheck.basis, r.issues, snapshot),
+              });
+              continue; // 回到循环顶部，AI 带着问题清单继续调用工具
+            }
+          } catch (err) {
+            // 核对失败 → 按通过结束（延续「失败不阻断」哲学）
+            if (deps.signal.aborted) throw err;
+            console.warn("[agentLoop] stateCheck failed, treating as pass", err);
+          }
+        }
+      }
+
+      finalText = response.content;
       break;
     }
 
@@ -318,8 +370,9 @@ export async function runAgentLoop(
 
       if (!emptyResponseRetried) {
         emptyResponseRetried = true;
-        // ★ 仅当 provider 的 finish_reason 可靠时才信任 "length" 截断提示（DeepSeek 流式偶发缺失）
-        const truncated = response.finishReason === "length" && quirks.streamsFinishReason === true;
+        // ★ finish_reason="length" 是明确的截断信号，即使 streamsFinishReason=false 也应信任
+        //   （该 flag 仅表示 provider 可能省略 finish_reason，不代表返回的值不可信）
+        const truncated = response.finishReason === "length";
         const reasonHint = truncated
           ? "[系统] 你的上一条回复因长度限制被截断（max_tokens 不足）。请缩短输出或分步执行。继续构造或输出文本总结。"
           : "[系统] 请继续：调用下一步工具完成构造，或输出文本总结当前画布状态。不要返回空响应。";
@@ -328,7 +381,7 @@ export async function runAgentLoop(
       }
 
       // 重试后仍空 → 放弃，输出诊断信息
-      const truncated = response.finishReason === "length" && quirks.streamsFinishReason === true;
+      const truncated = response.finishReason === "length";
       const diag = truncated
         ? "（输出超长被截断，可尝试增加 max_tokens 或简化构造）"
         : response.finishReason === "content_filter"
@@ -648,7 +701,11 @@ function convertHistory(turns: ChatTurn[]): AgentMessage[] {
 
   for (const t of recent) {
     if (t.role === "user") {
-      msgs.push({ role: "user", content: t.content });
+      let content = t.content;
+      if (t.attachments && t.attachments.length > 0) {
+        content += `\n[附件:图片×${t.attachments.length}]`;
+      }
+      msgs.push({ role: "user", content });
     } else if (t.role === "assistant") {
       // agent 模式的 assistant 消息：包含 explanation + pseudo commands
       const explanation = t.payload.explanation || "";

@@ -41,6 +41,7 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
   // ★ 角色专用模型（可选，留空则回退到主力模型）
   const [lightModel, setLightModel] = useState<string>(existing?.lightModel ?? existing?.flashModel ?? "");
   const [agentModel, setAgentModel] = useState<string>(existing?.agentModel ?? "");
+  const [visionModel, setVisionModel] = useState<string>(existing?.visionModel ?? "");
   // ★ 思考深度（V4 reasoning_effort；留空 = 不发参数 = baseline）
   const [reasoningEffort, setReasoningEffort] = useState<"low" | "medium" | "high" | "">(
     existing?.reasoningEffort ?? ""
@@ -58,6 +59,12 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
   const [agentCustomMode, setAgentCustomMode] = useState<boolean>(
     () => !!(preset && preset.models.length > 0 && agentModel !== "" && !preset.models.includes(agentModel))
   );
+  const [visionCustomMode, setVisionCustomMode] = useState<boolean>(
+    () => {
+      const candidates = [...(preset?.models ?? []), ...(preset?.visionModels ?? [])];
+      return !!(candidates.length > 0 && visionModel !== "" && !candidates.includes(visionModel));
+    }
+  );
 
   const onProviderChange = (id: string) => {
     setProviderId(id);
@@ -68,6 +75,7 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
       setCustomMode(false);
       setLightCustomMode(false);
       setAgentCustomMode(false);
+      setVisionCustomMode(false);
       // 切换 provider 时不自动重置 lightModel/agentModel——用户可能想保留自定义值
     }
   };
@@ -81,6 +89,7 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
     reasoningEffort: reasoningEffort || undefined,
     lightModel: lightModel.trim() || undefined,
     agentModel: agentModel.trim() || undefined,
+    visionModel: visionModel.trim() || undefined,
   });
 
   const onTest = async () => {
@@ -93,7 +102,17 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
     setTestResult(null);
     try {
       await ping(cfg);
-      setTestResult({ ok: true, msg: "连接成功 ✅" });
+      let msg = "连接成功 ✅";
+      if (cfg.visionModel) {
+        try {
+          await ping(cfg, undefined, cfg.visionModel);
+          msg += " / 视觉模型 ✅";
+        } catch (vErr) {
+          const vMsg = vErr instanceof AIError ? vErr.message : vErr instanceof Error ? vErr.message : String(vErr);
+          msg += ` / 视觉模型 ❌ ${vMsg.slice(0, 80)}`;
+        }
+      }
+      setTestResult({ ok: true, msg });
     } catch (err) {
       const msg = err instanceof AIError ? err.message : err instanceof Error ? err.message : String(err);
       setTestResult({ ok: false, msg });
@@ -308,6 +327,49 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
                 />
               )}
               <small className="hint">用于 Agent 模式的 ReAct 循环。需支持 Function Calling。</small>
+            </label>
+            <label>
+              <span>视觉模型 (题目识别)</span>
+              {preset && (preset.models.length > 0 || (preset.visionModels?.length ?? 0) > 0) ? (
+                <>
+                  <select
+                    value={visionCustomMode ? "__custom__" : visionModel}
+                    onChange={e => {
+                      const v = e.target.value;
+                      if (v === "__custom__") { setVisionCustomMode(true); return; }
+                      setVisionCustomMode(false);
+                      setVisionModel(v);
+                    }}
+                  >
+                    <option value="">跟随主力模型</option>
+                    {(preset.visionModels ?? []).map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                    {preset.models.filter(m => !(preset.visionModels ?? []).includes(m)).map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                    <option value="__custom__">— 自定义 —</option>
+                  </select>
+                  {visionCustomMode && (
+                    <input
+                      type="text"
+                      value={visionModel}
+                      placeholder="输入自定义模型名"
+                      onChange={e => setVisionModel(e.target.value)}
+                      autoFocus
+                      style={{ marginTop: 4 }}
+                    />
+                  )}
+                </>
+              ) : (
+                <input
+                  type="text"
+                  value={visionModel}
+                  onChange={e => setVisionModel(e.target.value)}
+                  placeholder="留空则使用主力模型"
+                />
+              )}
+              <small className="hint">用于题目图片识别，需支持图片输入。DeepSeek 可选 deepseek-v4-flash-vision-exp；留空跟随主力模型（须为多模态模型）。</small>
             </label>
             <label>
               <span>思考深度 (Thinking)</span>

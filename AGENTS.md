@@ -38,8 +38,8 @@
 
 | 文件 | 职责 | 关键导出 |
 |---|---|---|
-| `aiClient.ts` | OpenAI 兼容调用 | `chat(config, msgs, signal?, modelOverride?)` 返回 schema 校验后的 `AIResponse`；`chatRaw(...)` 返回纯文本（Phase 1 用）；`agentChat(...)` Agent **流式**工具调用（SSE 增量解析 tool_calls + `onContent` 实时回调 + JSON 兼容回退 + `max_tokens`）；`ping()` 连接测试；`AIConfig`（**3-role 模型**：`model` 主力 / `lightModel?` 轻量 / `agentModel?` Agent，`flashModel?` 已 deprecated）；`resolveLightModel`/`resolveAgentModel` 解析回退链；`ChatMessage`、`AIError`、`AISchemaError` |
-| `pipeline.ts` | **两阶段流水线状态机**（从 ChatPanel 抽取） | `runPipeline(userText, deps, cb)`（Phase 1→确认→Phase 2→修复→**满足度评估**）、`ReviewHandle`/`ReviewDecision`、`PipelineDeps`（依赖注入接口，含 3-role 模型解析 + `appMode`）、`PipelineCallbacks`、`MAX_REPAIR=2`、`MAX_FORMAT_RETRY=2`、`HISTORY_WINDOW=6`、`parseRefinedSpec`、`collectHistory`；内部 `runSinglePhase`/`runPhase2`/`executeAndRepair`/`applyRagCorrection`/`chatWithFormatRetry`；Phase 2 调用 `executeCommands(api, cmds, deps.appMode)`；`requestAnimationFrame` 用 `typeof` 守卫兼容 Node.js 单测 |
+| `aiClient.ts` | OpenAI 兼容调用 | `chat(config, msgs, signal?, modelOverride?)` 返回 schema 校验后的 `AIResponse`；`chatRaw(...)` 返回纯文本（Phase 1 / 视觉识别用）；`agentChat(...)` Agent **流式**工具调用（SSE 增量解析 tool_calls + `onContent` 实时回调 + JSON 兼容回退 + `max_tokens`，thinking 模式下 16384 防 reasoning 挤占）；`ping(config, signal?, modelOverride?)` 连接测试（设置面板传 visionModel 顺带测视觉模型）；`AIConfig`（**4-role 模型**：`model` 主力 / `lightModel?` 轻量 / `agentModel?` Agent / `visionModel?` 视觉，`flashModel?` 已 deprecated）；`resolveModel(config, role)` 统一解析回退链（vision → model）；`ChatMessage`（content 支持 `string \| ContentPart[]` 多模态）、`ContentPart`（text/image_url）、`AIError`、`AISchemaError` |
+| `pipeline.ts` | **两阶段流水线状态机**（从 ChatPanel 抽取）+ **多模态视觉管线** | `runPipeline(userText, deps, cb)`（Phase 1→确认→Phase 2→修复→**满足度评估**）、**`runVisionPipeline({text, images}, deps, cb)`**（带图轮入口：识别→题目确认→Agent 构造+状态核对）、`runAgentPipeline`/内部 `runAgentRound(userText, deps, cb, {stateCheck?, evalBasis?})`、`ReviewHandle`/`ProblemHandle`/对应 Decision、`PipelineDeps`（依赖注入接口，含 4-role 模型解析 + `runAgentLoopImpl?` + `updateProblemReview?` + `appMode`）、`PipelineCallbacks`（含 `onProblemReview?`）、`MAX_REPAIR=2`、`MAX_FORMAT_RETRY=2`、`HISTORY_WINDOW=6`、`parseRefinedSpec`、`collectHistory`（user 带 attachments 时追加 `[附件:图片×N]` 占位）；内部 `runSinglePhase`/`runPhase2`/`executeAndRepair`/`applyRagCorrection`/`chatWithFormatRetry`/`extractProblem`/`waitProblemReview`；Phase 2 调用 `executeCommands(api, cmds, deps.appMode)`；`requestAnimationFrame` 用 `typeof` 守卫兼容 Node.js 单测 |
 | `runControl.ts` | 单轮运行生命周期 | `beginRun()`（返回本轮 AbortSignal）、`abortCurrentRun()`（清空/切模式/撤销时取消请求）、`onRunCancelled(cb)`（spec-review 等待气泡订阅取消）、`wasAborted()`、`endRun()` |
 | `prompts.ts` | System Prompt 构建 | `buildSystemPrompt(domain, appMode, phase="full"\|"compile")`、`buildCompilePrompt`、`buildCheckerPrompt`（修复角色）、`buildRepairMessage`、`buildFormatRepairMessage`；compile 模式含 **self_check 自检指令**；`Domain = "general"\|"physics"` |
 | `refinePrompt.ts` | Phase 1 精炼 prompt | `buildRefinePrompt(domain)` — 输出 JSON `{"spec":"<分节规格>"}`，含物理默认值 |
@@ -50,34 +50,39 @@
 | `specCache.ts` | 意图→规格缓存 | `lookupCachedSpec`/`storeCachedSpec`（模板精确匹配优先 + 存储精确键）、**`SpecStorage` 注入接口 + `createMemoryStorage()`（供单测）**；LRU ≤50 条、TTL 30 天、键含画布对象指纹（排除 `_` 前缀临时对象与物理常量，保证同场景稳定命中） |
 | `commands.ts` | 命令白名单/黑名单/流程 | `GGB_COMMANDS`、`GGB_FORBIDDEN_COMMANDS`（硬黑名单，被 schema 引用）、`GGB_5STAGE_FLOW`（参数→点→图形→动画→属性） |
 | `physics.ts` | 物理常量 + 配色 | `PHYSICS_CONSTANTS`（g/c/e/eps0/mu0/k_e/Grav/h/k_B）、`PHYSICS_COLORS`（位移蓝/速度绿/加速度橙/力红/电场紫/磁场青） |
-| `templates.ts` | 16 个一键模板 | `Template {id, icon, title, subtitle, prompt, domain, mode}`；prompt 即精炼规格，天然命中 specCache |
+| `templates.ts` | 12 个一键模板（物理 2D 4 + 数学 2D 4 + 3D 4） | `Template {id, icon, title, subtitle, prompt, domain, mode}`；prompt 即精炼规格，天然命中 specCache |
 | `ggbBridge.ts` | op → GGB API 执行器 | `executeCommands(api, commands, appMode?)` — **2D/3D 统一启用 `setRepaintingActive` 批量渲染**（升级官方 5.4.927.1 后 DockGlassPane 已不复发，禁用会导致代数区闪烁）；`collectFailures`、**`resetTmpIds`**（vector 容错重试时复位临时对象计数）、`exportGGB`/`exportPNG`、`registerAppNameSetter`/`switchAppletMode`（2D↔3D）|
-| `agentLoop.ts` | **ReAct Agent 工具调用循环** | `runAgentLoop(userText, deps)` — observe→plan→act 循环，最大 30 次迭代，**每轮刷新 api 句柄**（防 applet 重建失效）、**连续 3 轮工具失败熔断**（`MAX_CONSECUTIVE_FAILURES`）、全拒绝判定按**本轮**被拒数（避免跨轮累积误触发）、危险工具确认按 `toolCallId` 匹配；**`onThinking` 回调**（分析/规划/执行工具/等待确认 4 个节点）实时上报思考步骤，经 pipeline 透传 UI 减少等待焦虑；`registerConfirmationHandler`/`unregisterConfirmationHandler` 危险工具确认注入；`AgentLoopDeps`（含 `agentModel`）、`AgentLoopResult` |
+| `agentLoop.ts` | **ReAct Agent 工具调用循环** | `runAgentLoop(userText, deps)` — observe→plan→act 循环，最大 30 次迭代，**每轮刷新 api 句柄**（防 applet 重建失效）、**连续 3 轮工具失败熔断**（`MAX_CONSECUTIVE_FAILURES`，参数/预检类错误不计入，给模型自我修正机会）、全拒绝判定按**本轮**被拒数（避免跨轮累积误触发）、危险工具确认按 `toolCallId` 匹配；**`onThinking` 回调**（分析/规划/执行工具/等待确认 4 个节点 + V4 `reasoning_content` 增量 🧠 实时展示）经 pipeline 透传 UI 减少等待焦虑；`reasoning_content` 回传受 `mustRoundtripReasoning` quirk 门控；空响应重试的截断判定**直接信任 `finish_reason="length"`**（不再依赖 `streamsFinishReason` 门控）；**`StateCheckSpec` 终止核对钩子**：AI 输出纯文本视为完成时用 `getRichSnapshot` 快照调 `check()`，未通过把 issues 反馈注入循环继续修正（`MAX_STATE_CHECK_ROUNDS=2`，共享 30 迭代预算；核对异常按通过结束——失败不阻断）；`buildStateCheckFeedback` 组装反馈消息；`convertHistory` 对 user turn attachments 折叠 `[附件:图片×N]` 占位；`registerConfirmationHandler`/`unregisterConfirmationHandler` 危险工具确认注入；`AgentLoopDeps`（含 `agentModel` + `stateCheck?`）、`AgentLoopResult` |
 | `toolExecutor.ts` | Agent 工具 → GGB API 分发 | `executeToolCall(api, call)`/`executeToolCalls(api, calls, appMode?)` — 批量执行 2D/3D 统一启用；`setPerspective("3d")` 通过 `getPerspectiveXML()` 检测已 3D 则跳过（防 DockGlassPane）；~20 个工具 case（create_point/slider/vector/style/animation…）|
 | `tools.ts` | 工具 Function Calling 定义 | `TOOL_DEFINITIONS`（OpenAI tool schemas）、`TOOL_SCHEMAS`（Zod 校验）、`getToolSafety(name)` → `"safe"\|"dangerous"`；dangerous 工具（eval_raw/delete/clear）需用户确认 |
 | `satisfactionEval.ts` | Phase 3.1 满足度评估 | `evaluateSatisfaction(config, spec, snapshot, signal?, modelOverride?)` — 轻量模型对比画布快照与精炼规格，输出 `SatisfactionResult{satisfied, issues[], summary}`；失败不阻断流程 |
-| `providers.ts` | 6 预置 provider + 自定义 | `PROVIDER_PRESETS`（DeepSeek/Moonshot/GLM/SiliconFlow/OpenAI/Ollama） |
+| `problemSchema.ts` | 题目识别输出校验 | `ProblemAnalysis` 接口 + Zod 容错 + `parseProblemAnalysis` + `serializeProblem`（确定性序列化） |
+| `visionPrompt.ts` | 视觉模型系统提示 | `buildVisionExtractPrompt(domain)` — 指示输出 ProblemAnalysis JSON |
+| `imageInput.ts` | 图片输入预处理 | `validateImageFile`（纯校验）+ `fileToDataUrl`（浏览器缩放+白底+JPEG）；`MAX_IMAGES=3`、`MAX_FILE_MB=10` |
+| `providers.ts` | 6 预置 provider + 自定义 | `PROVIDER_PRESETS`（DeepSeek/Moonshot/GLM/SiliconFlow/OpenAI/Ollama）；含 `visionModels?` 候选列表（DeepSeek `deepseek-v4-flash-vision-exp`、GLM `glm-4.5v`、SiliconFlow Qwen2.5-VL、OpenAI gpt-4o、Ollama qwen2.5vl 等） |
+| `format.ts` | 数字格式化工具 | `fmtTokens(n)` — token 用量 k/M 缩写（顶栏 + 统计图共用） |
 
 ### src/components/（React UI）
 
 | 文件 | 职责 |
 |---|---|
-| `ChatPanel.tsx` | 编排已提取至 pipeline.ts，本组件只负责：输入 UI、消息渲染、**store 依赖注入成 `PipelineDeps`**、spec 确认事件桥接（`reviewHandleRef`）、**Agent 思考步骤实时显示**（`agentStep` state + `onAgentStep` → thinking 区域）|
-| `MessageBubble.tsx` | 消息气泡：user/assistant/error/ask/**spec-review**（规格确认 UI：编辑/重新生成/确认绘制）+ **assistant 渲染 self_check 报告** |
+| `ChatPanel.tsx` | 编排已提取至 pipeline.ts，本组件只负责：输入 UI（含**图片输入**：📎 上传 + textarea 粘贴 + 输入区拖拽，`MAX_IMAGES=3`，预览条增删）、消息渲染、**store 依赖注入成 `PipelineDeps`**（注入 `visionModel` + `updateProblemReview`）、spec / problem 确认事件桥接（`reviewHandleRef` + `problemHandleRef`）、**发送路由**（带图 → `runVisionPipeline`；纯文字按 agentMode 分流）、**Agent 思考步骤实时显示**（`agentStep` state + `onAgentStep` → thinking 区域）|
+| `MessageBubble.tsx` | 消息气泡：user（含 attachments 缩略图 + **Lightbox 灯箱**，Esc 关闭）/assistant/error/ask/**spec-review**（规格确认 UI：编辑/重新生成/确认绘制）/**problem-review**（题目确认 UI：编辑题干/重新识别/确认并绘制，复用 spec-review 样式）+ **assistant 渲染 self_check 报告** |
 | `GGBCanvas.tsx` | GeoGebra applet 注入，监听 `ggbAppName` 重建（2D↔3D）；**心跳监控**（2s 间隔 canvas 计数 + DockGlassPane 检测）+ **自动恢复**（保存 base64 快照 → `inject(force=true)` 强制重建 → 恢复快照）；MutationObserver DOM 监控 + WebGL context loss 监听；诊断日志前缀 `[AiGGB:DIAG]` |
 | `Toolbar.tsx` | 顶栏：domain 切换/模板/撤销/清空/导出/截图/复制/安装；清空/切模式/撤销时调用 `abortCurrentRun()` |
-| `SettingsDialog.tsx` | API 配置（Provider/Key/**3-role 模型**：主力/轻量/Agent/温度/测试连接）|
+| `SettingsDialog.tsx` | API 配置（Provider/Key/**4-role 模型**：主力/轻量/Agent/视觉 + 思考深度/温度/测试连接——测试时顺带 `ping(cfg, undefined, visionModel)` 验证视觉模型可用性）|
 | `ScriptPanel.tsx` | 右侧实时 GGB 脚本展示（可折叠/复制/下载）|
 | `TemplateGallery.tsx` | 模板卡片，点击发 `aiggb:send` 事件 |
 | `PWAUpdatePrompt.tsx` | SW 更新提示 |
 
 ### src/store/useAppStore.ts
 
-- Zustand + persist **version 3**，存储键 `aiggb_config`
-- 持久化：`config`（含 3-role 模型 `model`/`lightModel`/`agentModel`）、`domain`、`privacyAcknowledged`
-- 迁移 v2→v3：`flashModel` → `lightModel` 自动迁移
+- Zustand + persist **version 4**，存储键 `aiggb_config`
+- 持久化：`config`（含 4-role 模型 `model`/`lightModel`/`agentModel`/`visionModel`）、`domain`、`privacyAcknowledged`
+- 迁移 v2→v3：`flashModel` → `lightModel`；v3→v4：no-op（`visionModel` 可选）
 - 运行期：`ggbApi`、`ggbAppName`（"classic"\|"3d"）、`messages`、**`constructionLog`**（成功命令日志，供回滚兜底重建）、`isThinking`
-- `ChatTurn` 五类：`user` / `assistant`（含 `self_check?`）/ `ask` / `error` / **`spec-review`**
+- **token 用量统计**：`tokenUsage`（会话累计，顶栏显示）、`roundTokenUsage`（本轮累计）、`tokenHistory`（每轮一条，持久化 localStorage `aiggb_token_usage`，最多 100 轮）；`addTokenUsage`/`startRound`/`finishRound`/`loadTokenHistory`，轮次边界由 ChatPanel `runRound` 驱动；多模态视觉调用 usage 经同一链路自动计入
+- `ChatTurn` 六类：`user`（含 `attachments?`）/ `assistant`（含 `self_check?`）/ `ask` / `error` / `spec-review` / **`problem-review`**
 - `appendAIResponse` 维护 constructionLog（成功命令追加）；`clearMessages`/`undoLastTurn` 同步清空/重建日志（`logFromMessages`）
 
 ## AI ↔ GGB 协议（14 个 op）
@@ -141,7 +146,48 @@ Schema 校验失败 → `chatWithFormatRetry`（≤2 次格式重试，raw + det
 
 ### Agent 模型配置
 
-`AgentLoopDeps.agentModel` 由 `resolveAgentModel(config)` 解析（`agentModel` → `model` 回退链），支持独立于主力/轻量模型的第三角色。
+`AgentLoopDeps.agentModel` 由 `resolveModel(config, "agent")` 解析（`agentModel` → `model` 回退链），支持独立于主力/轻量/视觉模型的第三角色。
+
+## 多模态题目识别（Agent 基底 + 画布状态核对）
+
+带图片消息（上传/粘贴/拖拽，≤3 张/条）自动走「题目识别 → 确认 → Agent 构造 + 状态核对」分支。纯文字输入行为零变化。
+
+### 架构
+
+```
+带图输入 → extractProblem（视觉模型 chatRaw JSON）→ 题目确认气泡 → taskText
+  → runAgentRound(taskText, stateCheck) → Agent 循环构造
+    → AI 输出文本时触发终止核对：getRichSnapshot vs serializeProblem
+      → 未通过 → issues + 快照注入循环继续修正（≤2 次，共享 30 迭代预算）
+      → 通过 / 预算耗尽 → 结束
+```
+
+### 关键文件
+
+| 文件 | 职责 |
+|---|---|
+| `problemSchema.ts` | ProblemAnalysis Zod schema + 容错 + `parseProblemAnalysis` + `serializeProblem`（确定性序列化） |
+| `visionPrompt.ts` | `buildVisionExtractPrompt(domain)` — 视觉模型系统提示 |
+| `imageInput.ts` | `validateImageFile`（纯校验）+ `fileToDataUrl`（浏览器缩放+白底+JPEG） |
+| `pipeline.ts:runVisionPipeline` | 识别 loop → 确认 → `runAgentRound` + stateCheck |
+| `pipeline.ts:runAgentRound` | 从 `runAgentPipeline` 抽取的内部函数，接受可选 `stateCheck`/`evalBasis` |
+| `agentLoop.ts:StateCheckSpec` | Case 1 终止钩子：`checkRounds < maxRounds` 时调用 `check(snapshot)` → 未通过则注入反馈消息 continue |
+
+### 4-role 模型配置
+
+`AIConfig` 四角色：`model`（主力）/ `lightModel`（精炼/评估）/ `agentModel`（Agent）/ `visionModel`（题目识别）。`resolveModel(config, "vision")` 回退链 `visionModel → model`。
+
+### ChatTurn 扩展
+
+- `user` turn 加 `attachments?: string[]`（base64 JPEG 数组）
+- 新增 `problem-review` role（payload: `{problem: ProblemAnalysis, status}`）
+- `collectHistory` / `convertHistory`：有 attachments 时追加 `[附件:图片×N]` 占位
+
+### 降级策略
+
+- 识别失败 + 有文字 → error 气泡 → 降级为普通 Agent 轮（无 stateCheck）
+- 纯图识别失败 → error 气泡指向设置
+- 核对失败 / null → 按通过结束（不阻断）
 
 ## 3D 画布稳定性（DockGlassPane 修复与恢复系统）
 
@@ -203,12 +249,13 @@ GeoGebra web3d 内部使用 `DockGlassPane`（一个 DIV 遮罩层）处理视�
 | `npm run test:replay` | L1 | 离线回放 63 用例（14 类别，含 highschool 3D），0 API 调用 |
 | `npm run test:smoke` | L2 | 在线冒烟 5 用例 |
 | `npm run test:record` | L3 | 在线全量 63 用例 + 覆盖 fixtures |
-| `npm run test:drift` | — | 漂移监控 N=10（需 .env 真实 Key）|
+| `npm run test:drift` | — | 漂移监控 N=10（需 .env 真实 Key）；`DRIFT_THINKING=high` 开 thinking 跑（A/B 用）；核心 `runDrift()` 已导出供 A/B 复用，统计含 token 用量 |
+| `npm run test:ab` | — | **A/B 测试**：`reasoning_effort` 开/关 同用例对比（端到端 + 延迟 + token 成本），输出 `tests/ab-report.json` |
 | `npm run test:visual` | — | Playwright 截图（physics,dynamic,composite）|
 | `npm run prompt:iterate` | — | Prompt 迭代工作流 |
-| **单测** | — | `tests/pipeline.test.ts`（流水线状态机）、`tests/specCache.test.ts`（缓存，注入 `createMemoryStorage`）、`tests/satisfactionEval.test.ts`（满足度评估）|
+| **单测** | — | 139 个（0 API）：`tests/pipeline.test.ts`（流水线状态机 + 视觉管线）、`tests/specCache.test.ts`（缓存，注入 `createMemoryStorage`）、`tests/satisfactionEval.test.ts`（满足度评估）、`tests/problemSchema.test.ts`（题目识别 schema 容错 + 序列化确定性）、`tests/imageInput.test.ts`（图片校验边界）、`tests/agentLoop.test.ts` / `toolExecutor.test.ts` / `agentSmoke.test.ts` / `ggbBridge.test.ts` / `ggbKB.test.ts` / `sessionStore.test.ts` / `trainingStore.test.ts` / `trajectory-replay.test.ts` / `trapStore.test.ts` / `runControl.test.ts` |
 
-关键文件：`tests/runner.ts`（运行器）、`tests/mockGGB.ts`（轻量 GGB mock）、`tests/cases.json`（用例）、`tests/assertions.ts`（12 维断言）、`tests/fixtures/`（回放数据）。
+关键文件：`tests/runner.ts`（运行器）、`tests/mockGGB.ts`（轻量 GGB mock）、`tests/cases.json`（用例）、`tests/assertions.ts`（12 维断言）、`tests/fixtures/`（回放数据）。基线 139 单测 / 63 回放。
 
 **注意**：`test:record` 会覆盖 `tests/fixtures/`。基准 `tests/report.json` 当前 ~59/63（highschool 3D 是主要拉分项）。
 
@@ -239,3 +286,6 @@ GeoGebra web3d 内部使用 `DockGlassPane`（一个 DIV 遮罩层）处理视�
 - **`requestAnimationFrame`**：在 lib 层使用须加 `typeof requestAnimationFrame !== "undefined"` 守卫以兼容 Node.js 单测环境
 - **3D batch 启用**：`executeCommands` 和 `executeToolCalls` 在 2D/3D 统一使用 `setRepaintingActive` 批量包裹（升级官方 5.4.927.1 后 DockGlassPane 不再因 batch 复发）
 - **`setPerspective("3d")` 守卫**：Agent 模式需先 `getPerspectiveXML()?.includes("3D")` 检查，已是 3D 则跳过调用
+- **思考深度（thinking）**：`AIConfig.reasoningEffort`（SettingsDialog 设置）对支持 thinking 的 provider（DeepSeek V4）在 `chat`/`chatRaw`/`agentChat` 均发送 `reasoning_effort`，默认关闭 = baseline；Agent 模式 `max_tokens` thinking 下 16384 防 reasoning 挤占输出预算
+- **视觉识别调用**：`extractProblem` 用 `jsonMode=false`（多数视觉模型不支持 `response_format: json_object`），解析容错在 `parseProblemAnalysis`；带图轮 token 统计无需特殊处理
+- **A/B 验证**：`npm run test:ab`（`DRIFT_N`/`DRIFT_SAMPLE` 调规模）；结论：v4-flash 上 `reasoning_effort=high` 端到端 −8.3%，默认保持关闭

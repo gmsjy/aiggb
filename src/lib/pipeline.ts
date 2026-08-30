@@ -15,7 +15,8 @@ import {
   AISchemaError,
   resolveModel,
   type AIConfig,
-  type ChatMessage
+  type ChatMessage,
+  type ContentPart
 } from "./aiClient";
 import { collectFailures, executeCommands, resetTmpIds, getRichSnapshot, type ExecResult } from "./ggbBridge";
 import {
@@ -26,6 +27,8 @@ import {
   type Domain
 } from "./prompts";
 import { buildRefinePrompt } from "./refinePrompt";
+import { parseProblemAnalysis, serializeProblem, type ProblemAnalysis } from "./problemSchema";
+import { buildVisionExtractPrompt } from "./visionPrompt";
 import { batchCorrect, correctionsToRepairContext } from "./commandCorrect";
 import { RefinedSpec, type RefinedSpec as RefinedSpecT } from "./specSchema";
 import { lookupCachedSpec, storeCachedSpec, type SpecStorage } from "./specCache";
@@ -73,6 +76,20 @@ export interface ReviewHandle {
   retry(): void;
 }
 
+/** 用户对题目确认气泡的决定 */
+export type ProblemDecision =
+  | { action: "confirm"; problem: ProblemAnalysis }
+  | { action: "retry" };
+
+/** 题目确认句柄——pipeline 创建，UI 通过 confirm/retry 回传决定 */
+export interface ProblemHandle {
+  readonly problem: ProblemAnalysis;
+  /** 用户确认题目解读；final 可含用户编辑后的 problem_text */
+  confirm(final: ProblemAnalysis): void;
+  /** 用户要求重新识别 */
+  retry(): void;
+}
+
 /** pipeline 对宿主的全部依赖（组件侧用 store 实现，测试侧用内存实现） */
 export interface PipelineDeps {
   config: AIConfig;
@@ -86,6 +103,7 @@ export interface PipelineDeps {
   appendMessage(t: ChatTurn): void;
   appendAIResponse(resp: AIResponse, results: ExecResult[]): void;
   updateSpecReview(id: string, spec: string, status: "pending" | "confirmed" | "rejected"): void;
+  updateProblemReview?(id: string, problem: ProblemAnalysis, status: "pending" | "confirmed" | "rejected"): void;
   removeMessage(id: string): void;
   setThinking(b: boolean): void;
   newMessageId(): string;
@@ -106,8 +124,12 @@ export interface PipelineDeps {
   lightModel: string;
   /** 解析后的主力模型名（用于编译/修复/降级） */
   heavyModel: string;
+  /** 解析后的视觉模型名（用于题目图片识别） */
+  visionModel?: string;
   /** 每次 AI 调用的 token 用量回传（累计到 UI 统计） */
   onTokenUsage?: (usage: { prompt: number; completion: number }) => void;
+  /** Agent 循环实现注入（单测 mock 用） */
+  runAgentLoopImpl?: typeof runAgentLoop;
 }
 
 export interface PipelineCallbacks {
@@ -117,6 +139,8 @@ export interface PipelineCallbacks {
   onConfirm?(requests: ConfirmationRequest[]): Promise<ConfirmationDecision[]>;
   /** Agent 模式实时思考步骤（观察/规划/执行工具），UI 展示减少等待焦虑 */
   onAgentStep?(message: string): void;
+  /** 题目识别后调用；UI 展示确认气泡并持有 handle 以回传决定 */
+  onProblemReview?(handle: ProblemHandle, reviewId: string): void;
 }
 
 /**
@@ -235,6 +259,43 @@ function waitReview(
         settled = true;
         signal.removeEventListener("abort", onAbort);
         resolve({ action: "confirm", spec: finalSpec });
+      },
+      retry() {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve({ action: "retry" });
+      }
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    onHandle(handle);
+  });
+}
+
+function waitProblemReview(
+  problem: ProblemAnalysis,
+  signal: AbortSignal,
+  onHandle: (h: ProblemHandle) => void
+): Promise<ProblemDecision> {
+  return new Promise<ProblemDecision>((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    const handle: ProblemHandle = {
+      problem,
+      confirm(final) {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve({ action: "confirm", problem: final });
       },
       retry() {
         if (settled) return;
@@ -615,7 +676,13 @@ export function parseRefinedSpec(raw: string): RefinedSpecT | null {
 export function collectHistory(messages: ChatTurn[], windowSize: number): ChatMessage[] {
   const collapsed: ChatMessage[] = [];
   for (const m of messages) {
-    if (m.role === "user") collapsed.push({ role: "user", content: m.content });
+    if (m.role === "user") {
+      let content = m.content;
+      if (m.attachments && m.attachments.length > 0) {
+        content += `\n[附件:图片×${m.attachments.length}]`;
+      }
+      collapsed.push({ role: "user", content });
+    }
     else if (m.role === "assistant") {
       const payload: Record<string, unknown> = {
         explanation: m.payload.explanation,
@@ -724,6 +791,21 @@ export async function runAgentPipeline(
   deps: PipelineDeps,
   cb: PipelineCallbacks
 ): Promise<void> {
+  return runAgentRound(userText, deps, cb);
+}
+
+/** runAgentRound 可选参数（仅带图轮使用） */
+interface AgentRoundOpts {
+  stateCheck?: import("./agentLoop").StateCheckSpec;
+  evalBasis?: string;
+}
+
+async function runAgentRound(
+  userText: string,
+  deps: PipelineDeps,
+  cb: PipelineCallbacks,
+  opts?: AgentRoundOpts
+): Promise<void> {
   // 注册确认处理器
   if (cb.onConfirm) {
     registerConfirmationHandler(cb.onConfirm);
@@ -750,7 +832,8 @@ export async function runAgentPipeline(
   // ★ 轨迹已持久化的标记（供 finally 回填 known_traps 前等待写入完成）
   let trajectorySaved = false;
   try {
-    result = await runAgentLoop(userText, {
+    const agentLoopFn = deps.runAgentLoopImpl ?? runAgentLoop;
+    result = await agentLoopFn(userText, {
       config: deps.config,
       domain: deps.domain,
       appMode: deps.appMode,
@@ -766,6 +849,8 @@ export async function runAgentPipeline(
       onThinking: msg => cb.onAgentStep?.(msg),
       // ★ token 统计
       onTokenUsage: u => deps.onTokenUsage?.(u),
+      // ★ 状态核对（仅带图轮注入）
+      stateCheck: opts?.stateCheck,
     });
 
     // ★ 失败回滚：AgentLoopResult.failed（熔断/超限/空响应放弃）→ 恢复本轮开始前快照
@@ -872,7 +957,7 @@ export async function runAgentPipeline(
   // ★ 满足度评估（Phase 3.1）：审查画布。已回滚则跳过（画布非本轮产物）
   if (rollbackHappened) return;
   try {
-    await evaluateAgentResult(result, deps);
+    await evaluateAgentResult(result, deps, opts?.evalBasis);
   } catch (err) {
     if (deps.signal.aborted) throw err;
     console.warn("[Pipeline] agent 满足度评估跳过", err);
@@ -894,7 +979,7 @@ function buildAgentSummary(result: AgentLoopResult): string {
 }
 
 /** 对 agent 模式执行完的结果做满足度评估（复用 evaluateAndRepair 的核心逻辑） */
-async function evaluateAgentResult(result: AgentLoopResult, deps: PipelineDeps): Promise<void> {
+async function evaluateAgentResult(result: AgentLoopResult, deps: PipelineDeps, evalBasis?: string): Promise<void> {
   const api = deps.getApi();
   if (!api) return;
 
@@ -907,8 +992,8 @@ async function evaluateAgentResult(result: AgentLoopResult, deps: PipelineDeps):
   const evalFn = deps.evalSatisfactionImpl ??
     ((await import("./satisfactionEval")).evaluateSatisfaction as typeof import("./satisfactionEval").evaluateSatisfaction);
 
-  // agent 模式没有精炼规格，用 finalText 作为审查基准
-  const specForEval = result.finalText || "用户原始需求";
+  // agent 模式没有精炼规格，用 finalText 作为审查基准；带图轮用确认后的题目解读
+  const specForEval = evalBasis || result.finalText || "用户原始需求";
 
   let evalResult;
   try {
@@ -928,4 +1013,155 @@ async function evaluateAgentResult(result: AgentLoopResult, deps: PipelineDeps):
   });
 
   // agent 模式不自动修复（AI 已经在循环中尝试了），仅报告
+}
+
+// ── 多模态题目识别 ──
+
+async function extractProblem(
+  text: string,
+  images: string[],
+  deps: PipelineDeps
+): Promise<ProblemAnalysis | null> {
+  const parts: ContentPart[] = [];
+  if (text.trim()) {
+    parts.push({ type: "text", text: text.trim() });
+  }
+  for (const img of images) {
+    parts.push({ type: "image_url", image_url: { url: img } });
+  }
+
+  const msgs: ChatMessage[] = [
+    { role: "system", content: buildVisionExtractPrompt(deps.domain) },
+    { role: "user", content: parts },
+  ];
+
+  const chatRawFn = deps.chatRawImpl ?? defaultChatRaw;
+  const visionModel = deps.visionModel ?? deps.heavyModel;
+
+  // first attempt (jsonMode=false: vision models often don't support response_format:json_object)
+  let raw = await chatRawFn(
+    deps.config, msgs, deps.signal, visionModel, undefined, false, u => deps.onTokenUsage?.(u)
+  );
+
+  // empty response retry once
+  if (!raw.trim()) {
+    raw = await chatRawFn(
+      deps.config, msgs, deps.signal, visionModel, undefined, false, u => deps.onTokenUsage?.(u)
+    );
+  }
+
+  if (!raw.trim()) return null;
+  return parseProblemAnalysis(raw);
+}
+
+export async function runVisionPipeline(
+  input: { text: string; images: string[] },
+  deps: PipelineDeps,
+  cb: PipelineCallbacks
+): Promise<void> {
+  const { text, images } = input;
+
+  for (;;) {
+    // ── 识别段 ──
+    let problem: ProblemAnalysis | null;
+    try {
+      problem = await extractProblem(text, images, deps);
+    } catch (err) {
+      if (deps.signal.aborted) throw err;
+      const reason = err instanceof Error ? err.message : String(err);
+      if (text.trim()) {
+        deps.appendMessage({
+          id: deps.newMessageId(),
+          role: "error",
+          content: `题目识别失败（${reason}），将直接按文字绘制`,
+        });
+        await runAgentPipeline(text, deps, cb);
+      } else {
+        deps.appendMessage({
+          id: deps.newMessageId(),
+          role: "error",
+          content: `识别失败：请在 设置 → 高级 中配置支持图片的视觉模型（${reason}）`,
+        });
+      }
+      return;
+    }
+
+    if (!problem) {
+      if (text.trim()) {
+        deps.appendMessage({
+          id: deps.newMessageId(),
+          role: "error",
+          content: "题目识别失败（无法解析输出），将直接按文字绘制",
+        });
+        await runAgentPipeline(text, deps, cb);
+      } else {
+        deps.appendMessage({
+          id: deps.newMessageId(),
+          role: "error",
+          content: "识别失败：请在 设置 → 高级 中配置支持图片的视觉模型",
+        });
+      }
+      return;
+    }
+
+    // ask → 展示反问，本轮结束
+    if (problem.ask) {
+      deps.appendAIResponse({ explanation: "需要确认", commands: [], ask: problem.ask }, []);
+      return;
+    }
+
+    // ── 题目确认气泡 ──
+    const reviewId = deps.newMessageId();
+    deps.appendMessage({
+      id: reviewId,
+      role: "problem-review",
+      payload: { problem, status: "pending" },
+    });
+
+    if (!cb.onProblemReview) {
+      // no UI handler — treat as confirmed with original analysis
+      const basis = serializeProblem(problem);
+      const taskText = [text.trim(), basis].filter(Boolean).join("\n\n");
+      await runAgentPipeline(taskText, deps, cb);
+      return;
+    }
+
+    let decision: ProblemDecision;
+    try {
+      decision = await waitProblemReview(problem, deps.signal, h => cb.onProblemReview!(h, reviewId));
+    } catch (err) {
+      if (deps.signal.aborted) throw err;
+      throw err;
+    }
+
+    if (decision.action === "retry") {
+      deps.removeMessage(reviewId);
+      continue; // re-run recognition
+    }
+
+    // confirmed
+    deps.updateProblemReview?.(reviewId, decision.problem, "confirmed");
+    const basis = serializeProblem(decision.problem);
+    const taskText = [text.trim(), basis].filter(Boolean).join("\n\n");
+
+    // ★ Agent 构造 + 画布状态核对
+    await runAgentRound(taskText, deps, cb, {
+      stateCheck: {
+        basis,
+        check: async (snapshot, signal) => {
+          const evalFn = deps.evalSatisfactionImpl ??
+            ((await import("./satisfactionEval")).evaluateSatisfaction as typeof import("./satisfactionEval").evaluateSatisfaction);
+          try {
+            return await evalFn(deps.config, basis, snapshot, signal, deps.lightModel, undefined, u => deps.onTokenUsage?.(u));
+          } catch (err) {
+            if (signal.aborted) throw err;
+            console.warn("[Pipeline] stateCheck eval failed, treating as pass", err);
+            return null;
+          }
+        },
+      },
+      evalBasis: basis,
+    });
+    return;
+  }
 }

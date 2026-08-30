@@ -57,10 +57,13 @@ export function createSessionId(): string {
 
 /** 从消息生成默认标题（首条 user 消息前 24 字） */
 export function titleFromMessages(messages: ChatTurn[], fallback = "新会话"): string {
-  const first = messages.find(m => m.role === "user");
-  if (!first) return fallback;
-  const text = first.content.trim().replace(/\s+/g, " ");
-  return text.length > 24 ? text.slice(0, 24) + "…" : text;
+  for (const m of messages) {
+    if (m.role !== "user") continue;
+    const text = m.content.trim().replace(/\s+/g, " ");
+    if (text) return text.length > 24 ? text.slice(0, 24) + "…" : text;
+    if (m.attachments && m.attachments.length > 0) return "图片题目";
+  }
+  return fallback;
 }
 
 // ──── IndexedDB 封装（共享 aiggb DB，v3 新增 sessions store） ────

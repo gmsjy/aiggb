@@ -11,6 +11,7 @@ dev-dist
 .vscode/*
 !.vscode/extensions.json
 .idea
+.zcode
 
 # logs
 npm-debug.log*

@@ -13,6 +13,7 @@ import type { AIResponse, Command } from "../lib/schema";
 import type { AIConfig } from "../lib/aiClient";
 import type { ExecResult } from "../lib/ggbBridge";
 import type { Domain } from "../lib/prompts";
+import type { ProblemAnalysis } from "../lib/problemSchema";
 import { takeSnapshot, restoreSnapshot, replayConstructionLog } from "../lib/pipeline";
 import {
   type Session,
@@ -99,7 +100,7 @@ export interface AssistantPayload {
 }
 
 export type ChatTurn =
-  | { id: string; role: "user"; content: string }
+  | { id: string; role: "user"; content: string; attachments?: string[] }
   | {
       id: string;
       role: "assistant";
@@ -111,6 +112,14 @@ export type ChatTurn =
       id: string;
       role: "spec-review";
       payload: { spec: string; status: "pending" | "confirmed" | "rejected" };
+    }
+  | {
+      id: string;
+      role: "problem-review";
+      payload: {
+        problem: ProblemAnalysis;
+        status: "pending" | "confirmed" | "rejected";
+      };
     };
 
 interface PersistedState {
@@ -497,7 +506,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "aiggb_config",
-      version: 3,
+      version: 4,
       storage: createJSONStorage(() => localStorage),
       partialize: (state): PersistedState => ({
         config: state.config,
@@ -508,6 +517,7 @@ export const useAppStore = create<AppState>()(
       }),
       // v1→v2：移除 highschool 分类，旧值回归 general
       // v2→v3：flashModel → lightModel
+      // v3→v4：visionModel 为可选字段，无需迁移；版本号仅作里程碑记录
       migrate: (persisted, version) => {
         const s = (persisted ?? {}) as Record<string, unknown>;
         const out = { ...(persisted ?? {}) } as Partial<PersistedState>;
@@ -520,6 +530,7 @@ export const useAppStore = create<AppState>()(
             cfg.lightModel = cfg.flashModel;
           }
         }
+        // v3→v4: no-op（visionModel 可选，缺省时 resolveModel 回退 config.model）
         return out as PersistedState;
       }
     }

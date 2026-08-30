@@ -22,6 +22,8 @@ export interface AIConfig {
   lightModel?: string;
   /** Agent 模式模型。不设置时回退到 model */
   agentModel?: string;
+  /** 视觉模型（题目图片识别）。不设置时回退到 model；需为支持图片输入的模型 */
+  visionModel?: string;
   /** @deprecated 使用 lightModel 代替；迁移后保留用于向前兼容 */
   flashModel?: string;
   temperature?: number;
@@ -31,7 +33,7 @@ export interface AIConfig {
 }
 
 /** 解析实际使用的模型（含回退链） */
-export function resolveModel(config: AIConfig, role: "light" | "heavy" | "agent"): string {
+export function resolveModel(config: AIConfig, role: "light" | "heavy" | "agent" | "vision"): string {
   switch (role) {
     case "light":
       return config.lightModel ?? config.flashModel ?? config.model;
@@ -39,6 +41,8 @@ export function resolveModel(config: AIConfig, role: "light" | "heavy" | "agent"
       return config.model;
     case "agent":
       return config.agentModel ?? config.model;
+    case "vision":
+      return config.visionModel ?? config.model;
   }
 }
 
@@ -95,10 +99,15 @@ export function getProviderQuirks(config: AIConfig): ProviderQuirks {
   return { streamsFinishReason: true };
 }
 
-/** 传统纯文本消息（Phase 1/2 使用） */
+/** 多模态内容片段（OpenAI Vision API 兼容格式） */
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+/** 传统纯文本消息（Phase 1/2 使用），content 支持字符串或多模态片段 */
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | ContentPart[];
 }
 
 /**
@@ -441,7 +450,8 @@ export async function agentChat(
     // ★ 流式也要 token 统计（usage 在最后一块返回）
     stream_options: { include_usage: true },
     // 工具 JSON 参数可能较长（create_parametric / eval_raw / eval_sequence），给足空间防截断
-    [maxTokField]: 8192
+    // ★ thinking 模式下 reasoning tokens 也占用输出预算，需额外空间
+    [maxTokField]: (config.reasoningEffort && quirks.supportsThinking) ? 16384 : 8192
   };
   // ★ 思考深度（Agent 模式同样生效）
   if (config.reasoningEffort && quirks.supportsThinking) {
@@ -620,7 +630,7 @@ export async function chatRaw(
  * 简单的连接测试：让模型返回 {"ok": true}。
  * 不强制 schema，只要 200 + 非空内容即视作通过。
  */
-export async function ping(config: AIConfig, signal?: AbortSignal): Promise<void> {
+export async function ping(config: AIConfig, signal?: AbortSignal, modelOverride?: string): Promise<void> {
   const baseURL = config.baseURL.replace(/\/+$/, "");
   const resp = await fetch(`${baseURL}/chat/completions`, {
     method: "POST",
@@ -629,7 +639,7 @@ export async function ping(config: AIConfig, signal?: AbortSignal): Promise<void
       Authorization: `Bearer ${config.apiKey}`
     },
     body: JSON.stringify({
-      model: config.model,
+      model: modelOverride ?? config.model,
       messages: [
         { role: "system", content: "Reply with the JSON {\"ok\":true} only." },
         { role: "user", content: "ping" }

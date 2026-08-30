@@ -1087,3 +1087,140 @@ code {
   border-radius: 1px;
   background: var(--warn) !important;
 }
+
+/* ============ Image Input (多模态附件) ============ */
+.input-stack {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.attach-btn {
+  width: 40px;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.attach-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.attach-thumb {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  overflow: hidden;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.attach-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.attach-thumb-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.attach-thumb-remove:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+.chat-input-area.dragover {
+  border-color: var(--accent);
+  background: var(--accent-soft, rgba(25, 118, 210, 0.08));
+}
+
+/* User bubble images */
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.msg-images img {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  cursor: pointer;
+}
+.msg-images img:hover {
+  opacity: 0.85;
+}
+
+/* Lightbox overlay */
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.lightbox-overlay img {
+  max-width: 90vw;
+  max-height: 90vh;
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Problem Review Bubble ── */
+.problem-section {
+  margin-bottom: var(--space-2);
+}
+.problem-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
+}
+.problem-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.problem-chip {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.problem-list {
+  font-size: 12px;
+  color: var(--fg-1);
+  margin: 0;
+  padding-left: 1.2em;
+}
+.problem-list li {
+  margin-bottom: 2px;
+}

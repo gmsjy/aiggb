@@ -24,6 +24,8 @@ export interface ProviderPreset {
   note?: string;
   /** 注册 / 获取 Key 的官方入口 */
   apiKeyUrl?: string;
+  /** 支持图片输入的视觉模型候选（题目识别用；实现时按官方文档核对） */
+  visionModels?: string[];
 }
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
@@ -32,10 +34,12 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: "DeepSeek",
     baseURL: "https://api.deepseek.com",
     models: [
-      "deepseek-v4-pro",      // 旗舰，含 thinking 支持
-      "deepseek-v4-flash"     // 轻量快速（非思考模式默认）
+      "deepseek-v4-pro",              // 旗舰，含 thinking 支持
+      "deepseek-v4-flash",            // 轻量快速（非思考模式默认）
+      "deepseek-v4-flash-vision-exp"  // 视觉模型（图片理解）
     ],
-    note: "v4-pro 旗舰、v4-flash 轻量。deepseek-chat 与 deepseek-reasoner 将于 2026-07-24 弃用（分别映射为 v4-flash 非思考/思考模式）。Anthropic 端点 (api.deepseek.com/anthropic) 需配合 Anthropic SDK，本工具暂仅支持 OpenAI 兼容端点",
+    visionModels: ["deepseek-v4-flash-vision-exp"],
+    note: "v4-pro 旗舰、v4-flash 轻量、v4-flash-vision-exp 视觉。Anthropic 端点 (api.deepseek.com/anthropic) 需配合 Anthropic SDK，本工具暂仅支持 OpenAI 兼容端点",
     apiKeyUrl: "https://platform.deepseek.com/api_keys"
   },
   {
@@ -65,7 +69,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       "glm-4-flash"
     ],
     note: "glm-4.6 最新；flash 系列免费",
-    apiKeyUrl: "https://open.bigmodel.cn/usercenter/apikeys"
+    apiKeyUrl: "https://open.bigmodel.cn/usercenter/apikeys",
+    visionModels: ["glm-4.5v"]
   },
   {
     id: "siliconflow",
@@ -79,7 +84,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       "moonshotai/Kimi-K2-Instruct"
     ],
     note: "聚合多家开源模型；DeepSeek-V3 / Qwen2.5-72B 性价比高",
-    apiKeyUrl: "https://cloud.siliconflow.cn/account/ak"
+    apiKeyUrl: "https://cloud.siliconflow.cn/account/ak",
+    visionModels: ["Qwen/Qwen2.5-VL-72B-Instruct"]
   },
   {
     id: "openai",
@@ -93,7 +99,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       "o1-mini"
     ],
     note: "境外节点，需自备网络",
-    apiKeyUrl: "https://platform.openai.com/api-keys"
+    apiKeyUrl: "https://platform.openai.com/api-keys",
+    visionModels: ["gpt-4o", "gpt-4.1"]
   },
   {
     id: "ollama",
@@ -106,7 +113,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       "deepseek-coder-v2:16b"
     ],
     note: "本地推理，需先 ollama serve；不需要 Key",
-    apiKeyUrl: "https://ollama.com/library"
+    apiKeyUrl: "https://ollama.com/library",
+    visionModels: ["qwen2.5vl:7b", "llama3.2-vision"]
   },
   {
     id: "custom",
