@@ -1,6 +1,6 @@
 {
   "mode": "replay",
-  "timestamp": 1787210741765,
+  "timestamp": 1788185165726,
   "pass": 63,
   "total": 63,
   "rate": 100,
@@ -10,14 +10,14 @@
       "category": "static",
       "pass": true,
       "failures": [],
-      "latencyMs": 4
+      "latencyMs": 5
     },
     {
       "id": "S-sinkx",
       "category": "static",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 2
     },
     {
       "id": "S-polygon",
@@ -59,28 +59,28 @@
       "category": "dynamic",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 2
     },
     {
       "id": "P-projectile",
       "category": "physics",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 2
     },
     {
       "id": "P-pendulum",
       "category": "physics",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "P-incline",
       "category": "physics",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 3
     },
     {
       "id": "P-spring",
@@ -101,35 +101,35 @@
       "category": "modify",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "M-add-point",
       "category": "modify",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "M-change-speed",
       "category": "modify",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "M-delete-object",
       "category": "modify",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "F-ambiguous-radius",
       "category": "clarify",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "F-ambiguous-speed",
@@ -143,14 +143,14 @@
       "category": "clarify",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "E-regression-point-plus-point",
       "category": "regression",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "E-regression-sequence-list",
@@ -164,7 +164,7 @@
       "category": "regression",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 2
     },
     {
       "id": "E-regression-format-string-number",
@@ -178,21 +178,21 @@
       "category": "regression",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "E-regression-naming-v",
       "category": "regression",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "E-regression-naming-A",
       "category": "regression",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "E-regression-code-fence",
@@ -220,14 +220,14 @@
       "category": "boundary",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "B-3d-surface",
       "category": "boundary",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "B-nested-sequence",
@@ -248,14 +248,14 @@
       "category": "context",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "A-stop-animation",
       "category": "adversarial",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "A-export-gif",
@@ -269,7 +269,7 @@
       "category": "adversarial",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 2
     },
     {
       "id": "E-edge-very-fast",
@@ -283,14 +283,14 @@
       "category": "edge",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "E-edge-negative",
       "category": "edge",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "X-composite-pendulums",
@@ -304,21 +304,21 @@
       "category": "composite",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "X-field-particle",
       "category": "composite",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "L-casual-chinese",
       "category": "language",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "L-homework-style",
@@ -332,7 +332,7 @@
       "category": "language",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "N-very-small",
@@ -367,7 +367,7 @@
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "H-spatial-vector",
@@ -381,49 +381,49 @@
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "H-pyramid",
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "H-cross-product",
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "H-tetrahedron",
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 1
+      "latencyMs": 0
     },
     {
       "id": "H-regr-setcolor-int",
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "H-regr-nofilling",
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "H-regr-nopointsize",
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "H-regr-noaxesratio",
@@ -437,7 +437,7 @@
       "category": "highschool",
       "pass": true,
       "failures": [],
-      "latencyMs": 0
+      "latencyMs": 1
     },
     {
       "id": "H-regr-no-setview",

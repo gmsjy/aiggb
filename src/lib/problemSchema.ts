@@ -40,18 +40,18 @@ const AnimationHintSchema = z.object({
 });
 
 const ProblemAnalysisSchema = z.object({
-  problem_text: z.string().max(3000).default(""),
+  problem_text: z.string().max(1500).default(""),
   knowns: z.preprocess(
     v => Array.isArray(v) ? v : [],
     z.array(ProblemKnownSchema).default([])
   ),
-  goal: z.string().max(300).optional(),
-  figure: z.string().max(500).optional(),
+  goal: z.string().max(200).optional(),
+  figure: z.string().max(300).optional(),
   animation_hints: z.preprocess(
     v => Array.isArray(v) ? v : [],
     z.array(AnimationHintSchema).default([])
   ),
-  ask: z.string().max(300).optional(),
+  ask: z.string().max(200).optional(),
 });
 
 function stripFence(s: string): string {

@@ -100,6 +100,27 @@ test("嵌套 JSON 提取（外层有额外文字）", () => {
   assert.equal(result.problem_text, "ok");
 });
 
+test("problem_text 超 1500 字 → Zod 拒绝 → null", () => {
+  const longText = "a".repeat(1501);
+  const raw = JSON.stringify({ problem_text: longText, knowns: [], animation_hints: [] });
+  const result = parseProblemAnalysis(raw);
+  assert.equal(result, null);
+});
+
+test("problem_text 恰好 1500 字 → 通过", () => {
+  const exactText = "a".repeat(1500);
+  const raw = JSON.stringify({ problem_text: exactText, knowns: [], animation_hints: [] });
+  const result = parseProblemAnalysis(raw);
+  assert.ok(result);
+  assert.equal(result.problem_text.length, 1500);
+});
+
+test("截断 JSON（未闭合括号）→ null", () => {
+  const raw = '{"problem_text":"斜抛运动 v0=20 m/s，仰角45°，不计空气阻力。求：(1)最大高度；(2)射程","knowns":[{"name":"v0","value":20,"unit":"m/s"}],"goal":"演示抛体运';
+  const result = parseProblemAnalysis(raw);
+  assert.equal(result, null);
+});
+
 // ── serializeProblem 确定性 ──
 
 test("serializeProblem 同输入两次相等", () => {

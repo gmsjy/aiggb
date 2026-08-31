@@ -1021,7 +1021,7 @@ async function extractProblem(
   text: string,
   images: string[],
   deps: PipelineDeps
-): Promise<ProblemAnalysis | null> {
+): Promise<{ problem: ProblemAnalysis | null; truncated?: boolean }> {
   const parts: ContentPart[] = [];
   if (text.trim()) {
     parts.push({ type: "text", text: text.trim() });
@@ -1038,20 +1038,29 @@ async function extractProblem(
   const chatRawFn = deps.chatRawImpl ?? defaultChatRaw;
   const visionModel = deps.visionModel ?? deps.heavyModel;
 
+  // ★ 识别调用跳过 thinking：感知任务无需深思考，避免 reasoning tokens 挤占输出预算
+  const visionConfig = { ...deps.config, reasoningEffort: undefined };
+
   // first attempt (jsonMode=false: vision models often don't support response_format:json_object)
+  // ★ maxTokens=4096: 视觉模型默认输出上限可能很低，显式设防截断（B+A 联动）
   let raw = await chatRawFn(
-    deps.config, msgs, deps.signal, visionModel, undefined, false, u => deps.onTokenUsage?.(u)
+    visionConfig, msgs, deps.signal, visionModel, 4096, false, u => deps.onTokenUsage?.(u)
   );
 
   // empty response retry once
   if (!raw.trim()) {
     raw = await chatRawFn(
-      deps.config, msgs, deps.signal, visionModel, undefined, false, u => deps.onTokenUsage?.(u)
+      visionConfig, msgs, deps.signal, visionModel, 4096, false, u => deps.onTokenUsage?.(u)
     );
   }
 
-  if (!raw.trim()) return null;
-  return parseProblemAnalysis(raw);
+  if (!raw.trim()) return { problem: null };
+  const problem = parseProblemAnalysis(raw);
+  // ★ D-min: 非空响应但解析失败 → 大概率截断（JSON 未闭合），标记供上层区分错误文案
+  if (!problem && raw.trim().length > 100) {
+    return { problem: null, truncated: true };
+  }
+  return { problem };
 }
 
 export async function runVisionPipeline(
@@ -1064,8 +1073,11 @@ export async function runVisionPipeline(
   for (;;) {
     // ── 识别段 ──
     let problem: ProblemAnalysis | null;
+    let truncated = false;
     try {
-      problem = await extractProblem(text, images, deps);
+      const result = await extractProblem(text, images, deps);
+      problem = result.problem;
+      truncated = result.truncated ?? false;
     } catch (err) {
       if (deps.signal.aborted) throw err;
       const reason = err instanceof Error ? err.message : String(err);
@@ -1087,18 +1099,22 @@ export async function runVisionPipeline(
     }
 
     if (!problem) {
+      // ★ D-min: 区分截断 vs 真失败，给用户可操作的提示
+      const truncHint = truncated ? "（输出被截断，请尝试更清晰的图片或简化题目后重试）" : "";
       if (text.trim()) {
         deps.appendMessage({
           id: deps.newMessageId(),
           role: "error",
-          content: "题目识别失败（无法解析输出），将直接按文字绘制",
+          content: `题目识别失败${truncHint || "（无法解析输出）"}，将直接按文字绘制`,
         });
         await runAgentPipeline(text, deps, cb);
       } else {
         deps.appendMessage({
           id: deps.newMessageId(),
           role: "error",
-          content: "识别失败：请在 设置 → 高级 中配置支持图片的视觉模型",
+          content: truncated
+            ? "识别输出不完整（可能被截断），请尝试更清晰的图片或简化题目后重试"
+            : "识别失败：请在 设置 → 高级 中配置支持图片的视觉模型",
         });
       }
       return;
