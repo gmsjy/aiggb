@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "deploy": "npm run build && gh-pages -d dist",
+    "deploy:retry": "node scripts/deploy-until-published.mjs",
     "lint": "eslint .",
     "test:unit": "node --test --import tsx tests/specCache.test.ts tests/pipeline.test.ts tests/ggbBridge.test.ts tests/ggbKB.test.ts tests/toolExecutor.test.ts tests/agentLoop.test.ts tests/agentSmoke.test.ts tests/satisfactionEval.test.ts tests/sessionStore.test.ts tests/trainingStore.test.ts tests/trajectory-replay.test.ts tests/trapStore.test.ts tests/runControl.test.ts tests/problemSchema.test.ts tests/imageInput.test.ts",
     "test:replay": "tsx tests/runner.ts",
