@@ -14,7 +14,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { runPipeline, type PipelineDeps, type ReviewHandle } from "../src/lib/pipeline";
+import { runPipeline, runVisionPipeline, type PipelineDeps, type ReviewHandle, type ProblemHandle } from "../src/lib/pipeline";
+import type { StateCheckSpec } from "../src/lib/agentLoop";
 import { createMemoryStorage, type SpecStorage } from "../src/lib/specCache";
 import { TEMPLATES } from "../src/lib/templates";
 import { MockGGB } from "./mockGGB";
@@ -362,4 +363,94 @@ test("评估 API 异常 → 不阻断流程", async () => {
   // 评估失败但流程正常完成，只有 spec-review + assistant
   assert.equal(h.messages.length, 2);
   assert.equal(h.messages[1].role, "assistant");
+});
+
+// ──── 视觉核对（画布截图 + 视觉模型，与文本核对合并） ────
+
+const VISION_PROBLEM_JSON = JSON.stringify({
+  problem_text: "小球从高 20 m 的平台以 15 m/s 水平抛出，不计空气阻力，画出运动轨迹示意图并演示动画。",
+  knowns: [{ name: "h", value: 20, unit: "m" }],
+  animation_hints: [{ type: "animate", desc: "小球沿轨迹运动" }]
+});
+
+/** mock 截图 base64（>100 字符以通过 pipeline 的长度守卫） */
+const MOCK_PNG_B64 = "VmlzdWFsUmV2aWV3UG5nQmFzZTY0".repeat(5);
+
+test("视觉核对：文本通过 + 视觉不通过 → 合并 issues 且带 [视觉] 前缀", async () => {
+  const h = makeHarness({ raw: VISION_PROBLEM_JSON });
+  h.deps.visionModel = "vision-m";
+  // mock 提供 getPNGBase64（exportPNG 依赖）
+  (h.mock as unknown as Record<string, unknown>).getPNGBase64 = () => MOCK_PNG_B64;
+  let capturedCheck: StateCheckSpec | null = null;
+  h.deps.runAgentLoopImpl = async (_text, loopDeps) => {
+    capturedCheck = loopDeps.stateCheck ?? null;
+    return { finalText: "构造完成", messages: [], iterations: 1, deniedTools: [] };
+  };
+  h.deps.evalSatisfactionImpl = async () => ({ satisfied: true, issues: [], summary: "文本结构通过" });
+  h.deps.evalVisualImpl = async () => ({ satisfied: false, issues: ["轨迹明显超出视窗"], summary: "视觉不达标" });
+
+  let ph: ProblemHandle | null = null;
+  const p = runVisionPipeline({ text: "", images: ["data:image/png;base64,Zm9v"] }, h.deps, {
+    onProblemReview: hd => { ph = hd; },
+  });
+  await waitUntil(() => ph !== null);
+  ph!.confirm(ph!.problem);
+  await p;
+
+  assert.ok(capturedCheck, "stateCheck 应注入 agent loop");
+  const r = await capturedCheck!.check("P (point): P = (18.9, 12.1)", h.controller.signal);
+  assert.ok(r, "check 应返回结果");
+  assert.equal(r!.satisfied, false, "视觉不通过 → 整体不通过");
+  assert.ok(r!.issues.some(i => i.startsWith("[视觉]") && i.includes("超出视窗")), "issues 应带 [视觉] 前缀");
+  assert.ok(r!.summary.includes("视觉"), "summary 应包含视觉审查结论");
+});
+
+test("视觉核对：无截图能力（mock 无 getPNGBase64）→ 仅文本核对，视觉实现不被调用", async () => {
+  const h = makeHarness({ raw: VISION_PROBLEM_JSON });
+  h.deps.visionModel = "vision-m";
+  let capturedCheck: StateCheckSpec | null = null;
+  h.deps.runAgentLoopImpl = async (_text, loopDeps) => {
+    capturedCheck = loopDeps.stateCheck ?? null;
+    return { finalText: "ok", messages: [], iterations: 1, deniedTools: [] };
+  };
+  h.deps.evalSatisfactionImpl = async () => ({ satisfied: true, issues: [], summary: "文本通过" });
+  h.deps.evalVisualImpl = async () => { throw new Error("无截图能力时不应调用视觉审查"); };
+
+  let ph: ProblemHandle | null = null;
+  const p = runVisionPipeline({ text: "", images: ["data:image/png;base64,Zm9v"] }, h.deps, {
+    onProblemReview: hd => { ph = hd; },
+  });
+  await waitUntil(() => ph !== null);
+  ph!.confirm(ph!.problem);
+  await p;
+
+  const r = await capturedCheck!.check("P (point): P = (1,2)", h.controller.signal);
+  assert.ok(r?.satisfied, "无截图能力 → 仅文本核对，按通过结束");
+  assert.equal(r!.issues.length, 0);
+});
+
+test("视觉核对：文本不通过 + 视觉通过 → issues 仅含文本项", async () => {
+  const h = makeHarness({ raw: VISION_PROBLEM_JSON });
+  h.deps.visionModel = "vision-m";
+  (h.mock as unknown as Record<string, unknown>).getPNGBase64 = () => MOCK_PNG_B64;
+  let capturedCheck: StateCheckSpec | null = null;
+  h.deps.runAgentLoopImpl = async (_text, loopDeps) => {
+    capturedCheck = loopDeps.stateCheck ?? null;
+    return { finalText: "done", messages: [], iterations: 1, deniedTools: [] };
+  };
+  h.deps.evalSatisfactionImpl = async () => ({ satisfied: false, issues: ["缺少轨迹"], summary: "文本不通过" });
+  h.deps.evalVisualImpl = async () => ({ satisfied: true, issues: [], summary: "视觉合格" });
+
+  let ph: ProblemHandle | null = null;
+  const p = runVisionPipeline({ text: "", images: ["data:image/png;base64,Zm9v"] }, h.deps, {
+    onProblemReview: hd => { ph = hd; },
+  });
+  await waitUntil(() => ph !== null);
+  ph!.confirm(ph!.problem);
+  await p;
+
+  const r = await capturedCheck!.check("P (point): P = (1,2)", h.controller.signal);
+  assert.equal(r!.satisfied, false);
+  assert.deepEqual(r!.issues, ["缺少轨迹"], "视觉通过时不应追加 [视觉] 项");
+  assert.ok(r!.summary.includes("视觉合格"));
 });

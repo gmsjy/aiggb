@@ -55,7 +55,7 @@
 | `agentLoop.ts` | **ReAct Agent 工具调用循环** | `runAgentLoop(userText, deps)` — observe→plan→act 循环，最大 30 次迭代，**每轮刷新 api 句柄**（防 applet 重建失效）、**连续 3 轮工具失败熔断**（`MAX_CONSECUTIVE_FAILURES`，参数/预检类错误不计入，给模型自我修正机会）、全拒绝判定按**本轮**被拒数（避免跨轮累积误触发）、危险工具确认按 `toolCallId` 匹配；**`onThinking` 回调**（分析/规划/执行工具/等待确认 4 个节点 + V4 `reasoning_content` 增量 🧠 实时展示）经 pipeline 透传 UI 减少等待焦虑；`reasoning_content` 回传受 `mustRoundtripReasoning` quirk 门控；空响应重试的截断判定**直接信任 `finish_reason="length"`**（不再依赖 `streamsFinishReason` 门控）；**`StateCheckSpec` 终止核对钩子**：AI 输出纯文本视为完成时用 `getRichSnapshot` 快照调 `check()`，未通过把 issues 反馈注入循环继续修正（`MAX_STATE_CHECK_ROUNDS=2`，共享 30 迭代预算；核对异常按通过结束——失败不阻断）；`buildStateCheckFeedback` 组装反馈消息；`convertHistory` 对 user turn attachments 折叠 `[附件:图片×N]` 占位；`registerConfirmationHandler`/`unregisterConfirmationHandler` 危险工具确认注入；`AgentLoopDeps`（含 `agentModel` + `stateCheck?`）、`AgentLoopResult` |
 | `toolExecutor.ts` | Agent 工具 → GGB API 分发 | `executeToolCall(api, call)`/`executeToolCalls(api, calls, appMode?)` — 批量执行 2D/3D 统一启用；`setPerspective("3d")` 通过 `getPerspectiveXML()` 检测已 3D 则跳过（防 DockGlassPane）；~20 个工具 case（create_point/slider/vector/style/animation…）|
 | `tools.ts` | 工具 Function Calling 定义 | `TOOL_DEFINITIONS`（OpenAI tool schemas）、`TOOL_SCHEMAS`（Zod 校验）、`getToolSafety(name)` → `"safe"\|"dangerous"`；dangerous 工具（eval_raw/delete/clear）需用户确认 |
-| `satisfactionEval.ts` | Phase 3.1 满足度评估 | `evaluateSatisfaction(config, spec, snapshot, signal?, modelOverride?)` — 轻量模型对比画布快照与精炼规格，输出 `SatisfactionResult{satisfied, issues[], summary}`；失败不阻断流程 |
+| `satisfactionEval.ts` | Phase 3.1 满足度评估 | `evaluateSatisfaction(config, spec, snapshot, signal?, modelOverride?)` — 轻量模型对比画布快照与精炼规格，输出 `SatisfactionResult{satisfied, issues[], summary}`；失败不阻断流程；**`evaluateVisual(config, basis, imageDataUrl, signal?, visionModel?, ...)`** — 画布截图（exportPNG）+ 视觉模型审查渲染效果（出框/遮挡/样式/可读性），跳过 thinking + 显式 4096、解析容错、失败不阻断；带图轮 stateCheck 双路合并（视觉 issues 带 `[视觉]` 前缀） |
 | `problemSchema.ts` | 题目识别输出校验 | `ProblemAnalysis` 接口 + Zod 容错 + `parseProblemAnalysis` + `serializeProblem`（确定性序列化） |
 | `visionPrompt.ts` | 视觉模型系统提示 | `buildVisionExtractPrompt(domain)` — 指示输出 ProblemAnalysis JSON |
 | `imageInput.ts` | 图片输入预处理 | `validateImageFile`（纯校验）+ `fileToDataUrl`（浏览器缩放+白底+JPEG）；`MAX_IMAGES=3`、`MAX_FILE_MB=10` |
@@ -157,8 +157,10 @@ Schema 校验失败 → `chatWithFormatRetry`（≤2 次格式重试，raw + det
 ```
 带图输入 → extractProblem（视觉模型 chatRaw JSON）→ 题目确认气泡 → taskText
   → runAgentRound(taskText, stateCheck) → Agent 循环构造
-    → AI 输出文本时触发终止核对：getRichSnapshot vs serializeProblem
-      → 未通过 → issues + 快照注入循环继续修正（≤2 次，共享 30 迭代预算）
+    → AI 输出文本时触发终止核对（双路合并，失败均不阻断）：
+        ① 文本结构：getRichSnapshot vs serializeProblem（evaluateSatisfaction，轻量模型）
+        ② 截图视觉：exportPNG(画布) + evaluateVisual（visionModel）→ 出框/遮挡/样式问题
+      → 未通过 → issues（视觉项带 [视觉] 前缀）+ 快照注入循环继续修正（≤2 次，共享 30 迭代预算）
       → 通过 / 预算耗尽 → 结束
 ```
 
@@ -169,7 +171,7 @@ Schema 校验失败 → `chatWithFormatRetry`（≤2 次格式重试，raw + det
 | `problemSchema.ts` | ProblemAnalysis Zod schema + 容错 + `parseProblemAnalysis` + `serializeProblem`（确定性序列化） |
 | `visionPrompt.ts` | `buildVisionExtractPrompt(domain)` — 视觉模型系统提示 |
 | `imageInput.ts` | `validateImageFile`（纯校验）+ `fileToDataUrl`（浏览器缩放+白底+JPEG） |
-| `pipeline.ts:runVisionPipeline` | 识别 loop → 确认 → `runAgentRound` + stateCheck |
+| `pipeline.ts:runVisionPipeline` | 识别 loop → 确认 → `runAgentRound` + stateCheck（文本+视觉双路核对，`evalVisualImpl?` 可注入） |
 | `pipeline.ts:runAgentRound` | 从 `runAgentPipeline` 抽取的内部函数，接受可选 `stateCheck`/`evalBasis` |
 | `agentLoop.ts:StateCheckSpec` | Case 1 终止钩子：`checkRounds < maxRounds` 时调用 `check(snapshot)` → 未通过则注入反馈消息 continue |
 
@@ -253,9 +255,9 @@ GeoGebra web3d 内部使用 `DockGlassPane`（一个 DIV 遮罩层）处理视�
 | `npm run test:ab` | — | **A/B 测试**：`reasoning_effort` 开/关 同用例对比（端到端 + 延迟 + token 成本），输出 `tests/ab-report.json` |
 | `npm run test:visual` | — | Playwright 截图（physics,dynamic,composite）|
 | `npm run prompt:iterate` | — | Prompt 迭代工作流 |
-| **单测** | — | 139 个（0 API）：`tests/pipeline.test.ts`（流水线状态机 + 视觉管线）、`tests/specCache.test.ts`（缓存，注入 `createMemoryStorage`）、`tests/satisfactionEval.test.ts`（满足度评估）、`tests/problemSchema.test.ts`（题目识别 schema 容错 + 序列化确定性）、`tests/imageInput.test.ts`（图片校验边界）、`tests/agentLoop.test.ts` / `toolExecutor.test.ts` / `agentSmoke.test.ts` / `ggbBridge.test.ts` / `ggbKB.test.ts` / `sessionStore.test.ts` / `trainingStore.test.ts` / `trajectory-replay.test.ts` / `trapStore.test.ts` / `runControl.test.ts` |
+| **单测** | — | 151 个（0 API）：`tests/pipeline.test.ts`（流水线状态机 + 视觉管线 + 视觉核对合并）、`tests/specCache.test.ts`（缓存，注入 `createMemoryStorage`）、`tests/satisfactionEval.test.ts`（满足度评估 + evaluateVisual 视觉审查）、`tests/problemSchema.test.ts`（题目识别 schema 容错 + 序列化确定性）、`tests/imageInput.test.ts`（图片校验边界）、`tests/agentLoop.test.ts` / `toolExecutor.test.ts` / `agentSmoke.test.ts` / `ggbBridge.test.ts` / `ggbKB.test.ts` / `sessionStore.test.ts` / `trainingStore.test.ts` / `trajectory-replay.test.ts` / `trapStore.test.ts` / `runControl.test.ts` |
 
-关键文件：`tests/runner.ts`（运行器）、`tests/mockGGB.ts`（轻量 GGB mock）、`tests/cases.json`（用例）、`tests/assertions.ts`（12 维断言）、`tests/fixtures/`（回放数据）。基线 139 单测 / 63 回放。
+关键文件：`tests/runner.ts`（运行器）、`tests/mockGGB.ts`（轻量 GGB mock）、`tests/cases.json`（用例）、`tests/assertions.ts`（12 维断言）、`tests/fixtures/`（回放数据）。基线 151 单测 / 63 回放。
 
 **注意**：`test:record` 会覆盖 `tests/fixtures/`。基准 `tests/report.json` 当前 ~59/63（highschool 3D 是主要拉分项）。
 

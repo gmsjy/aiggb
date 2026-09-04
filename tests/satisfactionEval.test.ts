@@ -9,8 +9,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { evaluateSatisfaction, SatisfactionResult } from "../src/lib/satisfactionEval";
-import type { AIConfig } from "../src/lib/aiClient";
+import { evaluateSatisfaction, evaluateVisual, SatisfactionResult } from "../src/lib/satisfactionEval";
+import type { AIConfig, ChatMessage, ContentPart } from "../src/lib/aiClient";
 
 const config: AIConfig = {
   provider: "test",
@@ -151,4 +151,77 @@ test("SatisfactionResult Zod schema 通过合法数据", async () => {
   const ok = { satisfied: true, issues: [], summary: "完全符合" };
   const r = SatisfactionResult.safeParse(ok);
   assert.equal(r.success, true);
+});
+
+// ──── evaluateVisual（画布截图 + 视觉模型审查） ────
+
+const IMG = "data:image/png;base64," + "Zm9v".repeat(40); // 合法形态的 data URL
+
+test("视觉审查 satisfied=false + issues → 正确解析", async () => {
+  const mockChatRaw = async () =>
+    JSON.stringify({ satisfied: false, issues: ["轨迹明显超出视窗"], summary: "轨迹出框" });
+  const result = await evaluateVisual(
+    config, "【题干】平抛运动，画出轨迹示意", IMG, undefined, "vision-m", mockChatRaw
+  );
+  assert.equal(result.satisfied, false);
+  assert.ok(result.issues[0].includes("视窗"));
+});
+
+test("视觉审查消息 = 文本(题目要求) + 截图(image_url) 两段", async () => {
+  let captured: ChatMessage[] | null = null;
+  const mockChatRaw = async (_cfg: AIConfig, msgs: ChatMessage[]) => {
+    captured = msgs;
+    return JSON.stringify({ satisfied: true, issues: [], summary: "ok" });
+  };
+  await evaluateVisual(config, "题目要求全文在此", IMG, undefined, "vision-m", mockChatRaw);
+  assert.ok(captured);
+  assert.equal(captured!.length, 2);
+  const parts = captured![1].content as ContentPart[];
+  assert.ok(Array.isArray(parts), "user content 应为多模态 parts");
+  assert.equal(parts.filter(p => p.type === "image_url").length, 1, "应包含一张截图");
+  assert.equal(parts.filter(p => p.type === "text").length, 1, "应包含题目要求文本");
+  assert.ok((parts[0] as { text: string }).text.includes("题目要求全文在此"));
+});
+
+test("视觉审查跳过 thinking：reasoningEffort 不下发", async () => {
+  let capturedCfg: AIConfig | null = null;
+  const mockChatRaw = async (cfg: AIConfig) => {
+    capturedCfg = cfg;
+    return JSON.stringify({ satisfied: true, issues: [], summary: "ok" });
+  };
+  const cfgWithThinking: AIConfig = { ...config, reasoningEffort: "high" };
+  await evaluateVisual(cfgWithThinking, "题目要求文本，超过最短长度限制以正常执行审查。", IMG, undefined, "vision-m", mockChatRaw);
+  assert.equal(capturedCfg!.reasoningEffort, undefined, "视觉审查不应携带 reasoning_effort");
+});
+
+test("视觉审查空截图 → 跳过且不调 AI", async () => {
+  let called = false;
+  const mockChatRaw = async () => { called = true; return "{}"; };
+  const result = await evaluateVisual(config, "题目要求", "", undefined, "vision-m", mockChatRaw);
+  assert.equal(result.satisfied, true);
+  assert.equal(result.summary, "无截图，跳过视觉核对");
+  assert.equal(called, false);
+});
+
+test("视觉审查 fence 包裹 / 截断 JSON 提取 / 非 JSON → 容错或默认通过", async () => {
+  const fenced = async () => '```json\n{"satisfied":true,"issues":[],"summary":"合格"}\n```';
+  assert.equal(
+    (await evaluateVisual(config, "题目要求", IMG, undefined, "vision-m", fenced)).satisfied, true);
+
+  // 截断但可提取 {...}：宽松解析
+  const truncatedLike = async () => '前缀说明 {"satisfied":false,"issues":["颜色不符"],"summary":"样式"} 后缀';
+  assert.ok(
+    (await evaluateVisual(config, "题目要求", IMG, undefined, "vision-m", truncatedLike)).issues.length === 1);
+
+  // 完全非 JSON → fail-open 默认通过
+  const garbage = async () => "我看不清这张图";
+  const r = await evaluateVisual(config, "题目要求", IMG, undefined, "vision-m", garbage);
+  assert.equal(r.satisfied, true, "非 JSON 输出应默认通过");
+});
+
+test("视觉审查 API 异常 → 默认通过不阻断", async () => {
+  const mockChatRaw = async () => { throw new Error("网络超时"); };
+  const result = await evaluateVisual(config, "题目要求", IMG, undefined, "vision-m", mockChatRaw);
+  assert.equal(result.satisfied, true, "视觉审查异常应默认通过");
+  assert.ok(result.summary.includes("视觉审查失败"));
 });

@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { chatRaw as defaultChatRaw, type AIConfig, type ChatMessage } from "./aiClient";
+import { chatRaw as defaultChatRaw, type AIConfig, type ChatMessage, type ContentPart } from "./aiClient";
 import { getTraceId } from "./runControl";
 
 // ──── Schema ────
@@ -149,4 +149,107 @@ ${issueLines}
 2. 保留画布上已正确的对象（不要删除或重建）
 3. 针对每个问题逐一修正：缺失对象 → 创建；颜色/样式不符 → 用 style op 修正；依赖缺失 → 补充声明
 4. 如果某个问题无法修复（如超出 GGB 能力），在 explanation 中说明`;
+}
+
+// ──── 视觉审查（画布截图 + 视觉模型） ────
+
+const VISUAL_REVIEW_SYSTEM_PROMPT = `你是 GeoGebra 画布视觉审查员。对照【题目要求】检查【画布截图】，从"看图"角度判断绘制结果是否达标。
+
+规则：
+1. 题目要求的核心对象/轨迹是否真的画出来了（截图中可见）？
+2. 位置与比例：轨迹是否明显超出视窗、对象是否过度拥挤或互相遮挡、标注是否可读？
+3. 颜色/样式是否与要求一致（如"红色轨迹""蓝色小球"）？
+4. 截图只是动画的某一瞬间：动画是否启动、滑块是否可调等动态要求不要从截图判断（由文本快照核对负责）。
+5. 坐标轴、网格、GGB 界面元素本身不是问题。
+6. 只报告截图中明确可见的问题，不要吹毛求疵；最多 5 条。
+
+输出 JSON：
+{"satisfied":true/false,"issues":["问题描述"],"summary":"一句话总结"}`;
+
+/**
+ * 视觉审查：画布截图 + 视觉模型，判断渲染效果是否满足题目要求。
+ *
+ * 与 evaluateSatisfaction（文本结构核对）并存：结构问题归文本快照，
+ * 视觉问题（出框/遮挡/样式不符/标注不可读）归截图。失败不阻断（默认通过）。
+ *
+ * @param basis        确认后的序列化题目解读（serializeProblem 输出）
+ * @param imageDataUrl 画布截图 data URL（exportPNG 产出）
+ * @param visionModel  视觉模型名（缺省回退 config.model）
+ * @param chatRawImpl  测试可注入 mock
+ */
+export async function evaluateVisual(
+  config: AIConfig,
+  basis: string,
+  imageDataUrl: string,
+  signal?: AbortSignal,
+  visionModel?: string,
+  chatRawImpl?: typeof defaultChatRaw,
+  onUsage?: (usage: { prompt: number; completion: number }) => void
+): Promise<SatisfactionResult> {
+  if (!imageDataUrl.trim()) {
+    return { satisfied: true, issues: [], summary: "无截图，跳过视觉核对" };
+  }
+
+  const chatRawFn = chatRawImpl ?? defaultChatRaw;
+  // ★ 视觉审查同为感知任务：跳过 thinking（防 reasoning 挤占输出预算）+ 显式输出上限
+  //   （同 extractProblem 的截断教训：多数视觉模型不支持 json_object，输出上限需显式给）
+  const vConfig: AIConfig = { ...config, reasoningEffort: undefined };
+  const messages: ChatMessage[] = [
+    { role: "system", content: VISUAL_REVIEW_SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: `【题目要求】\n${basis}` },
+        { type: "image_url", image_url: { url: imageDataUrl } },
+      ] as ContentPart[]
+    }
+  ];
+
+  try {
+    let raw = await chatRawFn(vConfig, messages, signal, visionModel ?? config.model, 4096, false, onUsage);
+    if (!raw.trim()) {
+      console.warn(`[satisfactionEval] ${getTraceId()} 视觉审查空响应，重试 1 次`);
+      raw = await chatRawFn(vConfig, messages, signal, visionModel ?? config.model, 4096, false, onUsage);
+    }
+    if (!raw.trim()) {
+      return { satisfied: true, issues: [], summary: "视觉审查空响应，跳过" };
+    }
+
+    const cleaned = raw.trim()
+      .replace(/^```json?\s*/, "").replace(/\s*```$/, "")
+      .replace(/^\uFEFF/, "");
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      // 截断/夹带文字时尝试提取首个 {...} 块（仿 parseProblemAnalysis 容错）
+      const m = cleaned.match(/\{[\s\S]*\}/);
+      if (!m) throw new Error("视觉审查输出非 JSON");
+      parsed = JSON.parse(m[0]);
+    }
+
+    // 容错：satisfied 可能是字符串
+    if (typeof parsed.satisfied === "string") {
+      parsed.satisfied = (parsed.satisfied as string).toLowerCase() === "true";
+    }
+
+    const result = SatisfactionResult.safeParse(parsed);
+    if (result.success) return result.data;
+
+    return {
+      satisfied: Boolean(parsed.satisfied),
+      issues: Array.isArray(parsed.issues) ? parsed.issues.slice(0, 5) : [],
+      summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 200) : "视觉审查解析异常"
+    };
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    // 视觉审查失败不阻断（延续「失败不阻断」哲学）→ 默认通过
+    console.warn(`[satisfactionEval] ${getTraceId()} 视觉审查调用失败，跳过`, err);
+    return {
+      satisfied: true,
+      issues: [],
+      summary: `视觉审查失败：${err instanceof Error ? err.message.slice(0, 100) : "未知"}`
+    };
+  }
 }

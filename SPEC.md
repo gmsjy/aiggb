@@ -899,9 +899,12 @@ DeepSeek V4 原生内嵌 thinking（流式返回 `reasoning_content`）。系统
   → [Agent 构造] runAgentLoop(taskText, deps + stateCheck)
        ├─ 循环内（现有机制）：工具执行结果作为 observation 逐步反馈
        └─ 终止核对（新增钩子）：AI 输出文本总结欲结束
-            → getRichSnapshot(画布) vs serializeProblem 逐项核对
-              （复用 evaluateSatisfaction，轻量模型，基准 = 题目解读）
-            → 未通过 → issues + 画布状态注入循环 → AI 继续调用工具修正
+            → 双路核对（结果合并，任一失败均不阻断流程）：
+              ① 文本结构核对：getRichSnapshot(画布结构化文本) vs serializeProblem
+                 （复用 evaluateSatisfaction，轻量模型）
+              ② 截图视觉核对（v1.7+）：exportPNG(画布截图) + 视觉模型 evaluateVisual
+                 （判断出框/遮挡/样式不符/标注不可读等"看图"问题）
+            → 未通过 → issues（视觉项带 [视觉] 前缀）+ 画布状态注入循环 → AI 继续调用工具修正
             → 通过 / 核对预算用尽（≤2 次反馈）→ 结束
   → 快照回滚 / constructionLog / 陷阱回填 / 轨迹（复用 runAgentPipeline 骨架）
 ```
@@ -1044,6 +1047,20 @@ export async function fileToDataUrl(file: File, opts?: { maxDim?: number; qualit
 **ChatPanel 侧改动**：`images` state（dataURL 数组）；发送后清空；`canSend = key && ggbApi && !thinking && !running && (文字非空 || images.length > 0)`（放行纯图消息）。
 
 ### 4D.6 改动清单（文件级）
+
+**`satisfactionEval.ts`** —— 视觉审查（v1.7+ 新增 `evaluateVisual`）：
+
+```ts
+/** 画布截图 + 视觉模型审查：判断渲染效果（出框/遮挡/样式不符/标注不可读）。
+ *  与 evaluateSatisfaction（文本结构核对）并存；跳过 thinking + 显式 4096 防截断；
+ *  空截图跳过；解析容错（fence 剥离 / {...} 提取 / 字符串 satisfied）；失败不阻断（默认通过） */
+export async function evaluateVisual(
+  config, basis: string, imageDataUrl: string, signal?, visionModel?, chatRawImpl?, onUsage?
+): Promise<SatisfactionResult>;
+// PipelineDeps += evalVisualImpl?（单测 mock 注入）
+```
+
+**`pipeline.ts`** —— stateCheck 闭包双路合并：文本核对（evaluateSatisfaction）+ 截图视觉核对（exportPNG → evaluateVisual，用 visionModel）；视觉 issues 加 `[视觉] ` 前缀，summary 合并两路结论；截图能力缺失（base64 ≤100 字符 / 无 getPNGBase64）→ 静默跳过视觉路，仅保留文本结果。
 
 **`aiClient.ts`** —— 类型放宽（现有字符串调用点编译不变）：
 
@@ -1280,7 +1297,7 @@ persist v3→v4：`visionModel` 为可选字段，**无字段迁移逻辑**，mi
 6. 纯图消息全流程可用
 7. 会话持久化：带图会话切换/重启恢复完整（图片 + 题目气泡）
 
-**明确不在本期**：文字 Agent 轮接入画布状态核对（本期仅带图轮有核对基准；泛化为所有 Agent 轮是后续项）；画布截图视觉比对（`exportPNG` 让评估模型"看"渲染效果——本期核对仍是结构化文本比对）；URL 远程图片输入；一图多题拆分（按一题处理）；题目文字 OCR 二次校对界面。
+**明确不在本期**：文字 Agent 轮接入画布状态核对（本期仅带图轮有核对基准；泛化为所有 Agent 轮是后续项）；URL 远程图片输入；一图多题拆分（按一题处理）；题目文字 OCR 二次校对界面。（画布截图视觉比对已于 v1.7+ 实施并从本清单移除：`evaluateVisual` + `exportPNG`，见 §4D.6）
 
 ### 4D.11 实施后修复：Agent 模式 `finish_reason=length` 截断问题
 

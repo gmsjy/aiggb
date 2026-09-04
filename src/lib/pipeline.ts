@@ -18,7 +18,7 @@ import {
   type ChatMessage,
   type ContentPart
 } from "./aiClient";
-import { collectFailures, executeCommands, resetTmpIds, getRichSnapshot, type ExecResult } from "./ggbBridge";
+import { collectFailures, executeCommands, resetTmpIds, getRichSnapshot, exportPNG, type ExecResult } from "./ggbBridge";
 import {
   buildSystemPrompt,
   buildCompilePrompt,
@@ -112,6 +112,8 @@ export interface PipelineDeps {
   chatRawImpl?: typeof defaultChatRaw;
   /** 满足度评估注入（测试可 mock） */
   evalSatisfactionImpl?: typeof import("./satisfactionEval").evaluateSatisfaction;
+  /** 视觉审查注入（画布截图 + 视觉模型；测试可 mock，缺省用真实实现） */
+  evalVisualImpl?: typeof import("./satisfactionEval").evaluateVisual;
   /** 训练库检索（Phase 2 注入参考案例）。注入以支持单测 mock */
   trainingSearchImpl?: (spec: string) => Promise<ExecutionRecord | null>;
   /** L2 场景检索（Phase 2 注入场景模式，优先于单案例）。注入以支持单测 mock */
@@ -1160,7 +1162,7 @@ export async function runVisionPipeline(
     const basis = serializeProblem(decision.problem);
     const taskText = [text.trim(), basis].filter(Boolean).join("\n\n");
 
-    // ★ Agent 构造 + 画布状态核对
+    // ★ Agent 构造 + 画布状态核对（文本结构核对 + 截图视觉核对，两路失败均不阻断）
     await runAgentRound(taskText, deps, cb, {
       stateCheck: {
         basis,
@@ -1168,7 +1170,37 @@ export async function runVisionPipeline(
           const evalFn = deps.evalSatisfactionImpl ??
             ((await import("./satisfactionEval")).evaluateSatisfaction as typeof import("./satisfactionEval").evaluateSatisfaction);
           try {
-            return await evalFn(deps.config, basis, snapshot, signal, deps.lightModel, undefined, u => deps.onTokenUsage?.(u));
+            const textResult = await evalFn(deps.config, basis, snapshot, signal, deps.lightModel, undefined, u => deps.onTokenUsage?.(u));
+
+            // ★ 视觉核对：画布截图（exportPNG）+ 视觉模型。截图能力缺失（Node 单测 mock /
+            //    回调式构建返回空）→ 跳过，仅保留文本核对结果
+            let visualIssues: string[] = [];
+            let visualSummary = "";
+            try {
+              const api = deps.getApi();
+              const pngDataUrl = api ? exportPNG(api) : null;
+              const base64Body = pngDataUrl?.split(",")[1] ?? "";
+              if (pngDataUrl && base64Body.length > 100) {
+                const visualFn = deps.evalVisualImpl ??
+                  ((await import("./satisfactionEval")).evaluateVisual as typeof import("./satisfactionEval").evaluateVisual);
+                const visual = await visualFn(
+                  deps.config, basis, pngDataUrl, signal,
+                  deps.visionModel ?? deps.heavyModel, undefined, u => deps.onTokenUsage?.(u)
+                );
+                visualIssues = visual.satisfied ? [] : visual.issues.map(s => `[视觉] ${s}`);
+                visualSummary = visual.summary;
+              }
+            } catch (err) {
+              if (signal.aborted) throw err;
+              console.warn("[Pipeline] 视觉核对跳过（无截图能力或调用失败）", err);
+            }
+
+            const issues = [...(textResult.satisfied ? [] : textResult.issues), ...visualIssues];
+            return {
+              satisfied: issues.length === 0,
+              issues,
+              summary: visualSummary ? `${textResult.summary}｜视觉：${visualSummary}` : textResult.summary,
+            };
           } catch (err) {
             if (signal.aborted) throw err;
             console.warn("[Pipeline] stateCheck eval failed, treating as pass", err);

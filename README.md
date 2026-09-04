@@ -111,7 +111,7 @@ AI 逐步调用工具（创建点/滑块/矢量/执行命令/查询对象…）�
    - 图片不清 → **重新识别**
    - 确认无误 → **确认并绘制**
 3. AI 以 Agent 工具循环逐步构造（右侧脚本面板可实时观察）
-4. 构造完成时自动**画布状态核对**：画布与题目解读逐项对照，发现偏差自动回喂修正（最多 2 轮）
+4. 构造完成时自动**画布状态核对**（双路）：画布结构化快照与题目解读逐项对照 + **画布截图发给视觉模型看渲染效果**（出框/遮挡/样式），发现偏差自动回喂修正（最多 2 轮）
 5. 结束后附满足度评估报告
 
 ### 降级与边界
@@ -345,12 +345,14 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
   → 视觉模型识别 → 题目解读 JSON（题干/已知量/目标/图示/动画建议）
   → 题目确认气泡（编辑题干 / 重新识别 / 确认并绘制）
   → Agent 工具循环构造（复用全部 Agent 机制：熔断/危险工具确认/快照回滚）
-  → AI 输出总结时触发画布状态核对：画布结构化快照 vs 题目解读
+  → AI 输出总结时触发画布状态核对（双路合并）：
+    ① 文本结构核对：画布结构化快照 vs 题目解读（轻量模型）
+    ② 截图视觉核对：画布截图发给视觉模型（判断出框/遮挡/样式不符/标注不可读）
     → 有偏差 → 问题清单注入循环继续修正（≤2 轮，共享 30 次迭代预算）
     → 通过 / 预算耗尽 → 满足度评估报告 → 完成
 ```
 
-识别失败但有文字 → 降级为普通 Agent 轮；纯图片失败 → 提示配置视觉模型。
+识别失败但有文字 → 降级为普通 Agent 轮；纯图片失败 → 提示配置视觉模型。视觉核对与识别共用视觉模型配置。
 
 ### 六层防漂移
 
@@ -397,7 +399,7 @@ React 19 · Vite 8 · TypeScript 5 · Zustand 5 · Zod 3 · GeoGebra deployggb.j
 
 | 命令 | 说明 |
 |---|---|
-| `npm run test:unit` | **139 单测（0 API）**：pipeline 状态机（含视觉管线）/ specCache / ggbBridge / ggbKB / toolExecutor / agentLoop / agentSmoke / satisfactionEval / sessionStore / trainingStore / trajectory-replay / trapStore / runControl / problemSchema / imageInput |
+| `npm run test:unit` | **151 单测（0 API）**：pipeline 状态机（含视觉管线 + 视觉核对）/ specCache / ggbBridge / ggbKB / toolExecutor / agentLoop / agentSmoke / satisfactionEval（含视觉审查）/ sessionStore / trainingStore / trajectory-replay / trapStore / runControl / problemSchema / imageInput |
 | `npm run test:replay` | 离线回归 63 用例（当前 **63/63, 100%**） |
 | `npm run test:trajectory` | 用当前执行层重放历史失败轨迹，统计"越用越强"修复率（离线） |
 | `npm run test:record` | 在线全量 + 录制 fixtures（需 `.env` 配置 Key） |
