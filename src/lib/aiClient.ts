@@ -95,8 +95,48 @@ export function getProviderQuirks(config: AIConfig): ProviderQuirks {
     };
   }
 
+  // 智谱 GLM（glm-4.5/4.6/5.x 全系，OpenAI 兼容端点 /api/paas/v4）
+  // - thinking 参数形态与 DeepSeek 不同，经 buildThinkingParam 翻译为 thinking:{type}
+  // - GLM 默认开启思考；reasoning_content 流式返回但多轮无需回传（与 DeepSeek V4 相反）
+  if (/zhipu|bigmodel|glm/.test(fingerprint)) {
+    return {
+      streamsFinishReason: true,
+      supportsThinking: true,
+      mustRoundtripReasoning: false,
+    };
+  }
+
   // 默认：标准 OpenAI 行为
   return { streamsFinishReason: true };
+}
+
+/** 智谱 GLM 检测（provider 名 / baseURL / 模型名任一命中） */
+export function isZhipuProvider(config: AIConfig): boolean {
+  const fp = [
+    (config.provider ?? "").toLowerCase(),
+    (config.baseURL ?? "").toLowerCase(),
+    (config.model ?? "").toLowerCase(),
+  ].join(" ");
+  return /zhipu|bigmodel|glm/.test(fp);
+}
+
+/**
+ * 按 provider 构造 thinking 控制参数（chat / chatRaw / agentChat 共用）。
+ *
+ * - 智谱 GLM：`thinking: { type }`。GLM 4.5+ 默认开启思考，未设置时必须显式
+ *   disabled 对齐「默认关闭 = baseline」语义（实测：默认思考会吃光输出预算）；
+ *   设置 reasoningEffort（low/medium/high 任一）→ enabled（GLM 无档位，二元开关）。
+ * - DeepSeek V4：`reasoning_effort`，仅设置时发送（缺省 = baseline 不发）。
+ * - 其他 provider：null（不发任何参数）。
+ */
+export function buildThinkingParam(config: AIConfig): Record<string, unknown> | null {
+  if (isZhipuProvider(config)) {
+    return { thinking: { type: config.reasoningEffort ? "enabled" : "disabled" } };
+  }
+  if (config.reasoningEffort && getProviderQuirks(config).supportsThinking) {
+    return { reasoning_effort: config.reasoningEffort };
+  }
+  return null;
 }
 
 /** 多模态内容片段（OpenAI Vision API 兼容格式） */
@@ -319,7 +359,6 @@ export async function chat(
   onUsage?: (usage: { prompt: number; completion: number }) => void
 ): Promise<AIResponseT> {
   const caps = getProviderCapabilities(config);
-  const quirks = getProviderQuirks(config);
   const body: Record<string, unknown> = {
     model: modelOverride ?? config.model,
     messages,
@@ -327,10 +366,9 @@ export async function chat(
     stream: false
   };
 
-  // ★ 思考深度：仅对支持 thinking 的 provider（V4）生效；config 留空 = 不发参数（baseline）
-  if (config.reasoningEffort && quirks.supportsThinking) {
-    body.reasoning_effort = config.reasoningEffort;
-  }
+  // ★ 思考深度：经 buildThinkingParam 按 provider 翻译（DeepSeek=reasoning_effort / GLM=thinking.type）
+  const thinking = buildThinkingParam(config);
+  if (thinking) Object.assign(body, thinking);
 
   // ★ 优先 json_schema（结构化约束更强），降级 json_object
   const usedJsonSchema = caps.jsonSchema;
@@ -453,10 +491,9 @@ export async function agentChat(
     // ★ thinking 模式下 reasoning tokens 也占用输出预算，需额外空间
     [maxTokField]: (config.reasoningEffort && quirks.supportsThinking) ? 16384 : 8192
   };
-  // ★ 思考深度（Agent 模式同样生效）
-  if (config.reasoningEffort && quirks.supportsThinking) {
-    body.reasoning_effort = config.reasoningEffort;
-  }
+  // ★ 思考深度（Agent 模式同样生效；经 buildThinkingParam 按 provider 翻译）
+  const thinkingParam = buildThinkingParam(config);
+  if (thinkingParam) Object.assign(body, thinkingParam);
 
   const resp = await fetchCompletion(config, body, signal);
 
@@ -608,10 +645,9 @@ export async function chatRaw(
     //    未显式传入时给 4K 默认（Phase 1 规格 / 满足度评估输出均远小于此）
     if (!maxTokens) body.max_tokens = 4096;
   }
-  // ★ 思考深度（同上，支持 thinking 的 provider 才发）
-  if (config.reasoningEffort && getProviderQuirks(config).supportsThinking) {
-    body.reasoning_effort = config.reasoningEffort;
-  }
+  // ★ 思考深度：经 buildThinkingParam 按 provider 翻译（DeepSeek=reasoning_effort / GLM=thinking.type）
+  const thinkingParam = buildThinkingParam(config);
+  if (thinkingParam) Object.assign(body, thinkingParam);
 
   const data = await callAPI(config, body, signal);
 

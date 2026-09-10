@@ -9,7 +9,7 @@
  * 测试模型固定为 DeepSeek：保证可复现性、统一基线、避免多 provider 漂移。
  * 可通过环境变量覆盖：
  *   DEEPSEEK_API_KEY    —— 必填（record/smoke 模式）
- *   DEEPSEEK_MODEL      —— 默认 deepseek-v4-flash（也可 deepseek-v4-pro）
+ *   DEEPSEEK_MODEL      —— 默认 deepseek-flash（V4.1；也可 deepseek-v4-pro 过渡兼容）
  *   DEEPSEEK_BASE_URL   —— 默认 https://api.deepseek.com
  *
  * 输出 tests/report.json + 控制台彩色摘要
@@ -35,7 +35,7 @@ const REPORT_FILE = join(__dirname, "report.json");
 
 /** 测试统一锁定 DeepSeek（baseURL/model 可被 env 覆盖） */
 const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com";
-const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash";
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL ?? "deepseek-flash";
 const TEST_TEMPERATURE = Number(process.env.TEST_TEMPERATURE ?? "0.05");
 
 interface TestCase {

@@ -59,7 +59,7 @@
 | `problemSchema.ts` | 题目识别输出校验 | `ProblemAnalysis` 接口 + Zod 容错 + `parseProblemAnalysis` + `serializeProblem`（确定性序列化） |
 | `visionPrompt.ts` | 视觉模型系统提示 | `buildVisionExtractPrompt(domain)` — 指示输出 ProblemAnalysis JSON |
 | `imageInput.ts` | 图片输入预处理 | `validateImageFile`（纯校验）+ `fileToDataUrl`（浏览器缩放+白底+JPEG）；`MAX_IMAGES=3`、`MAX_FILE_MB=10` |
-| `providers.ts` | 6 预置 provider + 自定义 | `PROVIDER_PRESETS`（DeepSeek/Moonshot/GLM/SiliconFlow/OpenAI/Ollama）；含 `visionModels?` 候选列表（DeepSeek `deepseek-v4-flash-vision-exp`、GLM `glm-4.5v`、SiliconFlow Qwen2.5-VL、OpenAI gpt-4o、Ollama qwen2.5vl 等） |
+| `providers.ts` | 6 预置 provider + 自定义 | `PROVIDER_PRESETS`（DeepSeek/Moonshot/GLM/SiliconFlow/OpenAI/Ollama）；含 `visionModels?` 候选列表（DeepSeek `deepseek-flash`（V4.1 原生多模态）、GLM `glm-4.5v`、SiliconFlow Qwen2.5-VL、OpenAI gpt-4o、Ollama qwen2.5vl 等）；GLM thinking 参数适配（`buildThinkingParam`：GLM=thinking.type / DeepSeek=reasoning_effort） |
 | `format.ts` | 数字格式化工具 | `fmtTokens(n)` — token 用量 k/M 缩写（顶栏 + 统计图共用） |
 
 ### src/components/（React UI）
@@ -263,7 +263,7 @@ GeoGebra web3d 内部使用 `DockGlassPane`（一个 DIV 遮罩层）处理视�
 
 ## 环境
 
-- `.env` 放测试密钥：`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`（默认 v4-flash）、`DEEPSEEK_BASE_URL`
+- `.env` 放测试密钥：`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`（默认 deepseek-flash，V4.1）、`DEEPSEEK_BASE_URL`
 - 模型：日常 flash（快）、复杂/3D 场景 pro；两阶段 Phase 1 用 flash，Phase 2 用主模型
 
 ## GeoGebra 库本地化（自托管，官方 bundle）

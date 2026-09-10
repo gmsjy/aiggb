@@ -369,7 +369,7 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
                   placeholder="留空则使用主力模型"
                 />
               )}
-              <small className="hint">用于题目图片识别，需支持图片输入。DeepSeek 可选 deepseek-v4-flash-vision-exp；留空跟随主力模型（须为多模态模型）。</small>
+              <small className="hint">用于题目图片识别，需支持图片输入。DeepSeek 的 deepseek-flash（V4.1）原生多模态，视觉角色可直接跟随主力；留空时主力须为多模态模型。</small>
             </label>
             <label>
               <span>思考深度 (Thinking)</span>

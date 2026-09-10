@@ -34,12 +34,13 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: "DeepSeek",
     baseURL: "https://api.deepseek.com",
     models: [
-      "deepseek-v4-pro",              // 旗舰，含 thinking 支持
-      "deepseek-v4-flash",            // 轻量快速（非思考模式默认）
-      "deepseek-v4-flash-vision-exp"  // 视觉模型（图片理解）
+      "deepseek-flash",              // V4.1 Flash：原生多模态，性能/费用/速度全面超越 V4 Pro（2026-09 发布）
+      "deepseek-v4-pro",             // 旧旗舰；2026-09-14 后自动路由到 V4.1 Flash 计费
+      "deepseek-v4-flash",           // 旧轻量；已下线，暂路由到 V4.1 Flash（兼容保留）
+      "deepseek-v4-flash-vision-exp" // 旧视觉实验版；已下线，暂路由到 V4.1 Flash（兼容保留）
     ],
-    visionModels: ["deepseek-v4-flash-vision-exp"],
-    note: "v4-pro 旗舰、v4-flash 轻量、v4-flash-vision-exp 视觉。Anthropic 端点 (api.deepseek.com/anthropic) 需配合 Anthropic SDK，本工具暂仅支持 OpenAI 兼容端点",
+    visionModels: ["deepseek-flash"],
+    note: "deepseek-flash = V4.1 Flash，原生多模态（主力本身可识图，视觉角色跟随主力即可），已全面取代 v4-pro/v4-flash。旧模型名暂时保留路由兼容，新配置请用 deepseek-flash",
     apiKeyUrl: "https://platform.deepseek.com/api_keys"
   },
   {
@@ -61,14 +62,15 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: "智谱 GLM",
     baseURL: "https://open.bigmodel.cn/api/paas/v4",
     models: [
+      "glm-5.3-flash",    // GLM 5.3 闪速版（需资源包）
       "glm-4.6",          // 最新旗舰
       "glm-4.6-flash",    // 轻量
+      "glm-4.5-flash",    // 免费档
       "glm-4.5",
-      "glm-4.5-flash",
       "glm-4-plus",       // 老旗舰
       "glm-4-flash"
     ],
-    note: "glm-4.6 最新；flash 系列免费",
+    note: "glm-5.3-flash 最新闪速版；glm-4.6 旗舰；glm-4.5-flash 免费。thinking 参数由应用自动适配（默认关闭思考）",
     apiKeyUrl: "https://open.bigmodel.cn/usercenter/apikeys",
     visionModels: ["glm-4.5v"]
   },

@@ -991,14 +991,14 @@ export function serializeProblem(p: ProblemAnalysis): string;
 | 解析 | `resolveModel(config, role)` 的 role 联合类型加 `"vision"` → `config.visionModel ?? config.model` |
 | 预置 | `ProviderPreset` 新增可选 `visionModels?: string[]`（候选见下表；**实现时按各官方文档逐一核对模型名**，模型清单变化快） |
 | UI | SettingsDialog「高级：角色专用模型」内新增「视觉模型（题目识别）」行，完全复用 轻量/Agent 的 state + customMode + buildConfig 三件套；选项 = 跟随主力模型 + `preset.visionModels` + 自定义 |
-| hint 文案 | "用于题目图片识别，需支持图片输入。DeepSeek 可选 deepseek-v4-flash-vision-exp；留空跟随主力模型（须为多模态模型）" |
+| hint 文案 | "用于题目图片识别，需支持图片输入。DeepSeek 的 deepseek-flash（V4.1）原生多模态，视觉角色可直接跟随主力；留空时主力须为多模态模型" |
 | 测试连接 | `ping(config, signal?, modelOverride?)` 增加可选模型覆盖；配置了 `visionModel` 时，`onTest` 在主力模型之外追加一次视觉模型 ping，结果分别展示（文本 ping 只验证模型存在可调用，图片能力以首次使用为准） |
 
 Provider 视觉模型候选（待核对）：
 
 | Provider | `visionModels` 候选 | 备注 |
 |---|---|---|
-| DeepSeek | `deepseek-v4-flash-vision-exp` | 视觉理解实验版 |
+| DeepSeek | `deepseek-flash`（V4.1 Flash 原生多模态；旧 `deepseek-v4-flash-vision-exp` 已下线，暂路由兼容） |
 | 智谱 GLM | `glm-4.5v` | 视觉理解 |
 | Moonshot | 未预置（可在「自定义」手填） | providers.ts 未含 Moonshot 视觉候选，以控制台实时清单为准 |
 | OpenAI | `gpt-4o` / `gpt-4.1` | 主力本身多模态，也可留空跟随主力 |
@@ -1319,12 +1319,13 @@ persist v3→v4：`visionModel` 为可选字段，**无字段迁移逻辑**，mi
 
 | 角色 | 推荐模型 | 思考深度 |
 |---|---|---|
-| 主力模型 | `deepseek-v4-pro` | — |
-| 轻量模型 | `deepseek-v4-flash` | — |
-| Agent 模型 | `deepseek-v4-pro` | 留空（关闭）或低 |
-| 视觉模型 | `deepseek-v4-flash-vision-exp` | — |
+| 主力模型 | `deepseek-flash`（V4.1） | — |
+| 轻量模型 | `deepseek-flash` | — |
+| Agent 模型 | `deepseek-flash` | 留空（关闭）或低 |
+| 视觉模型 | 留空跟随主力（V4.1 原生多模态） | — |
 
-> 视觉模型必须显式配置——`deepseek-v4-pro/flash` 不支持图片输入，留空回退会导致识别阶段 4xx 错误。
+> 2026-09 DeepSeek 更新：V4.1 Flash（`deepseek-flash`）原生多模态，官方宣布性能/费用/速度全面超越 V4 Pro；`deepseek-v4-pro` 于 2026-09-14 12:00 后强制路由到 V4.1 Flash 计费；旧模型名（v4-flash / v4-flash-vision-exp）暂时路由兼容。V4.1 实测默认开启思考（reasoning_content），AiGGB 未设置思考深度时 DeepSeek 路径不发参数（baseline 语义，如需关闭请关注后续适配）。
+> 旧版说明（V4 时代）：视觉模型必须显式配置——`deepseek-v4-pro/flash` 不支持图片输入，留空回退会导致识别阶段 4xx 错误。V4.1 起此限制解除。
 
 ---
 
@@ -1334,7 +1335,7 @@ persist v3→v4：`visionModel` 为可选字段，**无字段迁移逻辑**，mi
 
 1. 打开应用（开发模式 `npm run dev`，或安装为 PWA 后从桌面启动） → 顶栏弹出 **API 设置面板**
 2. 用户选择 Provider 预设（或自填 baseURL）
-3. 粘贴 API Key、选择模型名（如 `deepseek-v4-pro` / `deepseek-v4-flash`）
+3. 粘贴 API Key、选择模型名（如 `deepseek-flash` / `glm-4.6`）
 4. 点击「测试连接」→ 通过则保存到 localStorage
 5. 引导提示："你也可以将本应用安装到桌面（菜单 → 安装 AiGGB）"
 
@@ -1424,8 +1425,8 @@ AI: {
   "provider": "deepseek",
   "baseURL": "https://api.deepseek.com",
   "apiKey": "sk-...",
-  "model": "deepseek-v4-pro",
-  "visionModel": "deepseek-v4-flash-vision-exp",
+  "model": "deepseek-flash",
+  "visionModel": "deepseek-flash",
   "temperature": 0.2
 }
 ```
@@ -1437,7 +1438,7 @@ AI: {
 
 | Provider | baseURL | 代表模型 | 浏览器直连 |
 |---|---|---|---|
-| DeepSeek | `https://api.deepseek.com` | `deepseek-v4-pro` / `deepseek-v4-flash` | ✅ |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-flash`（V4.1）/ `deepseek-v4-pro`（过渡期兼容） | ✅ |
 | Moonshot (Kimi) | `https://api.moonshot.cn/v1` | `kimi-k2-0905-preview` / `kimi-latest` / `moonshot-v1-128k` | ✅ |
 | 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` / `glm-4.6-flash` / `glm-4.5` | ✅ |
 | SiliconFlow | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V3` / `Qwen/Qwen2.5-72B-Instruct` | ✅ |
@@ -1849,7 +1850,7 @@ Authorization: Bearer {apiKey}
 Content-Type: application/json
 
 {
-  "model": "deepseek-v4-pro",
+  "model": "deepseek-flash",
   "messages": [
     { "role": "system", "content": "<见 prompts.js>" },
     { "role": "user", "content": "画一个单位圆并让 P 在上面动起来" }

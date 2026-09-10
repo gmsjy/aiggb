@@ -38,9 +38,9 @@ npm run dev        # → http://localhost:5173
 | 设置项 | 值 |
 |---|---|
 | Provider | DeepSeek |
-| 模型（主力） | `deepseek-v4-pro`（复杂动图）或 `deepseek-v4-flash`（日常） |
-| 轻量模型（精炼/评估，可选） | `deepseek-v4-flash` |
-| 视觉模型（题目识别，可选） | `deepseek-v4-flash-vision-exp` |
+| 模型（主力） | `deepseek-flash`（V4.1 Flash，原生多模态，推荐） |
+| 轻量模型（精炼/评估，可选） | 留空跟随主力 |
+| 视觉模型（题目识别，可选） | 留空跟随主力（V4.1 原生多模态） |
 | API Key | `sk-...`（从 [platform.deepseek.com](https://platform.deepseek.com/api_keys) 获取） |
 
 点「测试连接」通过后保存，即可开始对话。
@@ -95,7 +95,7 @@ AI 逐步调用工具（创建点/滑块/矢量/执行命令/查询对象…）�
 
 | Provider | 视觉模型候选 |
 |---|---|
-| DeepSeek | `deepseek-v4-flash-vision-exp` |
+| DeepSeek | `deepseek-flash`（V4.1 原生多模态） |
 | 智谱 GLM | `glm-4.5v` |
 | SiliconFlow | `Qwen/Qwen2.5-VL-72B-Instruct` |
 | OpenAI | `gpt-4o` / `gpt-4.1` |
@@ -265,18 +265,18 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
 
 | Provider | baseURL | 推荐模型 |
 |---|---|---|
-| **DeepSeek** | `https://api.deepseek.com` | `deepseek-v4-pro` / `v4-flash` |
+| **DeepSeek** | `https://api.deepseek.com` | `deepseek-flash`（V4.1，推荐）/ `deepseek-v4-pro`（过渡兼容） |
 | Moonshot (Kimi) | `https://api.moonshot.cn/v1` | `kimi-k2-0905-preview` |
 | 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` / `glm-4.6-flash` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V3` |
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o` / `gpt-4.1` |
 | Ollama 本地 | `http://localhost:11434/v1` | `qwen2.5:7b` 等 |
 
-> 日常推荐 `deepseek-v4-flash`（快、便宜）；复杂动图 + 3D 切 `deepseek-v4-pro`。轻量模型用于 Phase 1 精炼和满足度评估（建议 v4-flash）。
+> 日常推荐 `deepseek-flash`（V4.1 Flash：原生多模态，官方宣布性能/费用/速度全面超越 V4 Pro；旧 v4-pro 将于 2026-09-14 后强制路由到 V4.1 Flash 计费）。轻量模型用于 Phase 1 精炼和满足度评估，可留空跟随主力。
 
 > 💡 **四类角色模型**（设置 → 高级，均可留空跟随主力）：轻量模型（精炼/评估）、Agent 模型（工具调用代理）、**视觉模型（题目图片识别，需支持图片输入）**。各 provider 视觉候选见「多模态题目识别」章节。
 
-> 💡 **思考深度（Thinking）**：设置面板高级区可调 V4 思考深度（跟随默认 / 低 / 中 / 高），对编译/评估/Agent 均发送 `reasoning_effort`。**默认关闭**——A/B 实测（N=10×6）显示 `high` 在 v4-flash 上端到端 −8.3%，无 token/延迟收益，不建议开启。Agent 模式仍会实时展示模型思考过程（`🧠` 气泡）。
+> 💡 **思考深度（Thinking）**：设置面板高级区可调思考深度（跟随默认 / 低 / 中 / 高）。**默认关闭**——A/B 实测（N=10×6）显示 `high` 在 v4-flash 上端到端 −8.3%，无 token/延迟收益，不建议开启。Agent 模式仍会实时展示模型思考过程（`🧠` 气泡）。
 
 ---
 
