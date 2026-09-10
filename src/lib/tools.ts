@@ -472,7 +472,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     type: "function",
     function: {
       name: "eval_sequence",
-      description: "生成序列对象列表。用于批量创建对象网格（如电场箭头、采样点）。expr 是含循环变量的表达式，var 是循环变量名。⚠ 可能产生大量对象。",
+      description:
+        "生成序列对象列表。用于批量创建对象网格（如电场箭头、采样点）。" +
+        "expr 是含循环变量的表达式，var 是循环变量名。⚠ 可能产生大量对象。" +
+        "★ 最终形态为 name = Sequence(expr, var, start, end, step)：var 必须是单个 ASCII 字母（i/j/k/t/n）；" +
+        "start/end/step 各自是单个数值（不可写成 \"0,1,0.1\"）；expr 内所有括号必须闭合，嵌套网格请在 expr 里再写一个 Sequence 并用不同字母做内层变量。",
       parameters: { type: "object", ...toJsonSchema(EvalSequenceArgs) },
     },
     safety: "dangerous",

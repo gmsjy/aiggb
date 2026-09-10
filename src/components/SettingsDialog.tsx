@@ -6,6 +6,7 @@ import { X, ExternalLink, ShieldAlert } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import { PROVIDER_PRESETS, findProvider } from "../lib/providers";
 import { ping, AIError, type AIConfig } from "../lib/aiClient";
+import { isBatch3DEnabled, setBatch3DEnabled } from "../lib/repaintGate";
 import { TokenUsageChart } from "./TokenUsageChart";
 import { fmtTokens } from "../lib/format";
 
@@ -42,10 +43,16 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
   const [lightModel, setLightModel] = useState<string>(existing?.lightModel ?? existing?.flashModel ?? "");
   const [agentModel, setAgentModel] = useState<string>(existing?.agentModel ?? "");
   const [visionModel, setVisionModel] = useState<string>(existing?.visionModel ?? "");
-  // ★ 思考深度（V4 reasoning_effort；留空 = 不发参数 = baseline）
-  const [reasoningEffort, setReasoningEffort] = useState<"low" | "medium" | "high" | "">(
+  // ★ 思考深度（V4 reasoning_effort；留空 = 不发参数 = 仍会思考，none = 显式关闭）
+  const [reasoningEffort, setReasoningEffort] = useState<"none" | "low" | "medium" | "high" | "">(
     existing?.reasoningEffort ?? ""
   );
+  // ★ 输出预算（max_tokens；留空 = 自动：16384 / 思考模式 32768）
+  const [maxOutputTokens, setMaxOutputTokens] = useState<string>(
+    existing?.maxOutputTokens ? String(existing.maxOutputTokens) : ""
+  );
+  // ★ 3D 批量重绘开关（画布渲染策略，存 localStorage，不改 AIConfig）
+  const [batch3D, setBatch3D] = useState<boolean>(() => isBatch3DEnabled());
 
   const preset = findProvider(providerId);
 
@@ -80,17 +87,21 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
     }
   };
 
-  const buildConfig = (): AIConfig => ({
-    provider: providerId,
-    baseURL: baseURL.trim(),
-    apiKey: apiKey.trim(),
-    model: model.trim(),
-    temperature,
-    reasoningEffort: reasoningEffort || undefined,
-    lightModel: lightModel.trim() || undefined,
-    agentModel: agentModel.trim() || undefined,
-    visionModel: visionModel.trim() || undefined,
-  });
+  const buildConfig = (): AIConfig => {
+    const parsedMax = Number.parseInt(maxOutputTokens.trim(), 10);
+    return {
+      provider: providerId,
+      baseURL: baseURL.trim(),
+      apiKey: apiKey.trim(),
+      model: model.trim(),
+      temperature,
+      reasoningEffort: reasoningEffort || undefined,
+      maxOutputTokens: Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : undefined,
+      lightModel: lightModel.trim() || undefined,
+      agentModel: agentModel.trim() || undefined,
+      visionModel: visionModel.trim() || undefined,
+    };
+  };
 
   const onTest = async () => {
     const cfg = buildConfig();
@@ -375,16 +386,55 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
               <span>思考深度 (Thinking)</span>
               <select
                 value={reasoningEffort}
-                onChange={e => setReasoningEffort(e.target.value as "low" | "medium" | "high" | "")}
+                onChange={e => setReasoningEffort(e.target.value as "none" | "low" | "medium" | "high" | "")}
               >
-                <option value="">跟随 provider 默认（关闭）</option>
+                <option value="none">关闭（思考不占输出预算）</option>
+                <option value="">跟随 provider 默认（V4.1 仍会思考）</option>
                 <option value="low">低</option>
                 <option value="medium">中</option>
                 <option value="high">高</option>
               </select>
               <small className="hint">
-                V4 思考深度（reasoning_effort）。默认关闭；开启后编译/评估/Agent 均发送该参数，
-                提升质量但增加 token 成本与延迟。用 <code>npm run test:ab</code> 可对比开启前后效果。
+                V4 思考深度（reasoning_effort）。<strong>思考 token 与正文共享 max_tokens</strong>
+                （服务端统一计入 completion tokens，客户端无法剔除），实测 baseline 下一次简单构造
+                就有 <strong>90% 的输出 token 花在推理上</strong>。「关闭」= 发
+                <code>reasoning_effort: "none"</code>，实测推理归零、全部预算留给正文与工具调用
+                （GLM 走 <code>thinking.type=disabled</code>）；代价是复杂构造的质量可能下降。
+              </small>
+            </label>
+            <label>
+              <span>输出预算 (max_tokens)</span>
+              <input
+                type="number"
+                min={1024}
+                step={1024}
+                placeholder="留空 = 自动（16384 / 思考 32768）"
+                value={maxOutputTokens}
+                onChange={e => setMaxOutputTokens(e.target.value)}
+              />
+              <small className="hint">
+                单次回复的最大输出 token（思维链 + 正文共享）。这是上限而非计费量，调高不额外花钱。
+                Agent 模式截断失败时会自动扩容 2 倍并降一档思考重试一次。
+              </small>
+            </label>
+            <label>
+              <span>3D 批量重绘</span>
+              <select
+                value={batch3D ? "on" : "off"}
+                onChange={e => {
+                  const on = e.target.value === "on";
+                  setBatch3D(on);
+                  setBatch3DEnabled(on);
+                }}
+              >
+                <option value="on">开启（代数区不逐条重建）</option>
+                <option value="off">关闭（3D 绘图区更平滑）</option>
+              </select>
+              <small className="hint">
+                批量重绘 = 暂停重绘 → 整批执行 → 恢复重绘（一次渲染）。
+                开启可避免<strong>代数区</strong>逐条重建闪烁，但 3D 恢复重绘时会整屏重建
+                WebGL canvas（表现为 3D 绘图区闪一下）；关闭则相反。
+                **任何非空批次都会批处理**（含单条命令，其内部常展开为多条 GGB 命令）；切换后立即生效（存 localStorage）。
               </small>
             </label>
           </details>

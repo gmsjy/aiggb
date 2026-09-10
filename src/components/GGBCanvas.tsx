@@ -12,11 +12,17 @@ import { useEffect, useRef } from "react";
 import { useAppStore } from "../store/useAppStore";
 import { resetTmpIds, applyCanvasConfig } from "../lib/ggbBridge";
 import { restoreSnapshot } from "../lib/pipeline";
+import { isRepaintBusy, markRepaintBusy, isDiagVerbose } from "../lib/repaintGate";
 import type { GGBAppletApi } from "../types/ggb";
 
 const CONTAINER_ID = "ggb-container";
 const RETRY_INTERVAL = 100;
 const REBUILD_DEBOUNCE = 350;
+/** 尺寸变化的稳定等待（ms）：CSS grid 过渡（0.2s）期间会连续触发 ResizeObserver，
+ *  逐帧 setSize 会让 GGB 反复重排 3D 视图 → 抖动/闪烁，故合并为一次 */
+const RESIZE_SETTLE = 220;
+/** 画布消失的连续确认次数（心跳间隔 2s）：单次检出可能只是重绘瞬时空白 */
+const CANVAS_LOST_STRIKES = 2;
 
 export function GGBCanvas() {
   const setGGBApi = useAppStore(s => s.setGGBApi);
@@ -32,9 +38,11 @@ export function GGBCanvas() {
     let active = true; // 本代次是否仍有效
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null; // 尺寸稳定防抖
     let loadTimer: ReturnType<typeof setTimeout> | null = null; // applet 加载超时守卫
     const webglCleanups: Array<() => void> = []; // WebGL 事件监听清理函数
     const mode = ggbAppName; // 固定本代次的目标模式
+    const diagVerbose = isDiagVerbose(); // 逐节点 DOM 日志开关（默认关）
 
     /** 取消挂起的加载超时守卫（成功加载 / 切代次时调用） */
     const clearLoadTimer = () => {
@@ -42,6 +50,18 @@ export function GGBCanvas() {
         clearTimeout(loadTimer);
         loadTimer = null;
       }
+    };
+
+    /**
+     * 测量画布可用尺寸（v1.8）。
+     * ★ 必须量「宿主元素（.ggb-host）」而不是 #ggb-container：GGB 注入时会往容器上写
+     *   内联 width/height，销毁子节点后这些内联尺寸**仍然残留**——直接量容器会拿到
+     *   上一次的陈旧尺寸（实测：注入 1137×670，而面板实际 1168×332 → 画布错位/空白）。
+     */
+    const measureHost = (): { w: number; h: number } => {
+      const host = (containerEl.parentElement as HTMLElement | null) ?? containerEl;
+      const r = host.getBoundingClientRect();
+      return { w: Math.floor(r.width), h: Math.floor(r.height) };
     };
 
     const inject = (w: number, h: number, force = false) => {
@@ -118,6 +138,8 @@ export function GGBCanvas() {
             if (!active) return; // 已切换模式，忽略过期 applet 的回调
             resetTmpIds(); // 新画布：临时对象名从头开始
             setGGBApi(api);
+            // ★ 刚注入/重建：canvas 尚在建立，心跳不应在此期间判定"画布消失"
+            markRepaintBusy();
             // ★ 画布符号表同步：监听对象增删/更新，供 Phase 2 编译注入画布状态
             const refreshSymbols = () => {
               try {
@@ -143,6 +165,22 @@ export function GGBCanvas() {
             injectingRef.current = false;
             clearLoadTimer(); // 加载成功：取消超时守卫
             console.log("[AiGGB] " + mode + " loaded");
+
+            // ★ 尺寸对账（v1.8）：重建时注入的尺寸可能取自容器残留的内联尺寸（陈旧），
+            //   实测注入 1137×670 而真实面板只有 1168×332 → 画布错位/大片空白。
+            //   加载完成后按真实宿主尺寸校正一次（GGB 的 setSize 保留对象，不重建）。
+            try {
+              const host = (containerEl.parentElement as HTMLElement | null) ?? containerEl;
+              const r = host.getBoundingClientRect();
+              const aw = Math.floor(r.width), ah = Math.floor(r.height);
+              if (aw > 0 && ah > 0 && (Math.abs(aw - w) > 8 || Math.abs(ah - h) > 8)) {
+                console.warn(`[AiGGB:DIAG] 尺寸对账: 注入 ${w}x${h} → 实际 ${aw}x${ah}，调用 setSize 校正`);
+                const apiAny = api as unknown as { setSize?: (w: number, h: number) => void };
+                if (typeof apiAny.setSize === "function") {
+                  try { apiAny.setSize(aw, ah); lastSizeRef.current = { w: aw, h: ah }; } catch { /* 忽略 */ }
+                }
+              }
+            } catch { /* 测量失败忽略 */ }
 
             // ★ 会话恢复：消费 pendingCanvasSnapshot（initSessionFromStorage /
             //   switchToSession 在模式重建时缓存的画布快照）
@@ -207,9 +245,8 @@ export function GGBCanvas() {
       }
     };
 
-    // 初始注入或 appName 变化时重建
-    const rect = containerEl.getBoundingClientRect();
-    lastSizeRef.current = { w: Math.floor(rect.width), h: Math.floor(rect.height) };
+    // 初始注入或 appName 变化时重建（★ 量宿主尺寸，见 measureHost 注释）
+    lastSizeRef.current = measureHost();
     inject(lastSizeRef.current.w, lastSizeRef.current.h);
 
     const ro = new ResizeObserver(entries => {
@@ -231,12 +268,26 @@ export function GGBCanvas() {
             const objCount = curApi.getObjectNumber();
             console.log("[AiGGB:DIAG] ResizeObserver — getObjectNumber()=", objCount, "size=", w, "x", h);
             if (objCount > 0) {
-              console.log("[AiGGB] ResizeObserver: 同步 GGB 内部尺寸 " + w + "x" + h + "（保留对象，不重建）");
-              const apiAny = curApi as unknown as { setSize?: (w: number, h: number) => void };
-              if (typeof apiAny.setSize === "function") {
-                try { apiAny.setSize(w, h); } catch { /* 忽略 */ }
-              }
-              try { curApi.refreshViews(); } catch { /* 忽略 */ }
+              // ★ 防抖：等尺寸稳定后再同步（CSS grid 过渡期间会连续回调，
+              //    逐帧 setSize + refreshViews 会让 3D 视图反复重排 → 闪烁）
+              if (resizeTimer !== null) clearTimeout(resizeTimer);
+              resizeTimer = setTimeout(() => {
+                resizeTimer = null;
+                if (!active) return;
+                const { w: sw, h: sh } = lastSizeRef.current;
+                const liveApi = useAppStore.getState().ggbApi;
+                if (!liveApi) return;
+                console.log("[AiGGB] ResizeObserver: 同步 GGB 内部尺寸 " + sw + "x" + sh + "（保留对象，不重建）");
+                const apiAny = liveApi as unknown as { setSize?: (w: number, h: number) => void };
+                if (typeof apiAny.setSize === "function") {
+                  try { apiAny.setSize(sw, sh); } catch { /* 忽略 */ }
+                }
+                // ★ 3D 下不再调用 refreshViews()：size 变更本身已触发重绘，
+                //    额外 refreshViews 会再做一次整屏重绘（闪烁放大器）
+                if (mode !== "3d") {
+                  try { liveApi.refreshViews(); } catch { /* 忽略 */ }
+                }
+              }, RESIZE_SETTLE);
               return;
             }
           } catch (err) {
@@ -261,6 +312,10 @@ export function GGBCanvas() {
     // ★★★ DIAGNOSTIC: MutationObserver 监控画布容器 DOM 变化 ★★★
     //    任何子元素增删 + 属性变化都会记录，用于定位画布DOM是否被谁移除了
     const domMo = new MutationObserver((mutations) => {
+      // ★ 逐节点日志默认静音：MutationObserver 回调里做字符串拼接 + console.warn 本身
+      //    就是可观的同步开销（绘图时这类 DOM 变更成百上千次），会加重卡顿。
+      //    需要排查时在控制台执行：localStorage.setItem("aiggb_diag","1") 后刷新。
+      if (!diagVerbose) return;
       for (const m of mutations) {
         if (m.type === "childList") {
           const removed = m.removedNodes.length;
@@ -295,6 +350,7 @@ export function GGBCanvas() {
 
     // ★★★ 心跳监控 + 自动恢复 ★★★
     let canvasCount = 0;
+    let blankStrikes = 0;           // 连续检出 canvas=0 的次数（二次确认，避免误判重建）
     let recoveryInProgress = false; // 恢复进行中不重复计数
     let dockGlassPaneSeen = false;  // DockGlassPane 出现 → 跳过软恢复直接硬重建
     const heartbeat = setInterval(() => {
@@ -307,6 +363,15 @@ export function GGBCanvas() {
         console.warn(`[AiGGB:DIAG] 心跳: canvas ${canvasCount}→${newCount}` +
           (hasDockGlassPane ? " ⚠DockGlassPane!" : ""), sizes);
         canvasCount = newCount;
+      }
+
+      // ★ 剪裁重绘静默期：批处理 setRepaintingActive(true) / applet 刚重建后，GGB 会做
+      //    整屏重绘并重建 WebGL canvas——此窗口内的 canvas=0 是正常过渡，不是"画布消失"。
+      //    若不挂起，心跳会立刻硬重建 applet（visibility:hidden → inject → setBase64），
+      //    用户看到的就是"绘图时闪一下 + 停顿"。
+      if (isRepaintBusy()) {
+        blankStrikes = 0;
+        return;
       }
 
       // canvas 恢复 → 重置一切
@@ -327,11 +392,21 @@ export function GGBCanvas() {
       if (objCount === 0 && newCount === 0) {
         dockGlassPaneSeen = false;
         recoveryInProgress = false;
+        blankStrikes = 0;
         return;
       }
 
+      // ★ 二次确认：尺寸变更 / 重绘瞬间也可能读到 canvas=0，连续 CANVAS_LOST_STRIKES 次
+      //   才认定真的失去画布，避免把正常过渡误判成故障而触发硬重建
+      if (objCount > 0 && newCount === 0) {
+        blankStrikes++;
+      } else {
+        blankStrikes = 0;
+      }
+      const canvasLost = blankStrikes >= CANVAS_LOST_STRIKES;
+
       // 有对象但无 canvas + DockGlassPane → 立即硬重建（AG→3d 软恢复本身也触发闪烁，跳过）
-      if (objCount > 0 && newCount === 0 && hasDockGlassPane && !recoveryInProgress && !dockGlassPaneSeen) {
+      if (canvasLost && hasDockGlassPane && !recoveryInProgress && !dockGlassPaneSeen) {
         recoveryInProgress = true;
         dockGlassPaneSeen = true;
         console.error(`[AiGGB:DIAG] ⚠ DockGlassPane 导致画布消失 (${objCount}对象) → 保存快照并重建 applet`);
@@ -342,8 +417,12 @@ export function GGBCanvas() {
         let snapshot: string | null = null;
         const doRebuild = () => {
           if (!containerEl) return;
-          const rect = containerEl.getBoundingClientRect();
-          inject(Math.floor(rect.width), Math.floor(rect.height), true); // force
+          // ★ 清掉 GGB 写在容器上的陈旧内联尺寸，否则量到的是上一次的尺寸
+          //   （实测：注入 1137×670，而面板实际 1168×332 —— 例如打开 DevTools 缩小视口后）
+          containerEl.style.width = "";
+          containerEl.style.height = "";
+          const { w: bw, h: bh } = measureHost();
+          inject(bw, bh, true); // force
           // 重建后恢复快照
           if (snapshot) {
             const tryRestore = () => {
@@ -386,13 +465,15 @@ export function GGBCanvas() {
       }
 
       // 有对象但无 canvas (非 DockGlassPane) → 常规软恢复
-      if (objCount > 0 && newCount === 0 && !hasDockGlassPane && !recoveryInProgress) {
+      if (canvasLost && !hasDockGlassPane && !recoveryInProgress) {
         recoveryInProgress = true;
+        blankStrikes = 0;
         console.warn(`[AiGGB:DIAG] ⚠ 画布消失 (${objCount}对象, 非DockGlassPane) → 尝试 refreshViews`);
         try { api.refreshViews(); } catch { /* ignore */ }
         setTimeout(() => {
           try { api.setRepaintingActive(true); } catch { /* ignore */ }
           try { api.setPerspective(mode === "3d" ? "3d" : "AG"); } catch { /* ignore */ }
+          markRepaintBusy(); // 软恢复同样会整屏重绘 → 进入静默期
           recoveryInProgress = false;
         }, 300);
       }
@@ -403,6 +484,7 @@ export function GGBCanvas() {
       active = false;              // 作废本代次：pending retry/rebuild/inject 全部失效
       if (retryTimer !== null) clearTimeout(retryTimer);
       if (rebuildTimer !== null) clearTimeout(rebuildTimer);
+      if (resizeTimer !== null) clearTimeout(resizeTimer);
       clearLoadTimer();           // 取消加载超时守卫
       ro.disconnect();
       domMo.disconnect();

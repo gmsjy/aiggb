@@ -13,6 +13,8 @@ import { TOOL_SCHEMAS } from "./tools";
 import { GGB_FORBIDDEN_COMMANDS } from "./commands";
 import { hexToRgb, fitViewToAspect } from "./ggbBridge";
 import { correctCommand } from "./commandCorrect";
+import { validateGGBCommand, validateSequenceArgs } from "./commandValidate";
+import { shouldBatch, markRepaintBusy } from "./repaintGate";
 import { PHYSICS_CONSTANTS } from "./physics";
 
 // ──── 结果类型 ────
@@ -86,11 +88,10 @@ export function executeToolCalls(
   calls: ToolCallRequest[],
   appMode?: "2d" | "3d"
 ): ToolResult[] {
-  // ★ 批量执行：暂停重绘 → 逐条 → 恢复（2D/3D 统一）。
-  //    旧版曾对 3D 禁用 batch 防 DockGlassPane，升级到 5.4.927.1 后已不复发，
-  //    而禁用 batch 会导致代数区逐条重建闪烁（见 ggbBridge.executeCommands 注释）。
-  void appMode;
-  const useBatch = calls.length > 2;
+  // ★ 批量执行：暂停重绘 → 逐条 → 恢复（策略见 repaintGate.shouldBatch）。
+  //    实测证据：不批处理时每条命令都会让代数区（avOutput / avDefinition / canvasDef）
+  //    逐行重建，就是用户看到的绘图闪烁。任何非空批次都批处理；3D 可由用户关闭。
+  const useBatch = shouldBatch(calls.length, appMode);
   if (useBatch) {
     api.setRepaintingActive(false);
   }
@@ -99,6 +100,8 @@ export function executeToolCalls(
   } finally {
     if (useBatch) {
       api.setRepaintingActive(true);
+      // ★ 恢复重绘后进入静默期，避免心跳把 GGB 整屏重绘的瞬时空白误判为画布消失
+      markRepaintBusy();
     }
   }
 }
@@ -375,15 +378,15 @@ function dispatch(
         changes.push(`网格=${showGrid}`);
       }
       if (perspective === "3d") {
-        api.enable3D(true);
-        // ★ 检测当前是否已是 3D 视图——重复 setPerspective("3d") 可能触发
-        //    GGB 内部 DockGlassPane 接管视图过度、导致 3D iframe 被销毁。
-        //    仅在非 3D 时才切换透视，避免无意义触发 GGB 内部布局 bug。
+        // ★ v1.8：**不在运行时切换透视**。
+        //    实测日志（[AiGGB:DIAG]）：classic 画布下 setPerspective("3d") 会触发 GGB
+        //    内部视图过渡（DockGlassPane 接管），动画不完成时 canvas 全部消失 →
+        //    心跳被迫硬重建 applet（销毁 + 重注入 + 快照恢复），用户看到明显闪烁。
+        //    2D↔3D 的正规路径是工具栏切换 → switchAppletMode → 整体重注入 applet。
         const already3D = api.getPerspectiveXML?.()?.includes("3D");
-        if (!already3D) {
-          api.setPerspective("3d");
-        }
-        changes.push("3D 透视");
+        changes.push(already3D
+          ? "3D 透视（已是 3D）"
+          : "⚠ 当前是 2D 画布，未切换 3D 透视（运行时切透视会导致绘图区闪烁）——如需 3D 请用工具栏切到 3D 模式后重发");
       }
       return changes.length ? `视图已更新：${changes.join("，")}` : "视图未更改（无有效参数）";
     }
@@ -429,10 +432,16 @@ function dispatch(
       const { name: n, expr, var: loopVar, start, end, step } = args as {
         name: string; expr: string; var: string; start: number | string; end: number | string; step: number | string;
       };
+      // ★ 参数级静态预检：循环变量必须是单个字母、区间必须是独立数值（最高频失败点）
+      const argProblem = validateSequenceArgs({ name: n, expr, var: loopVar, start, end, step });
+      if (argProblem) throw new Error(argProblem);
       const cmd = `${n} = Sequence(${expr}, ${loopVar}, ${start}, ${end}, ${step})`;
       // RAG 纠正：Levenshtein 模糊修正命令名
       const correction = correctCommand(cmd);
       const finalCmd = correction.changed ? correction.corrected : cmd;
+      // ★ 命令级静态预检：括号配对 / 逗号误写 / 参数个数
+      const check = validateGGBCommand(finalCmd);
+      if (!check.ok) throw new Error(check.message);
       const ok = api.evalCommand(finalCmd);
       if (!ok) throw new Error(`Sequence 执行失败：${finalCmd}`);
       const note = correction.changed
@@ -446,6 +455,9 @@ function dispatch(
       // RAG 纠正：Levenshtein 模糊修正 + 臆造命令映射
       const correction = correctCommand(command);
       const finalCmd = correction.changed ? correction.corrected : command;
+      // ★ 静态语法预检：接住 GGB 引擎只会回 false 的语法错误（括号/逗号/参数个数）
+      const check = validateGGBCommand(finalCmd);
+      if (!check.ok) throw new Error(check.message);
       const ok = api.evalCommand(finalCmd);
       if (!ok) throw new Error(`命令执行失败：${finalCmd}`);
       const note = correction.changed

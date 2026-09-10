@@ -11,7 +11,7 @@
     "deploy": "npm run build && gh-pages -d dist",
     "deploy:retry": "node scripts/deploy-until-published.mjs",
     "lint": "eslint .",
-    "test:unit": "node --test --import tsx tests/specCache.test.ts tests/pipeline.test.ts tests/ggbBridge.test.ts tests/ggbKB.test.ts tests/toolExecutor.test.ts tests/agentLoop.test.ts tests/agentSmoke.test.ts tests/satisfactionEval.test.ts tests/sessionStore.test.ts tests/trainingStore.test.ts tests/trajectory-replay.test.ts tests/trapStore.test.ts tests/runControl.test.ts tests/problemSchema.test.ts tests/imageInput.test.ts tests/aiClient.test.ts",
+    "test:unit": "node --test --import tsx tests/specCache.test.ts tests/pipeline.test.ts tests/ggbBridge.test.ts tests/ggbKB.test.ts tests/toolExecutor.test.ts tests/commandValidate.test.ts tests/agentLoop.test.ts tests/agentSmoke.test.ts tests/satisfactionEval.test.ts tests/sessionStore.test.ts tests/trainingStore.test.ts tests/trajectory-replay.test.ts tests/trapStore.test.ts tests/runControl.test.ts tests/problemSchema.test.ts tests/imageInput.test.ts tests/aiClient.test.ts tests/repaintGate.test.ts",
     "test:replay": "tsx tests/runner.ts",
     "test:trajectory": "tsx tests/trajectory-replay.ts",
     "test:e2e": "tsx tests/euclid-e2e.ts",

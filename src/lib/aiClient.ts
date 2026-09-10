@@ -27,9 +27,47 @@ export interface AIConfig {
   /** @deprecated 使用 lightModel 代替；迁移后保留用于向前兼容 */
   flashModel?: string;
   temperature?: number;
-  /** 思考深度（V4 通过 reasoning_effort 控制）。仅对支持 thinking 的 provider 生效；
-   *  留空 = 不发该参数（provider 默认 / baseline），用于 A/B 对比 */
-  reasoningEffort?: "low" | "medium" | "high";
+  /** 思考深度。"none" = 显式关闭思考（实测 deepseek-flash 支持，推理字段归零）；
+   *  low/medium/high = DeepSeek reasoning_effort 档位；留空 = 不发该参数（provider 默认） */
+  reasoningEffort?: "none" | "low" | "medium" | "high";
+  /**
+   * 单次输出预算（max_tokens / max_completion_tokens）。留空 = 按是否 thinking 取默认
+   * （DEFAULT_OUTPUT_TOKENS / THINKING_OUTPUT_TOKENS）。
+   * ★ V4.1 Flash 默认思考，reasoning 与正文【共享】该预算：预算被思考吃光时正文与工具
+   *   调用都会为空（finish_reason="length"）→ 复杂 3D 任务建议 32768。
+   */
+  maxOutputTokens?: number;
+}
+
+// ──── 输出预算（max_tokens）────
+
+/** 默认输出预算（思维链与正文共享） */
+export const DEFAULT_OUTPUT_TOKENS = 16384;
+/** thinking 模式下的默认输出预算（reasoning 增量大，需额外空间） */
+export const THINKING_OUTPUT_TOKENS = 32768;
+/** 自动扩容上限（防止向 provider 申请超大 max_tokens 被拒） */
+export const MAX_OUTPUT_TOKENS = 65536;
+
+/**
+ * 解析本次调用的输出预算。优先级：config.maxOutputTokens（用户配置）> thinking 默认 > 普通默认。
+ * 注意 max_tokens 是【上限】而非计费量——调高不额外花钱，只在实际生成时才计费。
+ */
+export function resolveMaxOutputTokens(config: AIConfig, thinking: boolean): number {
+  const configured = config.maxOutputTokens && config.maxOutputTokens > 0
+    ? Math.floor(config.maxOutputTokens)
+    : 0;
+  if (configured) return configured;
+  return thinking ? THINKING_OUTPUT_TOKENS : DEFAULT_OUTPUT_TOKENS;
+}
+
+/** agentChat 单次调用的参数覆盖（截断重试自动扩容 / 降思考档位用） */
+export interface AgentChatOverrides {
+  /** 直接指定输出预算（优先级最高） */
+  maxTokens?: number;
+  /** 在解析出的预算上乘以倍数（截断重试扩容用）；不会低于原预算，也不超过 MAX_OUTPUT_TOKENS */
+  maxTokensScale?: number;
+  /** 覆盖思考档位；null = 显式关闭思考（GLM 落为 thinking.disabled；缺省沿用 config） */
+  reasoningEffort?: "none" | "low" | "medium" | "high" | null;
 }
 
 /** 解析实际使用的模型（含回退链） */
@@ -123,20 +161,31 @@ export function isZhipuProvider(config: AIConfig): boolean {
 /**
  * 按 provider 构造 thinking 控制参数（chat / chatRaw / agentChat 共用）。
  *
- * - 智谱 GLM：`thinking: { type }`。GLM 4.5+ 默认开启思考，未设置时必须显式
- *   disabled 对齐「默认关闭 = baseline」语义（实测：默认思考会吃光输出预算）；
- *   设置 reasoningEffort（low/medium/high 任一）→ enabled（GLM 无档位，二元开关）。
- * - DeepSeek V4：`reasoning_effort`，仅设置时发送（缺省 = baseline 不发）。
+ * - 智谱 GLM：`thinking: { type }`。GLM 4.5+ 默认开启思考，未设置或 "none" 时必须显式
+ *   disabled 对齐「关闭 = baseline」语义（实测：默认思考会吃光输出预算）；
+ *   设置 low/medium/high → enabled（GLM 无档位，二元开关）。
+ * - DeepSeek V4：`reasoning_effort`。实测 deepseek-flash：
+ *     · 不发该参数 → 仍会思考（baseline 也有 reasoning_content，可占 90% 输出 token）
+ *     · "none"      → 推理归零（唯一真正关闭思考的方式）
+ *     · low/medium/high → 有档位思考
  * - 其他 provider：null（不发任何参数）。
  */
 export function buildThinkingParam(config: AIConfig): Record<string, unknown> | null {
+  const effort = config.reasoningEffort;
+  const thinkingOff = !effort || effort === "none";
   if (isZhipuProvider(config)) {
-    return { thinking: { type: config.reasoningEffort ? "enabled" : "disabled" } };
+    return { thinking: { type: thinkingOff ? "disabled" : "enabled" } };
   }
-  if (config.reasoningEffort && getProviderQuirks(config).supportsThinking) {
-    return { reasoning_effort: config.reasoningEffort };
+  if (effort && getProviderQuirks(config).supportsThinking) {
+    return { reasoning_effort: effort };   // "none" 也被 provider 接受（实测 HTTP 200）
   }
   return null;
+}
+
+/** 是否处于「会思考」状态（"none" / 未设置 / 不支持 thinking 的 provider 均为 false） */
+export function isThinkingEnabled(config: AIConfig): boolean {
+  const effort = config.reasoningEffort;
+  return !!effort && effort !== "none" && getProviderQuirks(config).supportsThinking === true;
 }
 
 /** 多模态内容片段（OpenAI Vision API 兼容格式） */
@@ -183,8 +232,8 @@ export interface AgentResponse {
   finishReason: string | null;
   /** V4 thinking 模式的推理过程（多轮回传用） */
   reasoningContent?: string;
-  /** 本次调用 token 用量（provider 返回 usage 时） */
-  usage?: { prompt: number; completion: number };
+  /** 本次调用 token 用量（provider 返回 usage 时）。reasoning = 其中的思考 token 数 */
+  usage?: { prompt: number; completion: number; reasoning?: number };
 }
 
 // ──── 错误类型 ────
@@ -365,6 +414,10 @@ export async function chat(
     temperature: config.temperature ?? 0.2,
     stream: false
   };
+  // ★ 输出预算：仅在用户显式配置时下发（Phase 2 大命令 JSON 防截断；未配置沿用 provider 默认）
+  if (config.maxOutputTokens && config.maxOutputTokens > 0) {
+    body[getProviderQuirks(config).maxTokensField ?? "max_tokens"] = config.maxOutputTokens;
+  }
 
   // ★ 思考深度：经 buildThinkingParam 按 provider 翻译（DeepSeek=reasoning_effort / GLM=thinking.type）
   const thinking = buildThinkingParam(config);
@@ -456,7 +509,13 @@ interface StreamChunk {
     finish_reason?: string | null;
   }>;
   /** 流式 token 用量（需请求 stream_options.include_usage=true，出现在最后一块） */
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    /** 思考 token 明细（部分 provider 提供，如 DeepSeek：reasoning_tokens） */
+    completion_tokens_details?: { reasoning_tokens?: number } | null;
+  } | null;
 }
 
 /**
@@ -474,10 +533,21 @@ export async function agentChat(
   signal?: AbortSignal,
   modelOverride?: string,
   onContent?: (text: string) => void,
-  onReasoning?: (text: string) => void
+  onReasoning?: (text: string) => void,
+  overrides?: AgentChatOverrides
 ): Promise<AgentResponse> {
   const quirks = getProviderQuirks(config);
   const maxTokField = quirks.maxTokensField ?? "max_tokens";
+  // ★ 输出预算/思考档位可覆盖：截断重试必须改变条件（扩容 + 降档），
+  //   否则同参数重试必然再次被同样截断（见 agentLoop「情况 2」）
+  const reasoningEffort = overrides?.reasoningEffort !== undefined
+    ? overrides.reasoningEffort
+    : config.reasoningEffort;
+  const thinkingOn = !!reasoningEffort && reasoningEffort !== "none" && quirks.supportsThinking === true;
+  const baseBudget = resolveMaxOutputTokens(config, thinkingOn);
+  const scaledBudget = Math.round(baseBudget * (overrides?.maxTokensScale ?? 1));
+  const maxTokens = overrides?.maxTokens
+    ?? Math.max(baseBudget, Math.min(scaledBudget, MAX_OUTPUT_TOKENS));
   const body: Record<string, unknown> = {
     model: modelOverride ?? config.model,
     messages,
@@ -489,10 +559,13 @@ export async function agentChat(
     stream_options: { include_usage: true },
     // 工具 JSON 参数可能较长（create_parametric / eval_raw / eval_sequence），给足空间防截断
     // ★ thinking 模式下 reasoning tokens 也占用输出预算，需额外空间
-    [maxTokField]: (config.reasoningEffort && quirks.supportsThinking) ? 16384 : 8192
+    [maxTokField]: maxTokens
   };
   // ★ 思考深度（Agent 模式同样生效；经 buildThinkingParam 按 provider 翻译）
-  const thinkingParam = buildThinkingParam(config);
+  const thinkingConfig: AIConfig = reasoningEffort === config.reasoningEffort
+    ? config
+    : { ...config, reasoningEffort: reasoningEffort ?? undefined };
+  const thinkingParam = buildThinkingParam(thinkingConfig);
   if (thinkingParam) Object.assign(body, thinkingParam);
 
   const resp = await fetchCompletion(config, body, signal);
@@ -527,7 +600,7 @@ export async function agentChat(
   let reasoningContent = "";
   const toolCalls: ToolCallDelta[] = [];
   let finishReason: string | null = null;
-  let usage: { prompt: number; completion: number } | undefined;
+  let usage: { prompt: number; completion: number; reasoning?: number } | undefined;
 
   const handleLine = (line: string): void => {
     const trimmed = line.trim();
@@ -547,10 +620,12 @@ export async function agentChat(
     if (choiceFinish) finishReason = choiceFinish;
 
     // ★ 捕获流式 usage（include_usage 时在最后一块返回）
+    //   completion_tokens_details.reasoning_tokens = 思考占用的输出 token（与正文共享预算）
     if (chunk.usage) {
       usage = {
         prompt: chunk.usage.prompt_tokens ?? 0,
-        completion: chunk.usage.completion_tokens ?? 0
+        completion: chunk.usage.completion_tokens ?? 0,
+        reasoning: chunk.usage.completion_tokens_details?.reasoning_tokens
       };
     }
 
@@ -603,12 +678,15 @@ export async function agentChat(
 
   const finalToolCalls = toolCalls.filter(tc => tc.function.name.trim().length > 0);
 
-  // ★ 诊断：空响应时记录详细信息便于排查
+  // ★ 诊断：空响应时记录详细信息便于排查（尤以 finish_reason="length" + reasoning
+  //   有量 → 输出预算被思考吃光，见 agentLoop 截断重试）
   if (!content && finalToolCalls.length === 0) {
     console.warn(
       `[agentChat] ${getTraceId()} 空响应: finishReason=${finishReason || "无"}, ` +
       `rawToolCalls=${toolCalls.length}, msgCount=${messages.length}, ` +
-      `model=${modelOverride ?? config.model}`
+      `model=${modelOverride ?? config.model}, ` +
+      `reasoningChars=${reasoningContent.length}, ` +
+      `completionTokens=${usage?.completion ?? "?"}/${maxTokens}（其中推理 ${usage?.reasoning ?? "?"}）`
     );
   }
 
@@ -638,12 +716,15 @@ export async function chatRaw(
     temperature: config.temperature ?? 0.2,
     stream: false
   };
-  if (maxTokens) body.max_tokens = maxTokens;
+
+  // ★ 输出预算：显式参数 > 配置（maxOutputTokens）> JSON 模式默认 4096
+  const effectiveMax = maxTokens ?? (config.maxOutputTokens && config.maxOutputTokens > 0 ? config.maxOutputTokens : undefined);
+  if (effectiveMax) body.max_tokens = effectiveMax;
   if (jsonMode) {
     body.response_format = { type: "json_object" };
     // ★ V4 文档明确要求：json_object 模式需合理设置 max_tokens 防 JSON 被截断
     //    未显式传入时给 4K 默认（Phase 1 规格 / 满足度评估输出均远小于此）
-    if (!maxTokens) body.max_tokens = 4096;
+    if (!body.max_tokens) body.max_tokens = 4096;
   }
   // ★ 思考深度：经 buildThinkingParam 按 provider 翻译（DeepSeek=reasoning_effort / GLM=thinking.type）
   const thinkingParam = buildThinkingParam(config);

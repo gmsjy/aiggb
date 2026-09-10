@@ -12,6 +12,8 @@
  *   - applyCanvasConfig 画布配置（domain 切换时调用）
  */
 import type { Command } from "./schema";
+import { shouldBatch, markRepaintBusy, REPAINT_GRACE_MS } from "./repaintGate";
+import { validateGGBCommand } from "./commandValidate";
 import type { GGBAppletApi } from "../types/ggb";
 import { PHYSICS_CONSTANTS } from "./physics";
 
@@ -123,12 +125,10 @@ function getViewSizePx(api: GGBAppletApi): { w: number; h: number } | null {
 /** 把所有命令逐条执行，失败不停。批量操作期间暂停重绘以提升性能。 */
 export function executeCommands(api: GGBAppletApi, commands: Command[], appMode?: "2d" | "3d"): ExecResult[] {
   // ★ 批量执行：暂停重绘 → 逐条执行 → 恢复重绘（一次性渲染，避免逐条重绘闪烁）
-  //    历史：曾因旧 GGB 5.4.920 的 DockGlassPane 崩溃，对 3D 禁用 batch。
-  //    2026-08 升级到官方 5.4.927.1 bundle 后实测：3D batch 不再触发 DockGlassPane
-  //    （120 条 3D 命令压测 0 事件），且禁用 batch 会导致代数区 canvasDef 逐步重建闪烁。
-  //    故 2D/3D 统一启用 batch。
-  void appMode;
-  const useBatch = commands.length > 3;
+  //    历史：曾因旧 GGB 5.4.920 的 DockGlassPane 崩溃，对 3D 禁用 batch；
+  //    5.4.927.1 起 2D/3D 统一启用（禁用 batch 会导致代数区 canvasDef 逐条重建闪烁）。
+  //    3D 阈值/开关见 repaintGate.shouldBatch（3D 整屏重绘代价高，且可由用户关闭）。
+  const useBatch = shouldBatch(commands.length, appMode);
   // DIAGNOSTIC: 记录 batch 前后的 canvas 数量（仅浏览器）
   const inBrowser = typeof document !== "undefined";
   const canvasBefore = inBrowser
@@ -172,12 +172,15 @@ export function executeCommands(api: GGBAppletApi, commands: Command[], appMode?
     if (useBatch) {
       console.log("[AiGGB:DIAG] setRepaintingActive(true) — 恢复重绘 (可能触发大量 GPU 渲染)");
       api.setRepaintingActive(true);
+      // ★ 恢复重绘后进入静默期：GGB 会做整屏重绘 + 内部布局重组（3D 下可能有几帧
+      //    canvas 空白），期间禁止心跳判定"画布消失"，避免误触硬重建造成二次闪烁
+      markRepaintBusy();
       // ★ DIAGNOSTIC: setRepaintingActive(true) 是已知的 canvas 消失触发点
       const canvasAfter = inBrowser
         ? (document.getElementById("ggb-container")?.querySelectorAll("canvas")?.length ?? -1)
         : -1;
       if (canvasAfter === 0 && canvasBefore > 0) {
-        console.error(`[AiGGB:DIAG] ⚠⚠⚠ setRepaintingActive(true) 后 canvas 从 ${canvasBefore} → 0！GGB 内部渲染容器重建失败！`);
+        console.error(`[AiGGB:DIAG] ⚠⚠⚠ setRepaintingActive(true) 后 canvas 从 ${canvasBefore} → 0！等待 GGB 自建（心跳已挂起 ${REPAINT_GRACE_MS}ms）`);
       } else if (canvasBefore >= 0) {
         console.log(`[AiGGB:DIAG] setRepaintingActive(true) 后 canvas=${canvasAfter} (之前=${canvasBefore})`);
       }
@@ -219,9 +222,21 @@ export function orderCommands(commands: Command[]): Array<{ cmd: Command; idx: n
     .sort((a, b) => (OP_PRIORITY[a.cmd.op] ?? 9) - (OP_PRIORITY[b.cmd.op] ?? 9));
 }
 
+/** 执行一条命令；eval 类命令先做静态语法预检（详见 commandValidate.ts） */
 function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
   const expanded: string[] = [];
   try {
+    if (cmd.op === "eval") {
+      // ★ 静态语法预检：把「Sequence 执行失败」这类无语义的引擎报错，
+      //   换成「具体错在哪 + 正确形态」的诊断，供修复回路精准自愈
+      const rawCmd = (cmd as { cmd: string }).cmd;
+      const check = validateGGBCommand(rawCmd);
+      if (!check.ok) {
+        expanded.push(rawCmd);
+        console.warn("[AiGGB:DIAG] 静态校验拦截 eval 命令：", check.message);
+        return { ok: false, command: cmd, expanded, error: check.message };
+      }
+    }
     switch (cmd.op) {
       case "eval": {
         expanded.push(cmd.cmd);

@@ -156,7 +156,7 @@ function buildPromptBase(appMode: "2d" | "3d", domain: Domain, phase: "full" | "
     : "你是 AiGGB 助手，将用户的自然语言需求转为 GGB 命令 JSON。参考以下示例直接生成正确输出。";
 
   const selfCheckSection = phase === "compile"
-    ? "\n【自检要求】JSON 中必须包含 \"self_check\" 字段（≤200 字）。逐项核对：① eval 命令名在白名单？② 无 SetViewDirection/SetFilling 等 3D 禁用命令？③ Vector 参数合法（非 Point+Point）？④ 分母 +0.001？⑤ 参数个数匹配？⑥ 无中文变量名？全通过写 \"ok\"。"
+    ? "\n【自检要求】JSON 中必须包含 \"self_check\" 字段（≤200 字）。逐项核对：① eval 命令名在白名单？② 无 SetViewDirection/SetFilling 等 3D 禁用命令？③ Vector 参数合法（非 Point+Point）？④ 分母 +0.001？⑤ 参数个数匹配？⑥ 无中文变量名？⑦ 含 Sequence 的命令：循环变量是单个字母、区间是逗号分隔的三个独立参数、括号逐层闭合、无「逗号误写成句点」？全通过写 \"ok\"。"
     : "";
 
   const askSection = phase === "compile"
@@ -202,6 +202,25 @@ function buildPromptBase(appMode: "2d" | "3d", domain: Domain, phase: "full" | "
     "★ 小写 f/g/h = Function 类型。其他小写可自由作数值。",
     "★ 位移/速度矢量用 vector 或 forceDiagram op（它们内部已处理 Point+Vector 安全转换）。",
     "★ 分母含 (x-x0)^2+y^2 必须 +0.001 防除零。",
+    "",
+    "═══ ★ Sequence（序列）契约 —— 最高频执行失败源，必须逐条照做 ═══",
+    "官方 5 种重载（按参数形态自动识别，不要混用）：",
+    "  A) Sequence(终点n)            → 整数表 {1..n}         例 Sequence(4)",
+    "  B) Sequence(起点k, 终点n)      → 整数表 {k..n}         例 Sequence(7,13)",
+    "  C) Sequence(起点k, 终点n, 增量) → 整数表 {k,k+inc,…}    例 Sequence(7,13,2)",
+    "  D) Sequence(表达式, 循环变量k, 起点a, 终点b)          ← 步长默认 1",
+    "  E) Sequence(表达式, 循环变量k, 起点a, 终点b, 步长)     ← 最常用",
+    "  例 pts = Sequence((i, i^2), i, 0, 10, 0.5)",
+    "① ★ 用 D/E 形态时，第 2 个参数必须是**单个 ASCII 字母**的循环变量（i/j/k/t/n）。禁止多字母、中文、数字。",
+    "② ★ 起点/终点/步长必须是**三个独立参数**，用逗号分隔。禁止 Sequence(expr, i, \"0,1,0.1\") 或 \"0..1\" 压缩写法。",
+    "③ 所有括号必须逐层闭合：嵌套 Sequence(Cube(…), i, …) 时最外层 Sequence 的 \")\" 最容易漏。",
+    "④ 参数之间一律用**逗号**。禁止把逗号写成句点：Cube((i,j,k),(i+1,j,k).e(i,j+1,k) ❌ → Cube((i,j,k),(i+1,j,k),(i,j+1,k)) ✓",
+    "⑤ 循环变量只在第 1 个参数（表达式）内有效，且**必须先声明后用**：先用 i 才算 i+1。",
+    "⑥ 嵌套网格（3D 点阵/矢量场）标准写法——外层 j、内层 i 各自独立声明（两级都必须显式给出步长）：",
+    "   cubes = Sequence(Cube((i, j, 0), (i+1, j, 0)), i, 0, 2, 1)                     ← 单层：一行立方体",
+    "   grid  = Sequence(Sequence(Cube((i,j,0),(i+1,j,0)), i, 0, 2, 1), j, 0, 2, 1)  ← 双层：面阵",
+    "⑦ 三个点形式 Cube(A,B,C) 要求 A/B/C **是已声明的 Point 对象且构成正方形**；坐标字面量只适用于两点式 Cube(A,B)。",
+    "⑧ 报错「Sequence 执行失败」时，先自查上述 ①~⑦，不要改动已成功的命令。",
     "",
     "【当前模式可用命令速查 — RAG 过滤】",
     cmdRef,
@@ -300,6 +319,15 @@ ${failureLines}
    - SetCaption / ShowLabel / SetLabelMode → 全部删掉。改用对象名本身标识，或 Text("..",Point)。
    - ZoomIn → 删掉。改用 view op。
    - SetViewDirection / SetFilling / SetPointSize / SetAxesRatio → 删掉。
+
+9. ★ Sequence（序列）专项修复 —— 错误里出现「Sequence 执行失败 / 括号不匹配 / 参数个数」时按此逐条改：
+   - 形态必须是 Sequence(<表达式>, <循环变量>, <起点>, <终点>[, <步长>])，各参数用**逗号**分隔。
+   - 循环变量必须是**单个 ASCII 字母**（i/j/k/t/n）；多字母、中文、数字都会被判为对象引用而失败。
+   - 起点/终点/步长不能压缩成一个参数（❌ Sequence(expr, i, "0,1,0.1") → ✓ Sequence(expr, i, 0, 1, 0.1)）。
+   - 句点不是分隔符：❌ Cube((i,j,k),(i+1,j,k).e(i,j+1,k) → ✓ Cube((i,j,k),(i+1,j,k),(i,j+1,k))。
+   - 括号逐层闭合：Sequence 套 Cube/Vector 时最外层的 \")\" 最常漏。
+   - 嵌套网格用两个独立 Sequence（外层 j、内层 i），不要在同一个 Sequence 里塞两个循环变量。
+   - 三点式 Cube(A,B,C) 的 A/B/C 必须是已声明的 Point 且构成正方形；坐标字面量只可用于两点式 Cube(A,B)。
 
 【输出格式】★ 只输出纯 JSON，不要任何解释、不要 Markdown 代码块：
 {"explanation":"<一句话说明修复了什么>","commands":[<仅修复后的命令>]}

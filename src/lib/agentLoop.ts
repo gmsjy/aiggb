@@ -16,6 +16,7 @@ import {
   AIError,
   getProviderQuirks,
   type AIConfig,
+  type AgentChatOverrides,
   type AgentMessage,
   type AgentResponse,
   type ToolCallDelta
@@ -31,6 +32,7 @@ import type { GGBAppletApi } from "../types/ggb";
 import type { Domain } from "./prompts";
 import type { ChatTurn } from "../store/useAppStore";
 import { getTraceId } from "./runControl";
+import { withRepaintBatch } from "./repaintGate";
 import { buildTrajectoryRecord, type TrajectoryRecord } from "./trajectoryStore";
 import { getRichSnapshot } from "./ggbBridge";
 
@@ -47,6 +49,17 @@ export const MAX_STATE_CHECK_ROUNDS = 2;
 
 /** 用户拒绝工具调用时返回给 AI 的错误文案（熔断统计据此排除"拒绝"场景） */
 const USER_DENIED_MSG = "用户拒绝了此操作";
+
+/**
+ * 截断重试的输出预算倍数。
+ * ★ 为什么必须扩容：thinking 的 reasoning 与正文共享 max_tokens。被截断时空响应重试
+ *   若不改预算/思考档位，第二次必然以同样方式截断（实测 deepseek-flash 单次推理可达
+ *   2.4 万字符，占满 8192 预算的 95%）。
+ */
+const TRUNCATION_RETRY_BUDGET_SCALE = 2;
+
+/** 截断重试时降到的思考档位（腾出正文/工具调用空间；GLM 经 buildThinkingParam 落为 disabled） */
+const TRUNCATION_RETRY_REASONING: "low" = "low";
 
 // ──── 类型 ────
 
@@ -93,8 +106,8 @@ export interface AgentLoopDeps {
   getMessages(): ChatTurn[];
   /** 流式展示 AI 的中间思考（可选） */
   onThinking?(message: string): void;
-  /** 每次 AI 调用的 token 用量回传（累计到 UI 统计） */
-  onTokenUsage?(usage: { prompt: number; completion: number }): void;
+  /** 每次 AI 调用的 token 用量回传（累计到 UI 统计）。reasoning = 其中的思考 token */
+  onTokenUsage?(usage: { prompt: number; completion: number; reasoning?: number }): void;
   /** Agent 模式专用模型名（已解析，含回退链） */
   agentModel: string;
   // ── 可注入依赖（测试用 mock 替换，生产环境使用默认实现） ──
@@ -273,6 +286,7 @@ export async function runAgentLoop(
   let consecutiveFailures = 0; // ★ 连续工具执行失败计数（熔断）
   let forceStop = false;      // ★ 熔断后禁止继续工具调用
   let emptyResponseRetried = false; // ★ 空响应重试标志（仅重试 1 次）
+  let retryOverrides: AgentChatOverrides | undefined; // ★ 截断重试的参数覆盖（扩容预算 + 降思考档）
   let checkRounds = 0; // ★ 状态核对反馈计数
 
   while (iterations < MAX_AGENT_ITERATIONS) {
@@ -310,7 +324,8 @@ export async function runAgentLoop(
         (delta) => {
           reasoningPreview = (reasoningPreview + delta).slice(-400);
           deps.onThinking?.(`🧠 ${reasoningPreview}`);
-        }
+        },
+        retryOverrides
       );
       // ★ token 统计：每轮 agent 调用累计到 UI
       if (response.usage) deps.onTokenUsage?.(response.usage);
@@ -330,6 +345,7 @@ export async function runAgentLoop(
     if (!response.toolCalls.length && response.content) {
       messages.push({ role: "assistant", content: response.content, reasoning_content: roundtripReasoning ? response.reasoningContent : undefined });
       emptyResponseRetried = false; // 成功后复位
+      retryOverrides = undefined;   // 成功后复位（截断重试的扩容参数不粘到后续轮次）
 
       // ★ 状态核对钩子：AI 宣称完成时，校验画布是否满足题目要求
       const maxCheck = deps.stateCheck?.maxRounds ?? MAX_STATE_CHECK_ROUNDS;
@@ -363,9 +379,13 @@ export async function runAgentLoop(
 
     // 情况 2：无文本也无工具调用 → 诊断 + 重试 1 次
     if (!response.toolCalls.length) {
+      const reasoningChars = response.reasoningContent?.length ?? 0;
+      const completionTokens = response.usage?.completion;
+      const reasoningTokens = response.usage?.reasoning;
       console.warn(
         `[agentLoop] ${getTraceId()} 第${iterations}轮空响应: finishReason=${response.finishReason || "无"}, ` +
-        `contentLen=${response.content?.length ?? 0}, msgCount=${messages.length}`
+        `contentLen=${response.content?.length ?? 0}, reasoningChars=${reasoningChars}, ` +
+        `completionTokens=${completionTokens ?? "?"}（推理 ${reasoningTokens ?? "?"}）, msgCount=${messages.length}`
       );
 
       if (!emptyResponseRetried) {
@@ -373,8 +393,13 @@ export async function runAgentLoop(
         // ★ finish_reason="length" 是明确的截断信号，即使 streamsFinishReason=false 也应信任
         //   （该 flag 仅表示 provider 可能省略 finish_reason，不代表返回的值不可信）
         const truncated = response.finishReason === "length";
+        // ★ 截断的根因是输出预算被 thinking 吃光：重试必须改变条件（扩容 + 降思考档），
+        //   否则同样的参数只会得到同样的截断（这是「空响应重试」此前失效的原因）
+        retryOverrides = truncated
+          ? { maxTokensScale: TRUNCATION_RETRY_BUDGET_SCALE, reasoningEffort: TRUNCATION_RETRY_REASONING }
+          : undefined;
         const reasonHint = truncated
-          ? "[系统] 你的上一条回复因长度限制被截断（max_tokens 不足）。请缩短输出或分步执行。继续构造或输出文本总结。"
+          ? "[系统] 你的上一条回复因长度限制被截断（推理占满了输出预算）。本次已提高输出预算并降低思考深度：请直接调用下一步工具，或用 1-2 句话简短总结，不要长篇推理。"
           : "[系统] 请继续：调用下一步工具完成构造，或输出文本总结当前画布状态。不要返回空响应。";
         messages.push({ role: "user", content: reasonHint });
         continue;
@@ -382,8 +407,12 @@ export async function runAgentLoop(
 
       // 重试后仍空 → 放弃，输出诊断信息
       const truncated = response.finishReason === "length";
+      const budgetHint = reasoningChars > 0
+        ? `，本轮推理 ${reasoningTokens ? `${reasoningTokens} tok` : `${reasoningChars} 字符`}` +
+          `${completionTokens ? ` / 输出合计 ${completionTokens} tok` : ""}`
+        : "";
       const diag = truncated
-        ? "（输出超长被截断，可尝试增加 max_tokens 或简化构造）"
+        ? `（输出超长被截断：预算已被思考吃光${budgetHint}。已自动扩容并降档重试仍失败，请把「思考深度」调低、调高「输出预算」或拆分任务）`
         : response.finishReason === "content_filter"
         ? "（内容被安全过滤拦截）"
         : `（finish_reason=${response.finishReason || "无"}，模型未生成有效输出，请检查 Agent 模型是否支持 Function Calling）`;
@@ -451,11 +480,11 @@ export async function runAgentLoop(
     if (dangerousCalls.length > 0) {
       if (approveAll) {
         // 信任已激活，跳过确认直接执行
-        dangerousResults = executeDangerousTools(api, dangerousCalls, executeToolCallFn);
+        dangerousResults = executeDangerousTools(api, dangerousCalls, executeToolCallFn, deps.appMode);
       } else {
         deps.onThinking?.("等待确认…");
         const { results, newApproveAll } = await handleDangerousTools(
-          api, dangerousCalls, deniedTools, approveAll, executeToolCallFn
+          api, dangerousCalls, deniedTools, approveAll, executeToolCallFn, deps.appMode
         );
         approveAll = newApproveAll;
         dangerousResults = results;
@@ -467,6 +496,7 @@ export async function runAgentLoop(
     // ★ 本轮有实质工具调用（非空响应），复位空响应重试标志
     //    否则跨轮残留：空响应→retry 成功→flag 仍为 true→下次空响应跳过 retry
     emptyResponseRetried = false;
+    retryOverrides = undefined;
 
     // ★ 本轮全是危险工具且全部被拒 → 引导 AI 换安全工具
     //    （用"本轮被拒数"而非累计 deniedTools.length，避免跨轮累积误触发）
@@ -553,14 +583,19 @@ function executeSafeTools(
 function executeDangerousTools(
   api: GGBAppletApi,
   calls: ToolCallDelta[],
-  executeToolCallFn: typeof defaultExecuteToolCall
+  executeToolCallFn: typeof defaultExecuteToolCall,
+  appMode?: "2d" | "3d"
 ): ToolResult[] {
   const requests: ToolCallRequest[] = calls.map(tc => ({
     id: tc.id,
     name: tc.function.name,
     arguments: safeParseJSON(tc.function.arguments, tc.function.name)
   }));
-  return requests.map(req => executeToolCallFn(api, req));
+  // ★ 同样批处理：危险工具（eval_raw/eval_sequence）常一次写多条命令，
+  //   不批处理会让代数区逐行重建闪烁（见 repaintGate.ts 说明）
+  return withRepaintBatch(api, requests.length, appMode, () =>
+    requests.map(req => executeToolCallFn(api, req))
+  );
 }
 
 // ──── 危险工具处理 ────
@@ -570,7 +605,8 @@ async function handleDangerousTools(
   calls: ToolCallDelta[],
   deniedTools: string[],
   approveAll: boolean,
-  executeToolCallFn: typeof defaultExecuteToolCall
+  executeToolCallFn: typeof defaultExecuteToolCall,
+  appMode?: "2d" | "3d"
 ): Promise<{ results: ToolResult[]; newApproveAll: boolean }> {
   const requests: ToolCallRequest[] = calls.map(tc => ({
     id: tc.id,
@@ -618,36 +654,40 @@ async function handleDangerousTools(
   const results: ToolResult[] = [];
   let newApproveAll = approveAll;
 
-  for (const req of requests) {
-    if (newApproveAll) {
+  // ★ 批处理：用户确认已在上方 await 完成（等待不在批处理窗口内），
+  //   执行阶段合并为一次重绘，避免代数区逐行重建闪烁
+  withRepaintBatch(api, requests.length, appMode, () => {
+    for (const req of requests) {
+      if (newApproveAll) {
+        results.push(executeToolCallFn(api, req));
+        continue;
+      }
+
+      const decision = decisionMap.get(req.id);
+      // 「信任此会话」：当前及后续请求全部放行（首个无显式决策的请求触发信任）
+      if (approveAllRequested && (!decision || decision.action !== "deny")) {
+        newApproveAll = true;
+        results.push(executeToolCallFn(api, req));
+        continue;
+      }
+
+      if (!decision || decision.action === "deny") {
+        deniedTools.push(req.name);
+        results.push({
+          tool_call_id: req.id,
+          role: "tool",
+          content: JSON.stringify({
+            success: false,
+            error: decision ? USER_DENIED_MSG : "未收到确认决策"
+          })
+        });
+        continue;
+      }
+
+      // decision.action === "approve"
       results.push(executeToolCallFn(api, req));
-      continue;
     }
-
-    const decision = decisionMap.get(req.id);
-    // 「信任此会话」：当前及后续请求全部放行（首个无显式决策的请求触发信任）
-    if (approveAllRequested && (!decision || decision.action !== "deny")) {
-      newApproveAll = true;
-      results.push(executeToolCallFn(api, req));
-      continue;
-    }
-
-    if (!decision || decision.action === "deny") {
-      deniedTools.push(req.name);
-      results.push({
-        tool_call_id: req.id,
-        role: "tool",
-        content: JSON.stringify({
-          success: false,
-          error: decision ? USER_DENIED_MSG : "未收到确认决策"
-        })
-      });
-      continue;
-    }
-
-    // decision.action === "approve"
-    results.push(executeToolCallFn(api, req));
-  }
+  });
 
   return { results, newApproveAll };
 }

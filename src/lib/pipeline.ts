@@ -898,7 +898,9 @@ async function runAgentRound(
   }
 
   // ★ 构建 agent 结果摘要消息
-  const summary = rollbackHappened
+  //    ⚠ 回滚提示只在「真的执行过工具」时给出：0 次工具调用说明画布从未被改动，
+  //      此时提示"已回滚"会误导用户（配合 buildAgentSummary 的轮数/次数区分）
+  const summary = rollbackHappened && countToolCalls(result.messages) > 0
     ? `${buildAgentSummary(result)}\n\n⚠ 本轮构造失败，画布已回滚到开始前状态。`
     : buildAgentSummary(result);
 
@@ -966,12 +968,24 @@ async function runAgentRound(
   }
 }
 
+/** 统计对话流中真实发生的工具调用次数（iterations 是循环轮数，含空响应/重试空转轮） */
+function countToolCalls(messages: AgentLoopResult["messages"]): number {
+  let n = 0;
+  for (const m of messages) {
+    if (m.role === "assistant" && m.tool_calls) n += m.tool_calls.length;
+  }
+  return n;
+}
+
 /** 从 AgentLoopResult 构建人类可读摘要 */
 function buildAgentSummary(result: AgentLoopResult): string {
   const parts: string[] = [result.finalText];
+  const toolCalls = countToolCalls(result.messages);
 
   if (result.iterations > 1) {
-    parts.push(`（共 ${result.iterations} 步工具调用）`);
+    parts.push(toolCalls > 0
+      ? `（共 ${result.iterations} 轮 · ${toolCalls} 次工具调用）`
+      : `（共 ${result.iterations} 轮，未能调用工具）`);
   }
   if (result.deniedTools.length > 0) {
     parts.push(`已拒绝：${result.deniedTools.join("、")}`);

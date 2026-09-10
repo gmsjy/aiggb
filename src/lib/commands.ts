@@ -30,7 +30,11 @@ export const GGB_COMMANDS = /* prettier-ignore */ `
 3D视图：SetViewDirection(dir)(仅2D) SetSpinSpeed(n)(仅3D)
 视图：SetAxesRatio(x,y)(仅2D) SetCoordSystem(xMin,xMax,yMin,yMax) ZoomIn()(仅2D) CenterView(p) SetCoords(obj,x,y)
 
-⚠ Sequence 必须用 Sequence(expr,var,start,end,step)，禁止 Sequence(var,list) 简写。
+⚠ Sequence 序列 5 种重载：Sequence(n)｜Sequence(k,n)｜Sequence(k,n,增量)〔均生成整数表〕；
+   Sequence(表达式,循环变量,起点,终点[,步长])〔迭代表达式〕。
+   用迭代形态时循环变量必须是**单个字母**（i/j/k/t/n）；起点/终点/步长是**三个独立参数**（逗号分隔，禁 "0,1,0.1" 压缩写法）；
+   禁止 Sequence(var, list) 简写；嵌套 Sequence 时最外层的 ")" 最易漏；参数之间禁止用句点代替逗号。
+   正确：pts=Sequence((i,i^2),i,0,10,0.5)｜整数表：Sequence(7,13,2)｜嵌套：g=Sequence(Sequence(Cube((i,j,0),(i+1,j,0)),i,0,2,1),j,0,2,1)
 ⚠ Vector 第一个参数是起点 Point，第二个参数是终点 Point 或坐标字面量。
 ⚠ (x,y) 赋给变量 = Point，不是 Vector。位移矢量用 Vector((0,0),(dx,dy))。
 ⚠ 分母含距离平方必须加 +0.001 防除零：( (x-d)^2+y^2+0.001 )^1.5

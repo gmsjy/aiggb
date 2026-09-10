@@ -25,7 +25,7 @@ import {
   unregisterConfirmationHandler,
   type AgentLoopDeps,
 } from "../src/lib/agentLoop";
-import type { AgentMessage, AgentResponse, ToolCallDelta } from "../src/lib/aiClient";
+import type { AgentChatOverrides, AgentMessage, AgentResponse, ToolCallDelta } from "../src/lib/aiClient";
 import type { TrajectoryRecord } from "../src/lib/trajectoryStore";
 import { MockGGB } from "./mockGGB";
 import type { GGBAppletApi } from "../src/types/ggb";
@@ -59,6 +59,7 @@ function makeHarness(scripts: AgentResponse[]) {
   const mock = new MockGGB();
   const controller = new AbortController();
   const chatLog: AgentMessage[][] = [];
+  const overridesLog: (AgentChatOverrides | undefined)[] = [];
   const persisted: TrajectoryRecord[] = [];
   let idx = 0;
 
@@ -71,8 +72,9 @@ function makeHarness(scripts: AgentResponse[]) {
     getMessages: () => [],
     agentModel: "m",
     onThinking: () => {},
-    agentChatImpl: async (_cfg, msgs) => {
+    agentChatImpl: async (_cfg, msgs, _tools, _signal, _model, _onContent, _onReasoning, overrides) => {
       chatLog.push(msgs);
+      overridesLog.push(overrides);
       const next = scripts[idx++];
       if (!next) throw new Error(`agentChatImpl 脚本耗尽（第 ${idx} 次调用）`);
       return next;
@@ -81,7 +83,7 @@ function makeHarness(scripts: AgentResponse[]) {
   };
 
   return {
-    deps, controller, mock, chatLog, persisted,
+    deps, controller, mock, chatLog, overrides: overridesLog, persisted,
     get calls() { return idx; },
   };
 }
@@ -146,6 +148,41 @@ test("finish_reason=length 的空响应 → 提示截断而非空响应", async 
   const r = await runAgentLoop("复杂构造", h.deps);
   assert.ok(contents(r.messages, "user").some(t => t.includes("长度限制被截断")));
   assert.equal(r.finalText, "ok");
+});
+
+test("截断重试 → 自动扩容预算 + 降思考档；成功后恢复默认参数", async () => {
+  const h = makeHarness([
+    emptyResp("length"),
+    toolResp(toolCall("create_point", { name: "A", x: 0, y: 0 })),
+    textResp("ok"),
+  ]);
+  const r = await runAgentLoop("复杂构造", h.deps);
+  assert.equal(h.calls, 3);
+  assert.equal(h.overrides[0], undefined, "首次调用不覆盖参数");
+  assert.deepEqual(
+    h.overrides[1],
+    { maxTokensScale: 2, reasoningEffort: "low" },
+    "截断重试必须扩容预算并降思考档（否则同样参数必然再次截断）"
+  );
+  assert.equal(h.overrides[2], undefined, "重试成功后应恢复默认参数");
+  assert.equal(r.failed, false);
+});
+
+test("普通空响应重试 → 不改动输出预算 / 思考档", async () => {
+  const h = makeHarness([emptyResp(), textResp("完成")]);
+  await runAgentLoop("画个圆", h.deps);
+  assert.equal(h.calls, 2);
+  assert.equal(h.overrides[1], undefined, "非截断空响应不扩容");
+  assert.equal(h.overrides[0], undefined);
+});
+
+test("截断重试后仍截断 → failed 且诊断说明预算被思考吃光", async () => {
+  const h = makeHarness([emptyResp("length"), emptyResp("length")]);
+  const r = await runAgentLoop("复杂构造", h.deps);
+  assert.equal(h.calls, 2);
+  assert.equal(r.failed, true);
+  assert.match(r.finalText, /AI 未返回有效响应/);
+  assert.match(r.finalText, /预算已被思考吃光/);
 });
 
 // ═══════════════════════════════════════════════════

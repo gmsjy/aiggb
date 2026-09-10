@@ -425,10 +425,23 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
 
   // ─── 列表 / 序列 ───
   {
-    name: "Sequence", signature: "Sequence(expr, var, start, end, step)", paramCount: [4, 5],
+    name: "Sequence",
+    signature: "Sequence(expr, var, start, end, step) | Sequence(start, end, inc) | Sequence(end)",
+    paramCount: [1, 5],
     modes: ["2d", "3d"], category: "list",
-    examples: ["pts = Sequence((i, i^2), i, 0, 10, 0.5)"],
-    note: "禁止 Sequence(var, list) 简写格式，必须五个参数完整",
+    examples: [
+      "pts = Sequence((i, i^2), i, 0, 10, 0.5)",
+      "ints = Sequence(7, 13, 2)",
+      "grid = Sequence(Sequence(Cube((i,j,0), (i+1,j,0)), i, 0, 2, 1), j, 0, 2, 1)",
+    ],
+    note:
+      "官方 5 种重载：Sequence(n)｜Sequence(k,n)｜Sequence(k,n,inc)〔整数表〕｜" +
+      "Sequence(expr,k,a,b)｜Sequence(expr,k,a,b,step)〔迭代表达式〕。" +
+      "① 表达式形态的 var 必须是单个 ASCII 字母（i/j/k/t/n），多字母/中文/数字会失败；" +
+      "② start/end/step 是三个独立参数，禁止 \"0,1,0.1\" 压缩写法；" +
+      "③ 禁止 Sequence(var, list) 简写；④ 参数之间用逗号，禁用句点；" +
+      "⑤ 嵌套 Sequence 时最外层 `)` 最易漏闭合；" +
+      "⑥ 三点式 Cube(A,B,C) 在 Sequence 内要求 A/B/C 为已声明 Point 且构成正方形（坐标字面量只适用两点式）。",
     aliases: ["序列", "等间距", "批量生成", "网格点"],
   },
   {

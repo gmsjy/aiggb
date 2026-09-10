@@ -521,7 +521,7 @@ System Prompt 在运行时根据当前 **domain**（用户在工具栏切换：`
 7. **Point/Vector 类型铁律**：`(x,y)` 赋给变量是 **Point** 而非 Vector；`Point+Point` 未定义会执行失败，`Point+Vector` 才合法。力 / 速度 / 场矢量必须用 `forceDiagram` 或 `vector` op，禁止 `eval` 出中间 Point 变量再做加法。
 8. **变量命名受 GGB 首字母类型推断约束**：`u/v/w` → Vector、`A~Z` 单大写 → Point、`f/g/h` → Function；标量须改用 `speed/disp/r` 等避开冲突名。
 9. **3D 场景规则**（用户描述含立体 / 正方体 / 圆柱 / 球 / 空间向量 / 螺旋等时附加）：正方体优先 `Cube(A,B)` 两点形式；建体后 `ZoomIn(0.5)` 适配视窗；截面用 `IntersectPath(Plane(...), poly)`；纯 3D applet 禁用 `SetViewDirection/SetFilling/SetPointSize/SetAxesRatio`，透明度改用 `style` 的 `opacity`，标记点用 `Sphere(p, 0.1)`。
-10. **已知坑**：`NSolveODE` 不能画 2D 向量场；`Sequence(var, list)` 简写不可靠须用五参形式；距离平方分母必须 `+0.001` 防除零；`SetColor(obj,r,g,b)` 的 r/g/b 必须是 0~255 整数；偶极子 Ex/Ey 分量符号有硬编码模板。
+10. **已知坑**：`NSolveODE` 不能画 2D 向量场；`Sequence` 有 5 种官方重载（`Sequence(n)` / `Sequence(k,n)` / `Sequence(k,n,inc)` 整数表；`Sequence(expr,k,a,b[,step])` 迭代），迭代形态的循环变量必须是**单个 ASCII 字母**、`start/end/step` 必须是三个独立参数、括号须逐层闭合、参数之间禁用句点（`Sequence(var, list)` 与区间压缩写法均不可靠）；距离平方分母必须 `+0.001` 防除零；`SetColor(obj,r,g,b)` 的 r/g/b 必须是 0~255 整数；偶极子 Ex/Ey 分量符号有硬编码模板。
 
 ---
 
@@ -742,10 +742,22 @@ GeoGebra 的 `classic`（2D）与 `3d` applet 是两套代码库，运行中无�
 
 | 层 | 文件 | 机制 |
 |---|---|---|
-| **预防 #1** | `toolExecutor.ts:set_view` (L314-323) | 调用 `api.setPerspective("3d")` 前先 `api.getPerspectiveXML()?.includes("3D")` 检测，已是 3D 则跳过——避免无意义触发 GGB 内部视图过渡 |
-| **预防 #2** | `ggbBridge.ts:executeCommands` (L42) | `setRepaintingActive` 批量包裹 **2D/3D 统一启用**（2026-08 升级官方 5.4.927.1 后 DockGlassPane 不再因 batch 复发；禁用 batch 会导致代数区逐条重建闪烁）|
-| **预防 #3** | `toolExecutor.ts:executeToolCalls` (L84) | Agent 模式同样统一启用 batch；`setPerspective("3d")` 保留已 3D 则跳过的守卫 |
-| **恢复** | `GGBCanvas.tsx` 心跳监控 | 2s 间隔检测 canvas 数量 + DockGlassPane DOM → 自动硬重建 applet |
+| **预防 #1** | `toolExecutor.ts:set_view` | **运行时完全不切透视**（v1.8）：classic 画布下 `setPerspective("3d")` 实测触发 DockGlassPane → canvas 全消失 → 心跳硬重建；模式切换统一交给 applet 重注入 |
+| **预防 #2** | `repaintGate.ts:shouldBatch` + `ggbBridge.ts:executeCommands` | 批量渲染策略集中化：**任何非空批次都批处理**（实测：不批处理 → 代数区 avOutput / avDefinition / canvasDef 逐行重建）；**3D 可由用户关闭** |
+| **预防 #3** | `repaintGate.withRepaintBatch` + `toolExecutor.executeToolCalls` / `agentLoop` 危险工具组 | 危险工具（eval_raw / eval_sequence）此前完全不批处理，v1.8 起统一走 `withRepaintBatch`（用户确认在批处理窗口之外） |
+| **预防 #4** | `repaintGate.ts` 静默期 | `setRepaintingActive(true)` / applet 重建后 `markRepaintBusy()`，心跳在该窗口跳过存活判定 |
+| **恢复** | `GGBCanvas.tsx` 心跳监控 | 2s 间隔检测 canvas 数量 + DockGlassPane DOM → **连续 2 次确认**后硬重建 applet |
+
+**3D 绘图区闪烁（v1.8 止血）** —— 三条路径与对策：
+
+| # | 路径 | 现象 | 对策 |
+|---|---|---|---|
+| ① | 逐条重绘（未达批处理阈值） | 对象"一跳一跳"出现 | 阈值降到 1：任何非空批次都批处理；危险工具组同样走批处理 |
+| ② | `setRepaintingActive(true)` 恢复重绘 | 3D 视图整屏重建，几帧 canvas 空白 | 恢复后进入**静默期**（`REPAINT_GRACE_MS=2000ms`），并记录 canvas 数量变化 |
+| ③ | 心跳把 ② 的空白误判为"画布消失" | 闪一下 + 停顿（硬重建 + 快照恢复） | 静默期内挂起心跳 + **连续 2 次**（≥4s）canvas=0 才认定丢失 |
+| ④ | 尺寸变化逐帧 `setSize + refreshViews` | 布局过渡期间 3D 视图反复重排、抖动 | ResizeObserver 改为 **220ms 稳定后**同步一次；**3D 下不再调用 `refreshViews()`** |
+
+A/B 开关：设置面板「3D 批量重绘」（`localStorage: aiggb_batch_3d`）。开启 → 代数区平滑、3D 恢复重绘会整屏重建；关闭 → 3D 绘图区更平滑、代数区逐条重建。切换立即生效。
 
 **心跳恢复流程**（`GGBCanvas.tsx`）：
 
@@ -833,11 +845,14 @@ Agent 模式的 `toolExecutor.ts` 同样包含 3D 防护：
 
 DeepSeek V4 原生内嵌 thinking（流式返回 `reasoning_content`）。系统通过 `AIConfig.reasoningEffort`（SettingsDialog「思考深度」下拉）控制：
 
-- **默认关闭（baseline）**：`reasoningEffort` 未设置 → 三个调用点（`chat` 编译/修复、`chatRaw` 精炼/评估、`agentChat` Agent 模式）均**不发送** `reasoning_effort` 参数
-- **开启**：设置后对支持 thinking 的 provider（`quirks.supportsThinking` = DeepSeek V4）发送 `reasoning_effort`（low/medium/high）
+- **未设置（baseline）**：三个调用点（`chat` 编译/修复、`chatRaw` 精炼/评估、`agentChat` Agent 模式）均**不发送** `reasoning_effort` 参数。⚠ 实测 deepseek-flash（V4.1）**默认仍会思考**：一次简单构造中推理占输出 token 的 ~90%（`reasoning_tokens: 1051 / completion 1163`）
+- **显式关闭**：`reasoningEffort = "none"` → 发 `reasoning_effort: "none"`（实测 HTTP 200，`reasoning_content` 归零、usage 不再含 `reasoning_tokens`）；GLM 走 `thinking: { type: "disabled" }`。这是唯一能让思考不占输出预算的方式——**`max_tokens` 由服务端对 completion tokens 统一封顶，客户端无法把 reasoning 剔除出预算**
+- **开启**：low/medium/high → 对支持 thinking 的 provider（`quirks.supportsThinking`）发送对应档位
+- **输出预算（max_tokens）**：`AIConfig.maxOutputTokens`（SettingsDialog「输出预算」，留空 = 自动）。默认值 `DEFAULT_OUTPUT_TOKENS=16384` / thinking `THINKING_OUTPUT_TOKENS=32768`（v1.8 由 8192/16384 上调，`resolveMaxOutputTokens()` 统一解析）。max_tokens 是上限而非计费量，调高不额外花钱
+- **截断重试自动扩容**：`finish_reason="length"` 时 `agentLoop` 以 `{ maxTokensScale: 2, reasoningEffort: "low" }` 覆盖参数重试一次（**必须改变条件**，否则同参数重试必然再次截断）
 - **Agent 模式实时展示**：`agentChat` 的 `reasoning_content` 增量经 `onReasoning` 回调 → `onThinking` 在 UI 显示 `🧠 思考中…`（截尾 400 字符，经 ChatPanel 120ms 节流），V4 思考阶段不再干等
 - **回传门控**：`reasoning_content` 多轮回传受 `quirks.mustRoundtripReasoning` 控制（V4=true，其他 provider 无该字段，回传即 no-op）
-- **空响应诊断**：`finish_reason="length"` 截断提示无条件信任（v1.7 修复：此前受 `quirks.streamsFinishReason` 门控导致 DeepSeek 截断时误报为"不支持 Function Calling"）；thinking 模式下 Agent `max_tokens` 提升至 16384 防截断
+- **空响应诊断**：`finish_reason="length"` 截断提示无条件信任（v1.7 修复：此前受 `quirks.streamsFinishReason` 门控导致 DeepSeek 截断时误报为"不支持 Function Calling"）；v1.8 起诊断附带 `reasoningChars` / `completionTokens（推理 N）`，并区分「轮数」与「真实工具调用次数」
 
 **A/B 验证结论（2026-08，DeepSeek v4-flash，N=10×6 用例，`npm run test:ab`）**：
 
@@ -1315,16 +1330,27 @@ persist v3→v4：`visionModel` 为可选字段，**无字段迁移逻辑**，mi
 | `aiClient.ts:agentChat` | thinking 模式下 `max_tokens` 从 8192 → 16384 | 给 reasoning + tool_calls 留足空间 |
 | `agentLoop.ts:375,384` | 移除 `&& quirks.streamsFinishReason === true` 条件 | `finish_reason="length"` 是明确的截断信号，应无条件信任；该 flag 仅表示 provider 可能*省略* finish_reason，不代表*返回的值*不可信 |
 
+**复发与根治（v1.8，2026-09）**：同一现象再次出现（`共 2 步工具调用` + 回滚）。实测定位：deepseek-flash **默认就思考**，`max_tokens` 是 reasoning 与正文共享的服务端封顶——预算被推理吃光时 `content` 与 `tool_calls` 双空 + `finish_reason="length"`，而旧的"空响应重试"只注入一句提示、不改参数，第二次必然同样截断。修复：
+
+| 文件 | 改动 | 说明 |
+|---|---|---|
+| `aiClient.ts` | 默认预算 8192/16384 → **16384/32768**；新增 `AIConfig.maxOutputTokens` + `resolveMaxOutputTokens()`；`agentChat` 新增 `overrides`（`maxTokens`/`maxTokensScale`/`reasoningEffort`） | 预算可自定义，且可被单次调用覆盖 |
+| `aiClient.ts:buildThinkingParam` | `reasoningEffort="none"` → 发 `reasoning_effort: "none"`（GLM 落 `disabled`） | 实测唯一能真正关闭思考的方式（推理归零） |
+| `agentLoop.ts` | 截断重试带 `{ maxTokensScale: 2, reasoningEffort: "low" }`，成功即复位 | 重试必须改变条件，否则必然复现 |
+| `agentLoop.ts` / `aiClient.ts` | 空响应诊断补 `reasoningChars`、`completionTokens（其中推理 N）`、`usage.reasoning` | 一眼看出"预算被思考吃光" |
+| `pipeline.ts` | 摘要区分「N 轮」与「M 次工具调用」；0 次工具调用不再提示"已回滚" | 修正误导性文案（iterations 含空转轮） |
+| `SettingsDialog.tsx` | 新增「输出预算 (max_tokens)」输入 + 「关闭（思考不占输出预算）」选项 | 用户可自助调节 |
+
 **推荐配置**（避免触发此问题）：
 
-| 角色 | 推荐模型 | 思考深度 |
-|---|---|---|
-| 主力模型 | `deepseek-flash`（V4.1） | — |
-| 轻量模型 | `deepseek-flash` | — |
-| Agent 模型 | `deepseek-flash` | 留空（关闭）或低 |
-| 视觉模型 | 留空跟随主力（V4.1 原生多模态） | — |
+| 角色 | 推荐模型 | 思考深度 | 输出预算 |
+|---|---|---|---|
+| 主力模型 | `deepseek-flash`（V4.1） | — | 留空（16384） |
+| 轻量模型 | `deepseek-flash` | — | 留空 |
+| Agent 模型 | `deepseek-flash` | 留空（会思考）或 **关闭** | 复杂 3D 建议 32768 |
+| 视觉模型 | 留空跟随主力（V4.1 原生多模态） | — | — |
 
-> 2026-09 DeepSeek 更新：V4.1 Flash（`deepseek-flash`）原生多模态，官方宣布性能/费用/速度全面超越 V4 Pro；`deepseek-v4-pro` 于 2026-09-14 12:00 后强制路由到 V4.1 Flash 计费；旧模型名（v4-flash / v4-flash-vision-exp）暂时路由兼容。V4.1 实测默认开启思考（reasoning_content），AiGGB 未设置思考深度时 DeepSeek 路径不发参数（baseline 语义，如需关闭请关注后续适配）。
+> 2026-09 DeepSeek 更新：V4.1 Flash（`deepseek-flash`）原生多模态，官方宣布性能/费用/速度全面超越 V4 Pro；`deepseek-v4-pro` 于 2026-09-14 12:00 后强制路由到 V4.1 Flash 计费；旧模型名（v4-flash / v4-flash-vision-exp）暂时路由兼容。V4.1 实测默认开启思考（reasoning_content），AiGGB 未设置思考深度时 DeepSeek 路径不发参数（baseline 语义）——**v1.8 起提供「关闭」选项（`reasoning_effort: "none"`，实测推理归零）与可自定义输出预算**。
 > 旧版说明（V4 时代）：视觉模型必须显式配置——`deepseek-v4-pro/flash` 不支持图片输入，留空回退会导致识别阶段 4xx 错误。V4.1 起此限制解除。
 
 ---
@@ -1545,15 +1571,20 @@ MVP 须通过以下 12 个场景：
 | **上下文遗忘** | 重复创建已存在对象、错误引用对象名、忘记用户之前的修改 | 长对话中注意力散乱，或未及时注入画布状态 |
 | **类型推断冲突** | `(x,y)` 赋给变量被 GGB 当作 Point 而非 Vector、`v/u/w` 被强制识别为 Vector 类型 | 模型不了解 GGB 按首字母推断变量类型的约定 |
 
-### 10A.2 四层防漂移体系总览
+### 10A.2 防漂移七层体系总览
 
-系统构建了 **提示层 → 清洗层 → 校验层 → 修正层** 的递进防御闭环，每一层都针对特定漂移类型进行拦截和修复。
+系统构建了 **提示层 → 自检层 → 清洗层 → 校验层 → 语法预检层 → 纠正层 → 执行层** 的递进防御闭环，每一层都针对特定漂移类型进行拦截和修复。
 
 ```
-用户输入 → [提示层] → AI 调用 → [清洗层] → [校验层] → [执行层] → 成功
-                                            ↓ 失败
-                                    [修正层] → 重新调用 AI
+用户输入 → [提示层] → AI 调用 → [清洗层] → [校验层] → [语法预检层] → [纠正层] → [执行层] → 成功
+                                                          ↓ 失败（带具体诊断）
+                                                  [修正层] → 重新调用 AI
 ```
+
+> **语法预检层（v1.9）**：`commandValidate.ts` 在把命令交给 GeoGebra 之前做纯文本静态检查。
+> 动机来自用户反馈「每次用序列命令都报错」——引擎对语法错误只会回一句「Sequence 执行失败」，
+> 模型拿不到可操作的反馈，于是下一轮继续犯同一个错。现在改为返回「括号不匹配在第几层 +
+> 逗号被误写成句点 + 循环变量必须是单个字母 + 正确形态示例」，让修复回路能精准自愈。
 
 ### 10A.3 提示层约束（源头防漂）
 
@@ -1596,6 +1627,7 @@ MVP 须通过以下 12 个场景：
 | 标识符格式 | `schema.ts:Identifier` | 仅 `[A-Za-z_][A-Za-z0-9_]*` |
 | 长度限制 | `explanation`≤500、`cmd`≤500、commands≤64 | 防止输出膨胀 |
 | 起点存在性预检 | `ggbBridge.ts:vector/forceDiagram` | 执行前检查 `api.exists(from)` 或 `isCoordLiteral` |
+| **静态语法预检** | `commandValidate.ts:validateGGBCommand` | 执行前纯文本检查：括号配对（含坐标括号/嵌套调用）、`)` 后跟 `.` 的逗号手误、Sequence 参数契约（5 种官方重载分支 / 循环变量单字母 / 区间压缩 / 表达式尾部残留）、参数个数、表达式以运算符结尾。命中即**不调用 `api.evalCommand`**，直接把「具体错在哪 + 正确形态」作为 `error` 交给修复回路（`eval`/`eval_raw`/`eval_sequence` 三入口统一生效） |
 
 ### 10A.6 执行层与修正闭环（自愈机制）
 
