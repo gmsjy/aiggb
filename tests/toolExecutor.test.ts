@@ -50,6 +50,23 @@ test("参数校验：中文标识符 → 拒绝", () => {
   assert.match(r.error ?? "", /参数校验失败/);
 });
 
+test("set_style 容错：字符串数值/布尔通过（与 JSON 流水线 style op 一致）", () => {
+  const mock = new MockGGB();
+  run(mock, "create_point", { name: "A", x: 0, y: 0 });
+  // 严格 z.number()/z.boolean() 会拒绝 "0.5"/"true"；NumLike/BoolLike 应放行
+  const r = run(mock, "set_style", { target: "A", opacity: "0.5", dashed: "true", thickness: "3", visible: "yes" }, "t-tol");
+  assert.equal(r.success, true, `实际错误：${r.error}`);
+});
+
+test("set_style 容错：超值域仍拒绝", () => {
+  const mock = new MockGGB();
+  run(mock, "create_point", { name: "A", x: 0, y: 0 });
+  const r = run(mock, "set_style", { target: "A", opacity: "1.5" }, "t-range");
+  assert.equal(r.success, false);
+  assert.match(r.error ?? "", /参数校验失败/);
+  assert.match(r.error ?? "", /0~1/);
+});
+
 test("create_point：2D/3D 坐标均通过，Mock 注册为 Point", () => {
   const mock = new MockGGB();
   const r2 = run(mock, "create_point", { name: "A", x: 0, y: 0 });

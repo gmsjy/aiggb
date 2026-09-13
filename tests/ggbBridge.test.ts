@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { executeCommands, orderCommands } from "../src/lib/ggbBridge";
+import { executeCommands, orderCommands, collectFailures } from "../src/lib/ggbBridge";
 import { MockGGB } from "./mockGGB";
 import type { Command } from "../src/lib/schema";
 
@@ -144,4 +144,126 @@ test("executeCommands 空命令数组 → 返回空结果", () => {
   const mock = new MockGGB();
   const results = executeCommands(mock, [], "2d");
   assert.deepEqual(results, []);
+});
+
+// ── 5. style op 失败可见化（exists 预检 / dashed:false / opacity 双失败） ──
+
+/** 仅实现 style op 所需 API 的最小 stub，可注入目标存在性与 Set* 命令失败 */
+function styleStubApi(opts: { exists: boolean; failSetOpacity?: boolean }) {
+  const calls: string[] = [];
+  const api = {
+    setRepaintingActive: () => {},
+    exists: (name: string) => opts.exists,
+    setColor: () => {},
+    setLineThickness: () => {},
+    setVisible: () => {},
+    setLineStyle: (name: string, style: number) => calls.push(`setLineStyle:${name}:${style}`),
+    setPointSize: () => {},
+    setPointStyle: () => {},
+    evalCommand: (cmd: string) => {
+      calls.push(cmd);
+      return !(opts.failSetOpacity && /^Set(LineOpacity|Filling)\s*\(/i.test(cmd));
+    },
+  } as unknown as Parameters<typeof executeCommands>[0];
+  return { api, calls };
+}
+
+test("style op 目标不存在 → ok:false（不再静默 no-op）", () => {
+  const { api } = styleStubApi({ exists: false });
+  const results = executeCommands(api, [
+    { op: "style", target: "幽灵对象", color: "#ff0000" } as Command,
+  ], "2d");
+  assert.equal(results[0].ok, false, "style 目标不存在必须报失败");
+  assert.match(results[0].error ?? "", /不存在/);
+});
+
+test("style op dashed:false → setLineStyle(target, 0) 恢复实线", () => {
+  const { api, calls } = styleStubApi({ exists: true });
+  const results = executeCommands(api, [
+    { op: "style", target: "c", dashed: false } as Command,
+  ], "2d");
+  assert.equal(results[0].ok, true);
+  assert.ok(calls.includes("setLineStyle:c:0"), `应落地实线，实际调用：${calls.join("; ")}`);
+});
+
+test("style op opacity 两路都失败 → ok:false 并给放弃提示", () => {
+  const { api, calls } = styleStubApi({ exists: true, failSetOpacity: true });
+  const results = executeCommands(api, [
+    { op: "style", target: "cube", opacity: 0.3 } as Command,
+  ], "3d");
+  assert.equal(results[0].ok, false, "SetLineOpacity 与 SetFilling 均失败时必须报失败");
+  assert.match(results[0].error ?? "", /透明度/);
+  // 两路命令都实际下发过
+  assert.ok(calls.some(c => c.startsWith("SetLineOpacity")), "应先尝试 SetLineOpacity");
+  assert.ok(calls.some(c => c.startsWith("SetFilling")), "失败后应回退 SetFilling");
+});
+
+test("style op 目标存在且常规设置 → ok:true", () => {
+  const { api } = styleStubApi({ exists: true });
+  const results = executeCommands(api, [
+    { op: "style", target: "c", color: "#2196f3", thickness: 3, dashed: true } as Command,
+  ], "2d");
+  assert.equal(results[0].ok, true, `实际错误：${results[0].error}`);
+});
+
+// ── 6. scripting 命令「假 false」豁免（GGB evalCommand 对 Set* 成功也返回 false） ──
+
+test("eval 路径 Set* scripting 命令：引擎返回 false 仍判 ok（GGB 特性豁免）", () => {
+  const mock = new MockGGB();
+  const origEval = mock.evalCommand.bind(mock);
+  mock.evalCommand = (cmd: string) => (/^SetPointSize/i.test(cmd) ? false : origEval(cmd));
+  const results = executeCommands(mock, [
+    { op: "eval", cmd: "SetPointSize(c, 5)" } as Command,
+  ], "2d");
+  assert.equal(results[0].ok, true, "SetPointSize 实际已生效（scripting 命令恒返回 false），不应判失败");
+  assert.equal(collectFailures(results).length, 0, "不应触发无谓的修复回路/分层重试");
+});
+
+test("eval 路径 Delete：不存在对象报具体诊断；存在对象删除成功（exists 前后对比）", () => {
+  const mock = new MockGGB();
+  mock.seed([{ name: "P", type: "Point" }]);
+  const results = executeCommands(mock, [
+    { op: "eval", cmd: "Delete(幽灵)" } as Command,
+    { op: "eval", cmd: "Delete(P)" } as Command,
+  ], "2d");
+  assert.equal(results[0].ok, false, "删除不存在对象必须报失败（不再被 scripting 豁免吞掉）");
+  assert.match(results[0].error ?? "", /不存在/);
+  assert.equal(results[1].ok, true, "删除存在的对象应成功");
+  assert.equal(mock.exists("P"), false, "mock 应真实移除对象（exists 前后对比的前提）");
+});
+
+test("非 scripting 命令引擎返回 false → 仍如实判失败", () => {
+  const mock = new MockGGB();
+  const origEval = mock.evalCommand.bind(mock);
+  mock.evalCommand = (cmd: string) => (/^Segment/i.test(cmd) ? false : origEval(cmd));
+  const results = executeCommands(mock, [
+    { op: "eval", cmd: "AB = Segment(A, B)" } as Command,
+  ], "2d");
+  assert.equal(results[0].ok, false);
+});
+
+test("style op opacity：SetLineOpacity 生效（getXML 实读验证）→ 不回退 SetFilling", () => {
+  const calls: string[] = [];
+  const api = {
+    setRepaintingActive: () => {},
+    exists: () => true,
+    // 模拟 GGB 特性：scripting 命令（含 SetLineOpacity）执行生效但恒返回 false
+    evalCommand: (cmd: string) => { calls.push(cmd); return false; },
+    setLineStyle: () => {},
+    getXML: () => (calls.some(c => c.startsWith("SetLineOpacity")) ? '<element lineOpacity="50"/>' : ""),
+  } as unknown as Parameters<typeof executeCommands>[0];
+  const results = executeCommands(api, [
+    { op: "style", target: "c", opacity: 0.5 } as Command,
+  ], "2d");
+  assert.equal(results[0].ok, true, `实际错误：${results[0].error}`);
+  assert.ok(!calls.some(c => c.startsWith("SetFilling")), "线透明度已生效，不得回退 SetFilling（否则 2D 对象被无谓填充——历史灰盘 bug 根因）");
+});
+
+test("style op 自带诊断不被 diagnose 泛化文案覆盖（保留行为）", () => {
+  const { api } = styleStubApi({ exists: false });
+  const styleResults = executeCommands(api, [
+    { op: "style", target: "幽灵", color: "#ff0000" } as Command,
+  ], "2d");
+  const styleFailures = collectFailures(styleResults);
+  assert.match(styleFailures[0].error, /不存在，无法设置样式/);
 });

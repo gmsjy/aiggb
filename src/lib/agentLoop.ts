@@ -59,7 +59,7 @@ const USER_DENIED_MSG = "用户拒绝了此操作";
 const TRUNCATION_RETRY_BUDGET_SCALE = 2;
 
 /** 截断重试时降到的思考档位（腾出正文/工具调用空间；GLM 经 buildThinkingParam 落为 disabled） */
-const TRUNCATION_RETRY_REASONING: "low" = "low";
+const TRUNCATION_RETRY_REASONING = "low" as const;
 
 // ──── 类型 ────
 
@@ -219,6 +219,8 @@ ${canvasGuide}
 - 分母含距离平方必须 +0.001 防除零。
 - 3D 禁止：SetViewDirection/SetFilling/SetPointSize/SetAxesRatio/SetCaption/ZoomIn。
 - SetColor r/g/b 必须 0~255 整数。
+- Min(a,b)/Max(a,b) 双参数形式执行失败 → 用 If(c, a, b)。
+- 命令名大小写敏感：If（不是 IF）、Curve、Segment。
 
 【工具分组速览（按需选用，非全部必用）】
 ${buildToolCategoryOverview()}
@@ -288,6 +290,9 @@ export async function runAgentLoop(
   let emptyResponseRetried = false; // ★ 空响应重试标志（仅重试 1 次）
   let retryOverrides: AgentChatOverrides | undefined; // ★ 截断重试的参数覆盖（扩容预算 + 降思考档）
   let checkRounds = 0; // ★ 状态核对反馈计数
+  // ★ 同一对象反复报「不存在」的计数（按对象名）。这类失败被归为「可修正」不进熔断，
+  //    模型可能无限换写法重试同一个拼错的名字——第 2 次起注入明确指引
+  const missingObjCounts = new Map<string, number>();
 
   while (iterations < MAX_AGENT_ITERATIONS) {
     // 检查中断
@@ -539,6 +544,31 @@ export async function runAgentLoop(
       } else {
         consecutiveFailures = hard.every(s => s.failed) ? consecutiveFailures + 1 : 0;
       }
+    }
+
+    // ★ 同名对象重复「不存在」→ 注入停止重试的指引（每个对象名只注入一次）
+    //    典型场景：样式/动画工具反复引用同一个拼错/大小写不符的对象名
+    const MISSING_OBJ_RE = /对象\s*([A-Za-z_]\w{0,39})\s*不存在/;
+    for (const r of allResults) {
+      try {
+        const p = JSON.parse(r.content) as { success?: boolean; error?: string };
+        if (p.success !== false) continue;
+        const m = MISSING_OBJ_RE.exec(p.error ?? "");
+        if (!m) continue;
+        const name = m[1];
+        const seen = (missingObjCounts.get(name) ?? 0) + 1;
+        missingObjCounts.set(name, seen);
+        if (seen === 2) {
+          messages.push({
+            role: "user",
+            content:
+              `对象 ${name} 已多次报「不存在」。请停止对 ${name} 的原样重试：` +
+              `先调用 list_objects 核对画布上的真实对象名（区分大小写）；` +
+              `若画布上确实没有，先用创建类工具声明它再设置属性；` +
+              `若只是样式/动画设置，放弃该项不影响构造正确性。`
+          });
+        }
+      } catch { /* 非 JSON 结果忽略 */ }
     }
     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
       finalText = `连续 ${MAX_CONSECUTIVE_FAILURES} 轮工具调用失败，构造中止。`;

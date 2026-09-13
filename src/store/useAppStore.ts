@@ -141,11 +141,6 @@ interface AppState extends PersistedState {
    * 用于修复回路全失败回滚时、快照不可用情况下的兜底重建（newConstruction + 重放）。
    */
   constructionLog: string[];
-  /**
-   * 画布符号表（对象名/类型/定义）——GGB listener 实时同步。
-   * 供 Phase 2 编译注入画布状态（多轮连贯性，AI 不遗忘已建对象）。
-   */
-  symbolTable: Array<{ name: string; type: string; cmd: string }>;
   isThinking: boolean;
   /** 会话累计 token 用量（prompt/completion，运行期不持久化，随会话清空） */
   tokenUsage: { prompt: number; completion: number };
@@ -175,12 +170,9 @@ interface AppState extends PersistedState {
   setThinking: (b: boolean) => void;
   setAppName: (name: "classic" | "3d") => void;
   setAgentMode: (on: boolean) => void;
-  setSymbolTable: (symbols: Array<{ name: string; type: string; cmd: string }>) => void;
   recordTemplateUse: (id: string) => void;
   /** 累加一次 AI 调用的 token 用量 */
   addTokenUsage: (u: { prompt: number; completion: number }) => void;
-  /** 重置 token 累计（清空/新建会话时调用） */
-  resetTokenUsage: () => void;
   /** 一轮对话开始：清零本轮累计 */
   startRound: () => void;
   /** 一轮对话结束：本轮累计入历史（持久化）并清零 */
@@ -234,7 +226,6 @@ export const useAppStore = create<AppState>()(
       ggbAppName: "classic",
       messages: [],
       constructionLog: [],
-      symbolTable: [],
       isThinking: false,
       tokenUsage: { prompt: 0, completion: 0 },
       roundTokenUsage: { prompt: 0, completion: 0 },
@@ -253,7 +244,6 @@ export const useAppStore = create<AppState>()(
       setThinking: b => set({ isThinking: b }),
       setAppName: name => set({ ggbAppName: name }),
       setAgentMode: on => set({ agentMode: on }),
-      setSymbolTable: symbols => set({ symbolTable: symbols }),
       recordTemplateUse: id => set(state => ({
         templateUsage: { ...(state.templateUsage ?? {}), [id]: ((state.templateUsage ?? {})[id] ?? 0) + 1 }
       })),
@@ -267,7 +257,6 @@ export const useAppStore = create<AppState>()(
           completion: state.roundTokenUsage.completion + u.completion
         }
       })),
-      resetTokenUsage: () => set({ tokenUsage: { prompt: 0, completion: 0 } }),
       startRound: () => set({ roundTokenUsage: { prompt: 0, completion: 0 } }),
       finishRound: () => {
         const round = get().roundTokenUsage;
@@ -365,7 +354,7 @@ export const useAppStore = create<AppState>()(
         });
         set({
           currentSessionId: id, sessionTitle: "新会话", sessionCreatedAt: now,
-          messages: [], constructionLog: [], symbolTable: [], pendingCanvasSnapshot: null,
+          messages: [], constructionLog: [], pendingCanvasSnapshot: null,
           tokenUsage: { prompt: 0, completion: 0 },
         });
         get().ggbApi?.newConstruction();
@@ -387,7 +376,6 @@ export const useAppStore = create<AppState>()(
           sessionCreatedAt: loaded.createdAt,
           messages: loaded.messages,
           constructionLog: loaded.constructionLog,
-          symbolTable: [],
           domain: loaded.domain,
           agentMode: loaded.agentMode,
           pendingCanvasSnapshot: loaded.canvasSnapshot ?? null,
@@ -450,7 +438,7 @@ export const useAppStore = create<AppState>()(
         });
         set({
           currentSessionId: id, sessionTitle: "新会话", sessionCreatedAt: now,
-          messages: [], constructionLog: [], symbolTable: [], pendingCanvasSnapshot: null,
+          messages: [], constructionLog: [], pendingCanvasSnapshot: null,
           tokenUsage: { prompt: 0, completion: 0 },
         });
         get().ggbApi?.newConstruction();

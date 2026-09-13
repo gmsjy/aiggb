@@ -30,8 +30,9 @@ const FORBIDDEN_CMD_RE = new RegExp(
   "i"
 );
 
-/** 展示型文本（caption/label/unit）的危险片段检测：防 prompt 注入经标注字段落地 */
-const DANGEROUS_TEXT_RE = /<script|javascript:|on\w+=/i;
+/** 展示型文本（caption/label/unit）的危险片段检测：防 prompt 注入经标注字段落地。
+ *  on\w+= 需要左侧非字母边界——否则驼峰变量名（tOnAxis=、posOnGround=）会被误杀（实测 E2E）。 */
+const DANGEROUS_TEXT_RE = /<script\b|javascript:|(?:^|[^\w])on\w+\s*=/i;
 function withTextSafety(s: z.ZodString): z.ZodEffects<z.ZodString> {
   return s.refine(v => !DANGEROUS_TEXT_RE.test(v), "文本含有危险片段");
 }
@@ -40,7 +41,7 @@ const SafeCmd = z
   .string()
   .min(1)
   .max(500)
-  .refine(s => !/<script|javascript:|on\w+=/i.test(s), "命令含有危险片段")
+  .refine(s => !/<script\b|javascript:|(?:^|[^\w])on\w+\s*=/i.test(s), "命令含有危险片段")
   .refine(
     s => !FORBIDDEN_CMD_RE.test(stripStringLiterals(s)),
     "命令使用了不存在的 GGB 命令（命中硬黑名单），请删除或改用白名单命令"
@@ -68,8 +69,8 @@ const CoordExpr = z
     "坐标表达式不能调用 GGB 命令"
   );
 
-/** number | "1.23" | "1e-3" → number；其他情况抛错 */
-const NumLike = z.preprocess(v => {
+/** number | "1.23" | "1e-3" → number；其他情况抛错（导出供 tools.ts 工具 schema 复用，双路径容错一致） */
+export const NumLike = z.preprocess(v => {
   if (typeof v === "number") return v;
   if (typeof v === "string") {
     const trimmed = v.trim();
@@ -81,7 +82,7 @@ const NumLike = z.preprocess(v => {
 }, z.number());
 
 /** 与 NumLike 同思路，但保持整数语义 */
-const IntLike = z.preprocess(v => {
+export const IntLike = z.preprocess(v => {
   if (typeof v === "number") return Math.trunc(v);
   if (typeof v === "string") {
     const n = Number(v.trim());
@@ -91,7 +92,7 @@ const IntLike = z.preprocess(v => {
 }, z.number().int());
 
 /** number | "true"/"false" → boolean，容错 AI 把布尔写成字符串 */
-const BoolLike = z.preprocess(v => {
+export const BoolLike = z.preprocess(v => {
   if (typeof v === "boolean") return v;
   if (typeof v === "string") {
     const s = v.trim().toLowerCase();

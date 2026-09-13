@@ -59,6 +59,13 @@ export class MockGGB implements Pick<GGBAppletApi,
     const setCmdM = /^Set\w+\s*\(/i.exec(cmd);
     if (setCmdM) return true; // 属性命令一律放行（已在 bridge 层做过参数校验）
 
+    // Delete(obj) —— 真正移除对象（bridge 层用 exists 前后对比判定成败，mock 必须同步语义）
+    const delM = /^Delete\s*\(\s*([^)]+?)\s*\)\s*;?\s*$/i.exec(cmd);
+    if (delM) {
+      this.deleteObject(delM[1]);
+      return true;
+    }
+
     // name = expr
     const assignM = /^(\w[\w_]*)\s*\(?([^)=]*)\)?\s*=\s*(.+)$/.exec(cmd);
     if (assignM) {
@@ -343,7 +350,7 @@ export class MockGGB implements Pick<GGBAppletApi,
   setGridVisible = () => {};
   setErrorDialogsActive = () => {};
 
-  // —— Getter（供 getRichSnapshot / getCanvasSnapshot 使用） ——
+  // —— Getter（供 getRichSnapshot 使用） ——
   getColor = (name: string) => String(this.styles.get(name)?.color ?? "#000000");
   getVisible = () => true;
   getLineThickness = (name: string) => Number(this.styles.get(name)?.thickness ?? 1);

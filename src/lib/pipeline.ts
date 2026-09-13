@@ -742,12 +742,11 @@ function summarizeCommandsForHistory(commands: Array<{ op: string; [k: string]: 
       }
       case "view": {
         if (c.xmin !== undefined) views.push(`range[${c.xmin},${c.xmax}]×[${c.ymin},${c.ymax}]`);
-        if (c.perspective) views.push(`persp=${c.perspective}`);
-        if (c.showGrid !== undefined) views.push(`grid=${c.showGrid}`);
         break;
       }
       case "animate": {
-        animated.push(`${c.target}:${c.action}`);
+        // animate schema 字段：target/on/speed/repeat（无 action；on 决定启停）
+        animated.push(`${c.target}(${c.on ? "开" : "停"}${c.speed !== undefined ? `,速=${c.speed}` : ""})`);
         break;
       }
       case "constants": {
@@ -1158,13 +1157,8 @@ export async function runVisionPipeline(
       return;
     }
 
-    let decision: ProblemDecision;
-    try {
-      decision = await waitProblemReview(problem, deps.signal, h => cb.onProblemReview!(h, reviewId));
-    } catch (err) {
-      if (deps.signal.aborted) throw err;
-      throw err;
-    }
+    // 取消与异常统一向上抛：runRound 的 finally 统一释放锁，wasAborted() 静默吞 AbortError
+    const decision = await waitProblemReview(problem, deps.signal, h => cb.onProblemReview!(h, reviewId));
 
     if (decision.action === "retry") {
       deps.removeMessage(reviewId);

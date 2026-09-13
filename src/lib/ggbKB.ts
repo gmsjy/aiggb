@@ -373,6 +373,14 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     modes: ["2d", "3d"], category: "slider",
     examples: ["SetTrace(P, true)"],
   },
+  {
+    // ★ 必须收录：HALLUCINATION_MAP 把 PauseAnimation/StopAnimation 纠正为 SetAnimating(obj, false)，
+    //   若 KB 无此条目，纠正后的命令下轮又会被纠正器报「不在已验证命令库」，来回震荡
+    name: "SetAnimating", signature: "SetAnimating(obj, flag)", paramCount: [2, 2],
+    modes: ["2d", "3d"], category: "slider",
+    examples: ["SetAnimating(t, false)"],
+    note: "flag=false 停止动画（等价 PauseAnimation/StopAnimation）；启动动画也可用 animate op",
+  },
 
   // ─── 度量 ───
   {
@@ -696,11 +704,15 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     name: "Min", signature: "Min(list)", paramCount: [1, 1],
     modes: ["2d", "3d"], category: "metric",
     examples: ["m = Min({3,1,2})"],
+    // ★ 实测：Min/Max 的双参数形式 Min(a, b) 在部分场景直接失败（哪怕是合法表达式），
+    //   两值取小/取大必须用 If(c, a, b) 条件表达式——见 prompts 已知坑
+    note: "只支持单参数列表；两数取小/取大用 If(c, a, b)，禁止 Min(a, b) 双参数形式",
   },
   {
     name: "Max", signature: "Max(list)", paramCount: [1, 1],
     modes: ["2d", "3d"], category: "metric",
     examples: ["M = Max({3,1,2})"],
+    note: "只支持单参数列表；两数取大用 If(c, a, b)，禁止 Max(a, b) 双参数形式",
   },
 
   // ─── 3D 几何体 ───
@@ -875,11 +887,6 @@ export function filterCommandsByMode(mode: "2d" | "3d"): GGBCommandDef[] {
   return GGB_COMMAND_DEFS.filter(c => c.modes.includes(mode));
 }
 
-/** 按分类过滤命令 */
-export function filterCommandsByCategory(category: CommandCategory): GGBCommandDef[] {
-  return GGB_COMMAND_DEFS.filter(c => c.category === category);
-}
-
 /** 查找命令（精确匹配） */
 export function findCommand(name: string): GGBCommandDef | undefined {
   return GGB_COMMAND_DEFS.find(c => c.name.toLowerCase() === name.toLowerCase());
@@ -958,10 +965,10 @@ export function buildCommandReference(mode: "2d" | "3d", domain?: "general" | "p
 
 /** 生成按模式过滤的臆造警告文本（注入 prompt） */
 export function buildHallucinationWarnings(mode: "2d" | "3d"): string {
+  // 3D 模式只保留 Set* 相关的臆造映射（SetFilling 等命令真实存在、不算臆造，
+  // 它们的 3D 禁令由下方 modeNote 硬拼文案覆盖——MAP 里没有那些条目，勿再按名字过滤）
   const relevant = mode === "3d"
-    ? HALLUCINATION_MAP.filter(h =>
-        ["SetFilling", "SetPointSize", "SetAxesRatio", "SetViewDirection", "SetCaption", "ShowLabel", "SetLabelMode", "Rename", "ZoomIn"]
-          .includes(h.hallucination) || h.hallucination.startsWith("Set"))
+    ? HALLUCINATION_MAP.filter(h => h.hallucination.startsWith("Set"))
     : HALLUCINATION_MAP;
 
   const modeNote = mode === "3d"

@@ -11,7 +11,7 @@
 import type { GGBAppletApi } from "../types/ggb";
 import { TOOL_SCHEMAS } from "./tools";
 import { GGB_FORBIDDEN_COMMANDS } from "./commands";
-import { hexToRgb, fitViewToAspect } from "./ggbBridge";
+import { hexToRgb, fitViewToAspect, isScriptingCommand } from "./ggbBridge";
 import { correctCommand } from "./commandCorrect";
 import { validateGGBCommand, validateSequenceArgs } from "./commandValidate";
 import { shouldBatch, markRepaintBusy } from "./repaintGate";
@@ -36,7 +36,8 @@ export interface ToolResult {
 /** 执行单个工具调用，返回 tool_result 消息 */
 export function executeToolCall(
   api: GGBAppletApi,
-  call: ToolCallRequest
+  call: ToolCallRequest,
+  appMode?: "2d" | "3d"
 ): ToolResult {
   const schema = TOOL_SCHEMAS[call.name];
   let args: Record<string, unknown>;
@@ -70,7 +71,7 @@ export function executeToolCall(
 
   // Step 3: 执行
   try {
-    const result = dispatch(api, call.name, args);
+    const result = dispatch(api, call.name, args, appMode);
     return formatResult(call.id, true, result);
   } catch (err) {
     return formatResult(
@@ -96,7 +97,7 @@ export function executeToolCalls(
     api.setRepaintingActive(false);
   }
   try {
-    return calls.map(c => executeToolCall(api, c));
+    return calls.map(c => executeToolCall(api, c, appMode));
   } finally {
     if (useBatch) {
       api.setRepaintingActive(true);
@@ -131,7 +132,8 @@ function createOneSlider(
 function dispatch(
   api: GGBAppletApi,
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  appMode?: "2d" | "3d"
 ): string {
   switch (name) {
     // ═══ 批量创建（优先使用，减少 API 往返） ═══
@@ -382,7 +384,7 @@ function dispatch(
         //    实测日志（[AiGGB:DIAG]）：classic 画布下 setPerspective("3d") 会触发 GGB
         //    内部视图过渡（DockGlassPane 接管），动画不完成时 canvas 全部消失 →
         //    心跳被迫硬重建 applet（销毁 + 重注入 + 快照恢复），用户看到明显闪烁。
-        //    2D↔3D 的正规路径是工具栏切换 → switchAppletMode → 整体重注入 applet。
+        //    2D↔3D 的正规路径是工具栏切换 → setAppName（store）→ GGBCanvas 监听重建，整体重注入 applet。
         const already3D = api.getPerspectiveXML?.()?.includes("3D");
         changes.push(already3D
           ? "3D 透视（已是 3D）"
@@ -440,7 +442,7 @@ function dispatch(
       const correction = correctCommand(cmd);
       const finalCmd = correction.changed ? correction.corrected : cmd;
       // ★ 命令级静态预检：括号配对 / 逗号误写 / 参数个数
-      const check = validateGGBCommand(finalCmd);
+      const check = validateGGBCommand(finalCmd, appMode);
       if (!check.ok) throw new Error(check.message);
       const ok = api.evalCommand(finalCmd);
       if (!ok) throw new Error(`Sequence 执行失败：${finalCmd}`);
@@ -456,10 +458,11 @@ function dispatch(
       const correction = correctCommand(command);
       const finalCmd = correction.changed ? correction.corrected : command;
       // ★ 静态语法预检：接住 GGB 引擎只会回 false 的语法错误（括号/逗号/参数个数）
-      const check = validateGGBCommand(finalCmd);
+      const check = validateGGBCommand(finalCmd, appMode);
       if (!check.ok) throw new Error(check.message);
       const ok = api.evalCommand(finalCmd);
-      if (!ok) throw new Error(`命令执行失败：${finalCmd}`);
+      // ★ scripting 命令成功也返回 false（见 ggbBridge.isScriptingCommand），不以此判失败
+      if (!ok && !isScriptingCommand(finalCmd)) throw new Error(`命令执行失败：${finalCmd}`);
       const note = correction.changed
         ? `（已纠正：${correction.suggestions.join("; ")}）`
         : correction.suggestions.length > 0

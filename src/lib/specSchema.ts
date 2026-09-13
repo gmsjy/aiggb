@@ -25,11 +25,3 @@ export const RefinedSpec = z
   );
 
 export type RefinedSpec = z.infer<typeof RefinedSpec>;
-
-/** 精简的 Zod 错误消息 */
-export function formatSpecError(err: z.ZodError): string {
-  return err.issues
-    .map(i => `${i.path.join(".")}: ${i.message}`)
-    .slice(0, 5)
-    .join("; ");
-}

@@ -26,16 +26,6 @@ export const SatisfactionResult = z.object({
 
 export type SatisfactionResult = z.infer<typeof SatisfactionResult>;
 
-// ──── 可注入的评估函数签名（供 PipelineDeps 使用） ────
-
-export type EvalSatisfactionFn = (
-  config: AIConfig,
-  refinedSpec: string,
-  snapshot: string,
-  signal?: AbortSignal,
-  lightModel?: string
-) => Promise<SatisfactionResult>;
-
 // ──── 评估 Prompt（~300 tokens） ────
 
 const EVAL_SYSTEM_PROMPT = `你是 GeoGebra 图形逻辑审查员。对照【精炼绘图规格】检查【当前画布快照】，判断是否满足要求。

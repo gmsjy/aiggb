@@ -14,10 +14,8 @@ import {
   isBatch3DEnabled,
   setBatch3DEnabled,
   markRepaintBusy,
-  clearRepaintBusy,
   isRepaintBusy,
   BATCH_MIN_COMMANDS,
-  REPAINT_GRACE_MS,
 } from "../src/lib/repaintGate";
 
 // ★ Node 环境没有 localStorage：装一个内存桩，验证开关的读写与持久化语义
@@ -29,8 +27,9 @@ const storage = new Map<string, string>();
 };
 
 test.afterEach(() => {
-  clearRepaintBusy();
-  storage.clear();       // 同时复位 3D 批处理开关（默认 = 启用）
+  // 静默期无需清理：busyUntil 随时间自动过期（生产语义一致），跨测试只有"仍忙"风险，
+  // 而所有 isRepaintBusy()===false 的断言都会先 markRepaintBusy(短时长) 覆盖旧值
+  storage.clear();       // 复位 3D 批处理开关（默认 = 启用）
 });
 
 // ── shouldBatch ──
@@ -81,7 +80,6 @@ function toggleSpy() {
 
 test("withRepaintBatch：非空批次 → 暂停 → 执行 → 恢复 + 进入静默期", () => {
   const { api, calls } = toggleSpy();
-  clearRepaintBusy();
   const out = withRepaintBatch(api, 2, "2d", () => {
     assert.deepEqual(calls, [false], "执行期间应处于暂停重绘状态");
     return "done";
@@ -118,23 +116,13 @@ test("withRepaintBatch：3D 关闭批处理后直接执行", () => {
 
 // ── 重绘静默期 ──
 
-test("静默期：markRepaintBusy 后 isRepaintBusy 为真，clear 后为假", () => {
-  clearRepaintBusy();
-  assert.equal(isRepaintBusy(), false);
-  markRepaintBusy();
+test("静默期：markRepaintBusy 后 isRepaintBusy 为真，到时自动失效（不阻塞心跳）", async () => {
+  markRepaintBusy(40);
   assert.equal(isRepaintBusy(), true, "批处理恢复重绘后必须挂起心跳判定");
-  clearRepaintBusy();
-  assert.equal(isRepaintBusy(), false);
-});
-
-test("静默期：过期后自动失效（不阻塞心跳）", () => {
-  markRepaintBusy(1);
-  const until = Date.now() + REPAINT_GRACE_MS;
-  assert.ok(until > Date.now(), "默认静默期覆盖 3D 整屏重建窗口");
-  return new Promise<void>(resolve => {
+  await new Promise(resolve => {
     setTimeout(() => {
-      assert.equal(isRepaintBusy(), false, "1ms 静默期结束后心跳应恢复工作");
+      assert.equal(isRepaintBusy(), false, "静默期结束后心跳应恢复工作");
       resolve();
-    }, 15);
+    }, 60);
   });
 });

@@ -205,3 +205,120 @@ test("splitTopLevelArgs 尊重嵌套", () => {
   assert.deepEqual(splitTopLevelArgs("(i, i^2), i, 0, 10, 0.5"), ["(i, i^2)", "i", "0", "10", "0.5"]);
   assert.deepEqual(splitTopLevelArgs("Sequence(Vector((i,j),(i,j)),i,-4,4,1), j, -3, 3, 1").length, 5);
 });
+
+// ── 9. 属性命令专项：值域 / 色名 / 3D 禁令 / 参数个数 ──
+
+test("SetColor 0~1 浮点误用被拦截并给出 ×255 换算", () => {
+  const r = validateGGBCommand("SetColor(c, 0.9, 0.2, 0.2)");
+  assert.equal(r.ok, false, "0~1 浮点必须被拦截");
+  assert.match(r.message, /0~255/);
+  assert.match(r.message, /230/, "应给出 0.9→230 的换算提示");
+});
+
+test("SetColor 0~255 整数合法通过（不误杀）", () => {
+  for (const cmd of ["SetColor(c, 230, 51, 51)", "SetColor(c, 0, 0, 0)", "SetColor(c, 255, 255, 255)"]) {
+    const r = validateGGBCommand(cmd);
+    assert.equal(r.ok, true, `应通过：${cmd}，实际：${r.message}`);
+  }
+});
+
+test("SetColor 超出 0~255 被拦截", () => {
+  const r = validateGGBCommand("SetColor(c, 300, 51, 51)");
+  assert.equal(r.ok, false);
+  assert.match(r.message, /0~255/);
+});
+
+test("SetColor 表达式参数不误杀（非字面量交给引擎）", () => {
+  const r = validateGGBCommand("SetColor(c, 255*a, 128*b, 0)");
+  assert.equal(r.ok, true, `表达式参数应放行，实际：${r.message}`);
+});
+
+test("SetColor 中文色名被拦截", () => {
+  const r = validateGGBCommand('SetColor(c, "红色")');
+  assert.equal(r.ok, false);
+  assert.match(r.message, /英文/);
+});
+
+test("SetColor 裸标识符色名被拦截（未加引号 → 被当对象引用）", () => {
+  const r = validateGGBCommand("SetColor(c, red)");
+  assert.equal(r.ok, false);
+  assert.match(r.message, /引号|字符串/);
+});
+
+test('SetColor 英文色名带引号合法通过', () => {
+  const r = validateGGBCommand('SetColor(c, "red")');
+  assert.equal(r.ok, true, `实际：${r.message}`);
+});
+
+test("SetLineOpacity / SetFilling 超出 0~1 被拦截", () => {
+  for (const cmd of ["SetLineOpacity(c, 50)", "SetFilling(p, 30)"]) {
+    const r = validateGGBCommand(cmd);
+    assert.equal(r.ok, false, `${cmd} 应被拦截`);
+    assert.match(r.message, /0~1/);
+  }
+  for (const cmd of ["SetLineOpacity(c, 0.5)", "SetFilling(p, 0.3)"]) {
+    const r = validateGGBCommand(cmd);
+    assert.equal(r.ok, true, `${cmd} 应通过，实际：${r.message}`);
+  }
+});
+
+test("3D 模式：SetFilling 被拦截并提示 style opacity 替代", () => {
+  const r = validateGGBCommand("SetFilling(cube, 0.3)", "3d");
+  assert.equal(r.ok, false, "3D 下 SetFilling 必须被拦截");
+  assert.match(r.message, /3D/);
+  assert.match(r.message, /style|opacity/, "应给出替代方案");
+});
+
+test("3D 模式：禁用清单（SetPointSize/SetCaption/ShowLabel/ZoomIn/SetViewDirection）全被拦截", () => {
+  for (const cmd of [
+    "SetPointSize(P, 5)",
+    'SetCaption(A, "小球")',
+    "ShowLabel(A, true)",
+    "ZoomIn(2)",
+    "SetViewDirection(Vector((1,0,0)))",
+  ]) {
+    const r = validateGGBCommand(cmd, "3d");
+    assert.equal(r.ok, false, `${cmd} 在 3D 下应被拦截，实际：${r.message}`);
+    assert.match(r.message, /3D/);
+  }
+});
+
+test("2D 模式：同一批命令合法通过（不误杀）", () => {
+  for (const cmd of [
+    "SetPointSize(P, 5)",
+    'SetCaption(A, "小球")',
+    "ShowLabel(A, true)",
+    "ZoomIn(2)",
+    "SetFilling(p, 0.3)",
+  ]) {
+    const r = validateGGBCommand(cmd, "2d");
+    assert.equal(r.ok, true, `${cmd} 在 2D 下应通过，实际：${r.message}`);
+  }
+});
+
+test("mode 缺省时不触发 3D 禁令（向后兼容）", () => {
+  const r = validateGGBCommand("SetFilling(p, 0.3)");
+  assert.equal(r.ok, true, `实际：${r.message}`);
+});
+
+test("3D 模式：SetColor（2d+3d 双模式命令）不被禁令误杀", () => {
+  const r = validateGGBCommand("SetColor(ball, 230, 51, 51)", "3d");
+  assert.equal(r.ok, true, `实际：${r.message}`);
+});
+
+test("SetColor 2 参形态收到数字被拦截（提示 4 参 RGB 形态）", () => {
+  const r = validateGGBCommand("SetColor(c, 230)");
+  assert.equal(r.ok, false);
+  assert.match(r.message, /4 个参数/);
+});
+
+test("属性命令参数个数：SetLineStyle 缺参被拦截（回退 ggbKB paramCount）", () => {
+  const r = validateGGBCommand("SetLineStyle(c)");
+  assert.equal(r.ok, false);
+  assert.match(r.message, /参数/);
+});
+
+test("SetAnimating（KB 补录条目）参数合法通过", () => {
+  const r = validateGGBCommand("SetAnimating(t, false)");
+  assert.equal(r.ok, true, `实际：${r.message}`);
+});

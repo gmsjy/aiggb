@@ -140,26 +140,7 @@ export function GGBCanvas() {
             setGGBApi(api);
             // ★ 刚注入/重建：canvas 尚在建立，心跳不应在此期间判定"画布消失"
             markRepaintBusy();
-            // ★ 画布符号表同步：监听对象增删/更新，供 Phase 2 编译注入画布状态
-            const refreshSymbols = () => {
-              try {
-                const names = api.getAllObjectNames();
-                useAppStore.getState().setSymbolTable(
-                  names.slice(0, 80).map(n => ({
-                    name: n,
-                    type: api.getObjectType(n),
-                    cmd: api.getCommandString(n) ?? "",
-                  }))
-                );
-              } catch { /* 画布未就绪时忽略 */ }
-            };
-            refreshSymbols();
-            try {
-              api.registerAddListener(() => refreshSymbols());
-              api.registerRemoveListener(() => refreshSymbols());
-              api.registerUpdateListener(() => refreshSymbols());
-            } catch { /* listener 可选，失败不影响 */ }
-            // ★ Phase 1.2: 画布就绪时应用领域级配置
+            // ★ 画布就绪时应用领域级配置
             const curDomain = useAppStore.getState().domain;
             applyCanvasConfig(api, curDomain, mode === "3d" ? "3d" : "2d");
             injectingRef.current = false;

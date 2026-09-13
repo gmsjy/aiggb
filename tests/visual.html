@@ -6,15 +6,20 @@
   body{margin:0;background:#fff;overflow:hidden}
   #ggb{width:100vw;height:100vh}
 </style>
-<script src="https://www.geogebra.org/apps/deployggb.js"></script>
+<!-- ★ 唯一 op 执行宿主：视觉回归（tests/visual-screenshots.ts）与 README 效果图
+     （scripts/regen-demos.ts）共用本文件，op 执行器镜像 src/lib/ggbBridge.ts。
+     必须经 Vite dev server（http://localhost:5173）访问：加载本地自托管 GGB bundle，
+     与生产一致、不依赖 CDN。
+     用法：?cmds=<JSON> 必填；?app=3d 可选（3D 场景以 appName "3d" 注入）。 -->
+<script src="/GeoGebra/deployggb.js"></script>
 </head>
 <body>
 <div id="ggb"></div>
 <script>
-// 接收来自 Playwright 的命令列表，逐条执行后信号完成。
-// ★ 完整实现全部 op（镜像 ggbBridge.ts），保证动画真实运行、画布完整渲染。
+// 接收来自 Playwright 的命令列表，逐条执行后以 document.title=DONE:ok/total 信号完成。
 const params = new URLSearchParams(location.search);
 const commandsJson = params.get("cmds");
+const appName = params.get("app") === "3d" ? "3d" : "classic";
 if (!commandsJson) {
   document.body.innerHTML = "<h2>No commands provided. Use ?cmds=... query param.</h2>";
 } else {
@@ -23,7 +28,7 @@ if (!commandsJson) {
   catch(e) { document.body.innerHTML = "<h2>Invalid JSON</h2>"; throw e; }
 
   const applet = new GGBApplet({
-    appName: "classic", width: 1000, height: 700,
+    appName: appName, width: 1000, height: 700,
     showToolBar: false, showAlgebraInput: false, showMenuBar: false,
     showResetIcon: false, enableLabelDrags: false, enableShiftDragZoom: true,
     enableRightClick: false, errorDialogsActive: false, useBrowserForJS: true,
@@ -32,7 +37,7 @@ if (!commandsJson) {
     scaleContainerClass: "ggb-container-scale"
   }, true);
 
-  applet.setHTML5Codebase("https://www.geogebra.org/apps/latest/web3d/");
+  applet.setHTML5Codebase(new URL("/GeoGebra/HTML5/5.0/web3d/", location.origin).href);
   applet.inject("ggb");
 
   // ── op 执行器（镜像 src/lib/ggbBridge.ts）──
@@ -41,14 +46,27 @@ if (!commandsJson) {
     return [parseInt(m.slice(0,2),16), parseInt(m.slice(2,4),16), parseInt(m.slice(4,6),16)];
   };
 
-  let tmpSeq = 0;
-  const tmpId = p => `${p}${tmpSeq++}`;
   const isCoordLiteral = s => /^\s*\(/.test(s) && /\)\s*$/.test(s);
 
   function executeOne(api, cmd) {
     try {
       switch (cmd.op) {
-        case "eval": return api.evalCommand(cmd.cmd);
+        case "eval": {
+          // ★ Delete 特判（与生产 ggbBridge 同语义）：成败都返回 false，用存在性前后对比判定
+          const delM = /^(?:\w+\s*=\s*)?Delete\s*\(\s*([A-Za-z_]\w*)\s*\)\s*;?\s*$/.exec(cmd.cmd.trim());
+          if (delM) {
+            const existed = api.exists(delM[1]);
+            api.evalCommand(cmd.cmd);
+            const ok2 = existed && !api.exists(delM[1]);
+            if (!ok2) return false;
+            return true;
+          }
+          const ok = api.evalCommand(cmd.cmd);
+          // ★ scripting 命令（Set*/Show*/ZoomIn 等不产生新对象的命令）成功也返回 false，
+          //   与生产 ggbBridge.isScriptingCommand 同语义，不以此判定失败
+          if (!ok && /^(?:Set|Show)[A-Za-z]|^(?:ZoomIn|ZoomOut|CenterView|Pan|StartAnimation|StopAnimation)\b/.test(cmd.cmd.trim())) return true;
+          return ok;
+        }
         case "slider": {
           const ok = api.evalCommand(`${cmd.name} = Slider(${cmd.min}, ${cmd.max}, ${cmd.step}, 1, 150, false, true, false, false)`);
           if (!ok) return false;
@@ -76,8 +94,19 @@ if (!commandsJson) {
           if (cmd.color) { const [r,g,b]=hexToRgb(cmd.color); api.setColor(cmd.target,r,g,b); }
           if (cmd.thickness !== undefined) api.setLineThickness(cmd.target, cmd.thickness);
           if (cmd.visible !== undefined) api.setVisible(cmd.target, cmd.visible);
-          if (cmd.opacity !== undefined) api.setFilling(cmd.target, cmd.opacity);
-          if (cmd.dashed) api.setLineStyle(cmd.target, 1);
+          if (cmd.opacity !== undefined) {
+            // ★ 与生产 ggbBridge 一致：SetLineOpacity 是 scripting 命令，成功也返回 false，
+            //   生效与否以 getXML 实读 lineStyle opacity（0~255 刻度，默认 178≈0.7）为准；
+            //   未生效（如 3D 立体）才回退 SetFilling——否则 2D 圆会被无谓填充（灰盘）
+            api.evalCommand(`SetLineOpacity(${cmd.target}, ${cmd.opacity})`);
+            const ls = /<lineStyle[^>]*?opacity="([\d.]+)"/.exec(api.getXML(cmd.target) || "");
+            const lo = ls ? parseFloat(ls[1]) / 255 : undefined;
+            const applied = lo !== undefined ? Math.abs(lo - cmd.opacity) <= 0.02 : cmd.opacity >= 0.99;
+            if (!applied) api.evalCommand(`SetFilling(${cmd.target}, ${cmd.opacity})`);
+          }
+          if (cmd.dashed !== undefined) api.setLineStyle(cmd.target, cmd.dashed ? 1 : 0);
+          if (cmd.pointSize !== undefined) api.setPointSize(cmd.target, cmd.pointSize);
+          if (cmd.pointStyle !== undefined) api.setPointStyle(cmd.target, cmd.pointStyle);
           return true;
         }
         case "view": {
@@ -102,7 +131,8 @@ if (!commandsJson) {
           let allOk = true;
           for (let fi = 0; fi < cmd.forces.length; fi++) {
             const f = cmd.forces[fi];
-            const t = `_fv${fi}`;
+            // ★ 临时名不能以 "_" 开头——GGB 拒绝下划线开头的对象名（与生产 tmpFv 前缀一致）
+            const t = `tmpFv${fi}`;
             if (!api.evalCommand(`${t} = Vector((0,0), ${f.vec})`)) { allOk = false; continue; }
             if (!api.evalCommand(`${f.name} = Vector(${cmd.at}, ${cmd.at} + ${t})`)) { allOk = false; continue; }
             if (f.color) { const [r,g,b]=hexToRgb(f.color); api.setColor(f.name,r,g,b); }

@@ -46,14 +46,14 @@
 | `schema.ts` | AI 输出 Zod 校验 | `Command`（discriminatedUnion，14 op）、`AIResponse`（含 `ask`、`self_check`）、`NumLike`/`BoolLike`/`IntLike` 容错、`SafeCmd`（臆造命令硬黑名单 + XSS 过滤）、`CoordExpr`（vector/forceDiagram 坐标表达式注入防护）、`withTextSafety`（caption/label/unit 文本安全）；`superRefine` 做 slider/view 语义 + ask 互斥校验 |
 | `ggbKB.ts` | **RAG 命令知识库** | `GGB_COMMAND_DEFS`（~126 条命令：签名/参数/2D3D 适用）、`HALLUCINATION_MAP`（25 条臆造→正确映射）、`buildCommandReference(mode, domain)`、`buildHallucinationWarnings(mode)`、`findCommand`、`findHallucination` |
 | `commandCorrect.ts` | 后置命令纠正器 | `correctCommand(cmd)`（Levenshtein ≤2 模糊纠正 + 臆造查表 + 参数个数校验）、`batchCorrect()`、`correctionsToRepairContext()` |
-| `commandValidate.ts` | **执行前静态语法预检**（纯 TS） | `validateGGBCommand(cmd)` → `{ok, issues[], message}`：括号配对（含坐标括号与嵌套调用）、`).` 句点误用（逗号手误）、Sequence 参数契约（官方 5 种重载分支判定 / 循环变量单字母 / 区间压缩 / 尾部残留）、参数个数、运算符结尾；`validateSequenceArgs(args)` → eval_sequence 工具参数级检查；被 `ggbBridge.executeOne`（eval）与 `toolExecutor`（eval_raw / eval_sequence）统一调用，把无语义的引擎 false 变成可自愈的具体诊断 |
-| `specSchema.ts` | Phase 1 输出校验 | `RefinedSpec`（`{title?, spec?, ask?}`，spec/ask 互斥）、`formatSpecError` |
+| `commandValidate.ts` | **执行前静态语法预检**（纯 TS） | `validateGGBCommand(cmd, mode?)` → `{ok, issues[], message}`：括号配对（含坐标括号与嵌套调用）、`).` 句点误用（逗号手误）、Sequence 参数契约（官方 5 种重载分支判定 / 循环变量单字母 / 区间压缩 / 尾部残留）、参数个数（ARG_COUNT_HINTS + 属性命令回退 ggbKB paramCount）、运算符结尾、**属性命令专项**（3D 模式禁令 `mode-forbidden` / SetColor 值域与色名 `value-range`/`color-name` / 透明度 0~1，mode 经 ggbBridge/toolExecutor 透传）；`validateSequenceArgs(args)` → eval_sequence 工具参数级检查；被 `ggbBridge.executeOne`（eval）与 `toolExecutor`（eval_raw / eval_sequence）统一调用，把无语义的引擎 false 变成可自愈的具体诊断 |
+| `specSchema.ts` | Phase 1 输出校验 | `RefinedSpec`（`{title?, spec?, ask?}`，spec/ask 互斥） |
 | `specCache.ts` | 意图→规格缓存 | `lookupCachedSpec`/`storeCachedSpec`（模板精确匹配优先 + 存储精确键）、**`SpecStorage` 注入接口 + `createMemoryStorage()`（供单测）**；LRU ≤50 条、TTL 30 天、键含画布对象指纹（排除 `_` 前缀临时对象与物理常量，保证同场景稳定命中） |
-| `commands.ts` | 命令白名单/黑名单/流程 | `GGB_COMMANDS`、`GGB_FORBIDDEN_COMMANDS`（硬黑名单，被 schema 引用）、`GGB_5STAGE_FLOW`（参数→点→图形→动画→属性） |
-| `physics.ts` | 物理常量 + 配色 | `PHYSICS_CONSTANTS`（g/c/e/eps0/mu0/k_e/Grav/h/k_B）、`PHYSICS_COLORS`（位移蓝/速度绿/加速度橙/力红/电场紫/磁场青） |
+| `commands.ts` | 命令黑名单/流程 | `GGB_FORBIDDEN_COMMANDS`（硬黑名单，被 schema 引用）、`GGB_5STAGE_FLOW`（参数→点→图形→动画→属性）；命令签名/模式数据的权威来源是 ggbKB.ts |
+| `physics.ts` | 物理常量 | `PHYSICS_CONSTANTS`（g/c/e/eps0/mu0/k_e/Grav/h/k_B） |
 | `templates.ts` | 12 个一键模板（物理 2D 4 + 数学 2D 4 + 3D 4） | `Template {id, icon, title, subtitle, prompt, domain, mode}`；prompt 即精炼规格，天然命中 specCache |
-| `repaintGate.ts` | **画布重绘门控**（闪烁防治，纯 TS） | `shouldBatch(count, appMode)`（**任何非空批次都批处理**，3D 可关闭）；`withRepaintBatch(api, count, appMode, fn)`（暂停重绘 → 执行 → 恢复 + 静默期，抛错也恢复）；`isBatch3DEnabled`/`setBatch3DEnabled`（`localStorage: aiggb_batch_3d`）；`isDiagVerbose`/`setDiagVerbose`（`aiggb_diag` 逐节点日志开关）；`markRepaintBusy`/`isRepaintBusy`/`clearRepaintBusy`（`REPAINT_GRACE_MS=2000`）|
-| `ggbBridge.ts` | op → GGB API 执行器 | `executeCommands(api, commands, appMode?)` — 批量渲染走 `repaintGate.shouldBatch`（暂停重绘 → 整批执行 → 恢复 + `markRepaintBusy` 静默期）；`collectFailures`、**`resetTmpIds`**（vector 容错重试时复位临时对象计数）、`exportGGB`/`exportPNG`、`registerAppNameSetter`/`switchAppletMode`（2D↔3D）|
+| `repaintGate.ts` | **画布重绘门控**（闪烁防治，纯 TS） | `shouldBatch(count, appMode)`（**任何非空批次都批处理**，3D 可关闭）；`withRepaintBatch(api, count, appMode, fn)`（暂停重绘 → 执行 → 恢复 + 静默期，抛错也恢复）；`isBatch3DEnabled`/`setBatch3DEnabled`（`localStorage: aiggb_batch_3d`）；`isDiagVerbose`（`aiggb_diag` 逐节点日志开关，手改 localStorage）；`markRepaintBusy`/`isRepaintBusy`（`REPAINT_GRACE_MS=2000`，busyUntil 到时自动失效）|
+| `ggbBridge.ts` | op → GGB API 执行器 | `executeCommands(api, commands, appMode?)` — 批量渲染走 `repaintGate.shouldBatch`（暂停重绘 → 整批执行 → 恢复 + `markRepaintBusy` 静默期）；`collectFailures`、**`resetTmpIds`**（vector 容错重试时复位临时对象计数）、`exportGGB`/`exportPNG`（画布导出，Toolbar 消费）|
 | `agentLoop.ts` | **ReAct Agent 工具调用循环** | `runAgentLoop(userText, deps)` — observe→plan→act 循环，最大 30 次迭代，**每轮刷新 api 句柄**（防 applet 重建失效）、**连续 3 轮工具失败熔断**（`MAX_CONSECUTIVE_FAILURES`，参数/预检类错误不计入，给模型自我修正机会）、全拒绝判定按**本轮**被拒数（避免跨轮累积误触发）、危险工具确认按 `toolCallId` 匹配；**`onThinking` 回调**（分析/规划/执行工具/等待确认 4 个节点 + V4 `reasoning_content` 增量 🧠 实时展示）经 pipeline 透传 UI 减少等待焦虑；`reasoning_content` 回传受 `mustRoundtripReasoning` quirk 门控；空响应重试的截断判定**直接信任 `finish_reason="length"`**（不再依赖 `streamsFinishReason` 门控）；**`StateCheckSpec` 终止核对钩子**：AI 输出纯文本视为完成时用 `getRichSnapshot` 快照调 `check()`，未通过把 issues 反馈注入循环继续修正（`MAX_STATE_CHECK_ROUNDS=2`，共享 30 迭代预算；核对异常按通过结束——失败不阻断）；`buildStateCheckFeedback` 组装反馈消息；`convertHistory` 对 user turn attachments 折叠 `[附件:图片×N]` 占位；`registerConfirmationHandler`/`unregisterConfirmationHandler` 危险工具确认注入；`AgentLoopDeps`（含 `agentModel` + `stateCheck?`）、`AgentLoopResult` |
 | `toolExecutor.ts` | Agent 工具 → GGB API 分发 | `executeToolCall(api, call)`/`executeToolCalls(api, calls, appMode?)` — 批处理走 `repaintGate.shouldBatch`（任何非空批次）+ 恢复后静默期；运行时**不再切透视**（v1.8：classic 下 `setPerspective` 会触发 DockGlassPane → 画布消失 → 硬重建）；~20 个工具 case（create_point/slider/vector/style/animation…）|
 | `tools.ts` | 工具 Function Calling 定义 | `TOOL_DEFINITIONS`（OpenAI tool schemas）、`TOOL_SCHEMAS`（Zod 校验）、`getToolSafety(name)` → `"safe"\|"dangerous"`；dangerous 工具（eval_raw/delete/clear）需用户确认 |
@@ -110,9 +110,9 @@ Schema 校验失败 → `chatWithFormatRetry`（≤2 次格式重试，raw + det
 2. **自检层**：compile prompt 强制 AI 输出 `self_check`（逐项核对白名单/3D 禁用/Point+Vector/除零/参数个数/Sequence 契约）
 3. **清洗层**：`aiClient` stripCodeFence（BOM 剥离 + 去 code fence）
 4. **校验层**：`schema.ts`（臆造命令硬黑名单、slider/view 语义、ask 互斥、forceDiagram.vec 形态、CoordExpr 注入防护、withTextSafety 文本安全）
-5. **语法预检层**：`commandValidate.ts`（**执行前**纯文本静态检查：括号配对、逗号误写成句点、Sequence 参数契约、参数个数、运算符结尾）——把引擎那句无语义的「执行失败」换成「具体错在哪 + 正确形态」，供修复回路精准自愈；`eval`/`eval_raw`/`eval_sequence` 三条入口统一生效
+5. **语法预检层**：`commandValidate.ts`（**执行前**纯文本静态检查：括号配对、逗号误写成句点、Sequence 参数契约、参数个数、运算符结尾、**属性命令专项**——3D 模式禁令 / SetColor 值域 0~255 与色名形态 / 透明度 0~1）——把引擎那句无语义的「执行失败」换成「具体错在哪 + 正确形态」，供修复回路精准自愈；`eval`/`eval_raw`/`eval_sequence` 三条入口统一生效
 6. **纠正层**：`commandCorrect`（Levenshtein 模糊纠正 + 臆造映射 + 参数校验）
-7. **执行层**：`ggbBridge`（animate/trace 目标存在预检、vector Point+Point 自动重写）+ 修复回路
+7. **执行层**：`ggbBridge`（animate/trace/style 目标存在预检、vector Point+Point 自动重写、style opacity 双路可观测）+ 修复回路
 
 ## Agent 模式（ReAct 工具调用回路）
 
@@ -207,7 +207,7 @@ GeoGebra web3d 内部使用 `DockGlassPane`（一个 DIV 遮罩层）处理视�
 
 | 层 | 位置 | 机制 |
 |---|---|---|
-| **预防 #1** | `toolExecutor.ts:set_view` | **运行时完全不切透视**（v1.8）：classic 画布下 `setPerspective("3d")` 实测触发 DockGlassPane → canvas 全消失 → 心跳硬重建。已在 3D 则只回文案；2D 则返回提示「请用工具栏切 3D 模式」，模式切换统一交给 applet 重注入（`switchAppletMode`） |
+| **预防 #1** | `toolExecutor.ts:set_view` | **运行时完全不切透视**（v1.8）：classic 画布下 `setPerspective("3d")` 实测触发 DockGlassPane → canvas 全消失 → 心跳硬重建。已在 3D 则只回文案；2D 则返回提示「请用工具栏切 3D 模式」，模式切换统一走工具栏 `setAppName`（store）→ `GGBCanvas` 监听 `ggbAppName` 变化整体重注入 applet |
 | **预防 #2** | `repaintGate.ts:shouldBatch` + `ggbBridge.ts:executeCommands` | 批处理策略集中化：**任何非空批次都批处理**（实测：不批处理 → 代数区 avOutput / avDefinition / canvasDef 逐行重建 = 绘图闪烁）；3D 可由用户关闭 |
 | **预防 #3** | `repaintGate.withRepaintBatch` + `toolExecutor.executeToolCalls` / `agentLoop` 危险工具组 | 危险工具（eval_raw/eval_sequence）此前完全不批处理，v1.8 起统一批处理 |
 | **预防 #4** | `repaintGate.ts` 静默期 | `setRepaintingActive(true)` / applet 重建后 `markRepaintBusy()`，心跳在该窗口挂起 |
@@ -268,11 +268,12 @@ A/B 开关：设置面板「3D 批量重绘」（`localStorage: aiggb_batch_3d`�
 | `npm run test:record` | L3 | 在线全量 63 用例 + 覆盖 fixtures |
 | `npm run test:drift` | — | 漂移监控 N=10（需 .env 真实 Key）；`DRIFT_THINKING=high` 开 thinking 跑（A/B 用）；核心 `runDrift()` 已导出供 A/B 复用，统计含 token 用量 |
 | `npm run test:ab` | — | **A/B 测试**：`reasoning_effort` 开/关 同用例对比（端到端 + 延迟 + token 成本），输出 `tests/ab-report.json` |
-| `npm run test:visual` | — | Playwright 截图（physics,dynamic,composite）|
+| `npm run test:visual` | — | Playwright 截图（physics,dynamic,composite）。前置：`npm run dev` 已运行（5173，宿主 `tests/visual.html` 加载本地 GGB bundle）|
+| `npm run demos:regen` | — | **重生成 README 效果图**（docs/demos/ 10 个 GIF：P- 物理 / X- 复合 / D- 数学动态 / H- 3D）：fixture 场景 → dev server 本地 GGB 画布（宿主 `tests/visual.html`，与视觉回归共用；3D 场景 `?app=3d` 注入）→ Playwright 抓帧 8s → ffmpeg 调色板合成 640×448 GIF。`regen-demos.ts` 支持 per-id 附加命令（EXTRA_COMMANDS：静态场景补动画/覆盖样式）。前置：`npm run dev` 已运行（5173） |
 | `npm run prompt:iterate` | — | Prompt 迭代工作流 |
-| **单测** | — | 194 个（0 API）：`tests/commandValidate.test.ts`（Sequence 静态预检：官方 5 种重载/括号配对/逗号句点误用/循环变量契约）、`tests/pipeline.test.ts`（流水线状态机 + 视觉管线 + 视觉核对合并）、`tests/specCache.test.ts`（缓存，注入 `createMemoryStorage`）、`tests/satisfactionEval.test.ts`（满足度评估 + evaluateVisual 视觉审查）、`tests/problemSchema.test.ts`（题目识别 schema 容错 + 序列化确定性）、`tests/imageInput.test.ts`（图片校验边界）、`tests/agentLoop.test.ts` / `toolExecutor.test.ts` / `agentSmoke.test.ts` / `ggbBridge.test.ts` / `ggbKB.test.ts` / `sessionStore.test.ts` / `trainingStore.test.ts` / `trajectory-replay.test.ts` / `trapStore.test.ts` / `runControl.test.ts` / `repaintGate.test.ts` / `aiClient.test.ts` |
+| **单测** | — | 216 个（0 API）：`tests/commandValidate.test.ts`（静态预检：Sequence 官方 5 种重载/括号配对/逗号句点误用/循环变量契约 + 属性命令专项：3D 禁令/值域/色名）、`tests/pipeline.test.ts`（流水线状态机 + 视觉管线 + 视觉核对合并）、`tests/specCache.test.ts`（缓存，注入 `createMemoryStorage`）、`tests/satisfactionEval.test.ts`（满足度评估 + evaluateVisual 视觉审查）、`tests/problemSchema.test.ts`（题目识别 schema 容错 + 序列化确定性）、`tests/imageInput.test.ts`（图片校验边界）、`tests/agentLoop.test.ts` / `toolExecutor.test.ts` / `agentSmoke.test.ts` / `ggbBridge.test.ts` / `ggbKB.test.ts` / `sessionStore.test.ts` / `trainingStore.test.ts` / `trajectory-replay.test.ts` / `trapStore.test.ts` / `runControl.test.ts` / `repaintGate.test.ts` / `aiClient.test.ts` |
 
-关键文件：`tests/runner.ts`（运行器）、`tests/mockGGB.ts`（轻量 GGB mock）、`tests/cases.json`（用例）、`tests/assertions.ts`（12 维断言）、`tests/fixtures/`（回放数据）。基线 194 单测 / 63 回放。
+关键文件：`tests/runner.ts`（运行器）、`tests/mockGGB.ts`（轻量 GGB mock）、`tests/cases.json`（用例）、`tests/assertions.ts`（12 维断言）、`tests/fixtures/`（回放数据）。基线 216 单测 / 63 回放。
 
 **注意**：`test:record` 会覆盖 `tests/fixtures/`。基准 `tests/report.json` 当前 ~59/63（highschool 3D 是主要拉分项）。
 
@@ -300,11 +301,13 @@ A/B 开关：设置面板「3D 批量重绘」（`localStorage: aiggb_batch_3d`�
 - GGB 命名陷阱：`u/v/w`=Vector、`A~Z` 单大写=Point、`f/g/h`=Function；`(x,y)` 赋变量=Point；`Point+Point` 崩；分母加 `+0.001` 防除零
 - 3D 模式：`Cube(A,B)` 两点式优先；`SetViewDirection/SetFilling/SetPointSize/SetCaption` 等 3D 禁用
 - **Sequence（序列）五重载**：`Sequence(n)`｜`Sequence(k,n)`｜`Sequence(k,n,inc)`（整数表）｜`Sequence(expr,k,a,b)`｜`Sequence(expr,k,a,b,step)`（迭代）。迭代形态的循环变量必须是**单个 ASCII 字母**，`start/end/step` 必须是三个独立参数，括号逐层闭合（嵌套 `Sequence(Cube(…))` 最外层 `)` 最易漏），参数之间禁句点。改这条规则同时要改 `commandValidate.ts` 的分支判定与 `tests/commandValidate.test.ts`
+- **GGB evalCommand 对 scripting 命令恒返回 false（重要特性）**：`Set*/Show*/ZoomIn` 等**不产生新对象**的命令**即使执行成功也返回 false**（5.4.927/5.4.929 实测一致：SetColor 后 getColor 已变更、返回值仍 false）——返回值只对「产生输出对象」的命令可靠。判定统一走 `ggbBridge.isScriptingCommand` 豁免（eval op / eval_raw / visual.html 宿主三方同语义）。**Delete 是例外**：成败返回值相同（均 false）无法靠返回值区分，eval 路径特判——`api.exists` 执行前后对比，删除不存在对象/删除失败均有具体诊断（mockGGB 已同步真实移除对象）。style op 的 opacity 是否生效以 `readOpacity`（getXML 实读 lineStyle opacity，0~255 刻度）为准，不得以返回值决定 SetFilling 回退（否则 2D 对象被双重填充）。语法/值域错误仍由 commandValidate 静态预检在进引擎前拦截
+- **属性命令（Set*/Show*/style op）**：`SetColor` r/g/b 必须 **0~255 整数**（0~1 浮点是最高频误用，0.9→230）；透明度/填充率才是 **0~1 小数**（`SetLineOpacity`/`SetFilling`）；颜色名只能英文且需引号（中文色名/裸标识符必失败）。3D 禁令清单与替代方案见 `commandValidate.ts` 的 `MODE_3D_FORBIDDEN`（与 prompts MODE_3D_ADDON、ggbKB modes 三方一致——改任何一方须同步其余两方 + 测试）。完整报错模式分析见 `docs/属性命令报错分析.md`
 - **诊断日志**：画布/执行相关日志使用 `[AiGGB:DIAG]` 前缀；**MutationObserver 逐节点日志默认静音**（`localStorage.setItem("aiggb_diag","1")` 开启）——该回调里做字符串拼接 + console 输出本身会加重卡顿
 - **`requestAnimationFrame`**：在 lib 层使用须加 `typeof requestAnimationFrame !== "undefined"` 守卫以兼容 Node.js 单测环境
 - **3D batch 启用**：`executeCommands` 和 `executeToolCalls` 统一走 `repaintGate.shouldBatch()`（**任何非空批次都批处理**；3D 可在设置面板关闭「3D 批量重绘」）。危险工具组走 `withRepaintBatch`。批处理 = 暂停重绘 → 整批执行 → 恢复重绘；**恢复后必须 `markRepaintBusy()` 进入静默期**，否则 GGB 整屏重绘的瞬时空白会被 2s 心跳误判为"画布消失"→ 硬重建 → 用户看到闪一下 + 停顿。3D 闪烁的四条路径与对策见 SPEC.md §3D 稳定性
 - **尺寸同步防抖**：ResizeObserver 有对象时等 `RESIZE_SETTLE=220ms` 尺寸稳定后再 `setSize`，且 **3D 下不调用 `refreshViews()`**（size 变更已触发重绘，额外 refreshViews 是闪烁放大器）。**测量一律用 `measureHost()`（`.ggb-host`）而非 `#ggb-container`**——GGB 会往容器写内联尺寸，销毁子节点后仍残留，量容器会拿到陈旧尺寸（实测打开 DevTools 后注入 1137×670 而面板只有 1168×332）；`appletOnLoad` 后再做一次**尺寸对账**（偏差 >8px 即 `setSize`）
-- **`setPerspective` 全面下线（v1.8）**：`set_view` 的 `perspective:"3d"` 不再改透视（实测 classic 下会触发 DockGlassPane → 画布消失 → 硬重建闪烁）；2D↔3D 只能走工具栏 `switchAppletMode`（整体重注入 applet）
+- **`setPerspective` 全面下线（v1.8）**：`set_view` 的 `perspective:"3d"` 不再改透视（实测 classic 下会触发 DockGlassPane → 画布消失 → 硬重建闪烁）；2D↔3D 只能走工具栏切换（`setAppName` → GGBCanvas 监听重建，整体重注入 applet）
 - **思考深度（thinking）与输出预算**：`AIConfig.reasoningEffort`（SettingsDialog 设置，`chat`/`chatRaw`/`agentChat` 共用）三态：未设置（不发参数，**V4.1 实测仍会思考**）/ `"none"`（发 `reasoning_effort: "none"`，实测推理归零，GLM 走 `thinking.disabled`）/ low|medium|high。思考 token 与正文**共享** `max_tokens`（服务端封顶，客户端无法剔除）→ 预算可自定义：`AIConfig.maxOutputTokens` + `resolveMaxOutputTokens()`，默认 `16384` / thinking `32768`（v1.8 由 8192/16384 上调）；截断时 `agentLoop` 以 `{maxTokensScale: 2, reasoningEffort: "low"}` 扩容重试一次（否则同参数必然再次截断）。`AgentResponse.usage.reasoning` = `completion_tokens_details.reasoning_tokens`
 - **视觉识别调用**：`extractProblem` 用 `jsonMode=false`（多数视觉模型不支持 `response_format: json_object`），解析容错在 `parseProblemAnalysis`；带图轮 token 统计无需特殊处理
 - **A/B 验证**：`npm run test:ab`（`DRIFT_N`/`DRIFT_SAMPLE` 调规模）；结论：v4-flash 上 `reasoning_effort=high` 端到端 −8.3%，默认保持关闭

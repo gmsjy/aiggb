@@ -1,17 +1,14 @@
 import { useEffect, useState } from "react";
 import { useAppStore } from "./store/useAppStore";
-import { registerAppNameSetter } from "./lib/ggbBridge";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { TrainingDialog } from "./components/TrainingDialog";
 import { SessionDialog } from "./components/SessionDialog";
 import { ChatPanel } from "./components/ChatPanel";
 import { GGBCanvas } from "./components/GGBCanvas";
-import { ScriptPanel } from "./components/ScriptPanel";
+import { ScriptPanel, SCRIPT_COLLAPSED_KEY } from "./components/ScriptPanel";
 import { Toolbar } from "./components/Toolbar";
 import { TemplateGallery } from "./components/TemplateGallery";
 import { PWAUpdatePrompt } from "./components/PWAUpdatePrompt";
-
-const SCRIPT_COLLAPSED_KEY = "aiggb_script_collapsed";
 
 export function App() {
   const config = useAppStore(s => s.config);
@@ -46,11 +43,6 @@ export function App() {
       setScriptCollapsed(localStorage.getItem(SCRIPT_COLLAPSED_KEY) === "1");
     window.addEventListener("aiggb:script-toggle", sync);
     return () => window.removeEventListener("aiggb:script-toggle", sync);
-  }, []);
-
-  // 注册 2D↔3D applet 切换回调
-  useEffect(() => {
-    registerAppNameSetter(name => useAppStore.getState().setAppName(name));
   }, []);
 
   // ★ 启动恢复会话历史：从 localStorage 索引装载当前会话（消息入 store，

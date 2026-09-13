@@ -7,8 +7,6 @@
  * Phase 1 增强 (2026-08):
  *   - style op 补全 pointSize/pointStyle 原生 API
  *   - 批量执行 setRepaintingActive 包裹（性能优化）
- *   - OP_API_MAP 统一映射表（优先原生 API，无对应才回退 evalCommand）
- *   - exportSVG / exportPDF 导出
  *   - applyCanvasConfig 画布配置（domain 切换时调用）
  */
 import type { Command } from "./schema";
@@ -26,6 +24,26 @@ function genTmpId(prefix: string): string {
 /** 重置临时对象计数器——画布清空 / applet 重建时调用，避免长会话下临时名无限膨胀 */
 export function resetTmpIds(): void {
   _tmpSeq = 0;
+}
+
+// ──── scripting 命令识别 ────
+
+/**
+ * GGB 的 evalCommand 只对「产生了输出对象」的命令返回 true；
+ * Set×、Show×、ZoomIn、StartAnimation 等 scripting 命令**即使执行成功也返回 false**
+ * （实测 5.4.927/5.4.929 一致：SetColor 后 getColor 已变更，返回值仍为 false）。
+ * 对这类命令不能以返回值判定失败——否则每个 Set 前缀命令都会触发无谓的修复回路/分层重试。
+ * 语法/值域错误已由 commandValidate 静态预检在进引擎前拦截。
+ *
+ * ⚠ Delete 不在豁免内：它成功/失败的返回值同样是 false（不可区分），
+ *   但删除成败可以用 api.exists 前后对比验证——见 eval case 的 Delete 特判。
+ */
+const SCRIPTING_CMD_RE = /^(?:Set|Show)[A-Za-z]|^(?:ZoomIn|ZoomOut|CenterView|Pan|StartAnimation|StopAnimation|SetActiveView|SetSeed|SelectObjects|RunClickScript|RunUpdateScript)\b/;
+
+export function isScriptingCommand(cmd: string): boolean {
+  // 剥掉 "obj = " 赋值前缀（scripting 命令不会出现在赋值右侧，此处仅防御性处理）
+  const m = /^(?:\w+\s*=\s*)?([A-Za-z_]\w*)/.exec(cmd.trim());
+  return !!m && SCRIPTING_CMD_RE.test(m[1]);
 }
 
 export interface ExecResult {
@@ -153,7 +171,7 @@ export function executeCommands(api: GGBAppletApi, commands: Command[], appMode?
     for (let pass = 0; pass < MAX_EXEC_PASSES && pending.length > 0; pass++) {
       const retry: Array<{ cmd: Command; idx: number }> = [];
       for (const { cmd, idx } of pending) {
-        const r = executeOne(api, cmd);
+        const r = executeOne(api, cmd, appMode);
         results.set(idx, r);
         if (!r.ok) {
           console.warn(`[AiGGB:DIAG] executeCommands [${idx}] pass${pass + 1}: ❌ ${cmd.op} 执行失败 —`, r.error);
@@ -222,15 +240,15 @@ export function orderCommands(commands: Command[]): Array<{ cmd: Command; idx: n
     .sort((a, b) => (OP_PRIORITY[a.cmd.op] ?? 9) - (OP_PRIORITY[b.cmd.op] ?? 9));
 }
 
-/** 执行一条命令；eval 类命令先做静态语法预检（详见 commandValidate.ts） */
-function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
+/** 执行一条命令；eval 类命令先做静态语法预检（详见 commandValidate.ts），3D 模式附加禁令检查 */
+function executeOne(api: GGBAppletApi, cmd: Command, appMode?: "2d" | "3d"): ExecResult {
   const expanded: string[] = [];
   try {
     if (cmd.op === "eval") {
       // ★ 静态语法预检：把「Sequence 执行失败」这类无语义的引擎报错，
       //   换成「具体错在哪 + 正确形态」的诊断，供修复回路精准自愈
       const rawCmd = (cmd as { cmd: string }).cmd;
-      const check = validateGGBCommand(rawCmd);
+      const check = validateGGBCommand(rawCmd, appMode);
       if (!check.ok) {
         expanded.push(rawCmd);
         console.warn("[AiGGB:DIAG] 静态校验拦截 eval 命令：", check.message);
@@ -240,7 +258,28 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
     switch (cmd.op) {
       case "eval": {
         expanded.push(cmd.cmd);
+        // ★ Delete 特判：成功/失败的返回值都是 false（scripting 命令），返回值不可用；
+        //   以「执行前存在 && 执行后消失」为成功判据，两种失败分别给出可自愈诊断
+        const delTarget = /^(?:\w+\s*=\s*)?Delete\s*\(\s*([^)]+?)\s*\)\s*;?\s*$/.exec(cmd.cmd.trim())?.[1];
+        if (delTarget) {
+          const existed = api.exists(delTarget);
+          api.evalCommand(cmd.cmd);
+          const gone = !api.exists(delTarget);
+          if (existed && gone) return { ok: true, command: cmd, expanded };
+          return {
+            ok: false,
+            command: cmd,
+            expanded,
+            error: existed
+              ? `对象 ${delTarget} 删除失败（执行后仍存在）`
+              : `对象 ${delTarget} 不存在，无法删除；请检查对象名（可用 list_objects 确认）`
+          };
+        }
         const ok = api.evalCommand(cmd.cmd);
+        // ★ scripting 命令成功也返回 false（见 isScriptingCommand 注释），不以此判定失败
+        if (!ok && isScriptingCommand(cmd.cmd)) {
+          return { ok: true, command: cmd, expanded };
+        }
         return { ok, command: cmd, expanded, error: ok ? undefined : "GGB evalCommand 返回 false" };
       }
 
@@ -307,23 +346,65 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
       }
 
       case "style": {
-        // ★ 使用 OP_API_MAP 统一分发：优先原生 API
+        // ★ 目标存在性预检：原生 setter（setColor 等）对不存在的对象静默 no-op，
+        //    若不拦截则 style 恒 ok:true，修复回路/满足度审查完全看不到失败。
+        //    （与 animate/trace/delete 的预检保持一致）
+        if (!api.exists(cmd.target)) {
+          return {
+            ok: false,
+            command: cmd,
+            expanded: [],
+            error: `对象 ${cmd.target} 不存在，无法设置样式；请先创建该对象（或核对对象名大小写）`
+          };
+        }
+        // 原生 API 直接调用（无原生 API 的 opacity 走 evalCommand，见下）
         if (cmd.color) {
           const [r, g, b] = hexToRgb(cmd.color);
           api.setColor(cmd.target, r, g, b);
         }
         if (cmd.thickness !== undefined) api.setLineThickness(cmd.target, cmd.thickness);
         if (cmd.visible !== undefined) api.setVisible(cmd.target, cmd.visible);
-        if (cmd.dashed) api.setLineStyle(cmd.target, 1);
+        // ★ dashed:false 也要落地（恢复实线）——与 toolExecutor.set_style 的行为对齐
+        if (cmd.dashed !== undefined) api.setLineStyle(cmd.target, cmd.dashed ? 1 : 0);
         if (cmd.pointSize !== undefined) api.setPointSize(cmd.target, cmd.pointSize);
         if (cmd.pointStyle !== undefined) api.setPointStyle(cmd.target, cmd.pointStyle);
         if (cmd.opacity !== undefined) {
-          // ★ SetLineOpacity 无原生 API，必须走 evalCommand；
-          //    若对象不支持（如 3D 立体）则回退 setFilling
-          const opacityCmd = `SetLineOpacity(${cmd.target}, ${cmd.opacity})`;
+          // ★ SetLineOpacity 无原生 API，只能走 evalCommand——但它是 scripting 命令，
+          //    成功也返回 false，且失败（如 3D 立体不支持）同样返回 false，返回值完全不可信。
+          //    生效判定分环境：真实 GGB（有 getXML）以 XML 实读 lineStyle opacity 为准
+          //    （未生效才回退 SetFilling，同样实读验证——否则 2D 圆会被无谓双重填充，历史灰盘根因）；
+          //    测试 mock（无 getXML）无从实读，退回信任返回值语义
+          const targetOpacity = cmd.opacity;
+          const opacityCmd = `SetLineOpacity(${cmd.target}, ${targetOpacity})`;
           expanded.push(opacityCmd);
-          if (!api.evalCommand(opacityCmd)) {
-            api.setFilling(cmd.target, cmd.opacity);
+          const lineOk = api.evalCommand(opacityCmd);
+          const canVerify = typeof (api as unknown as { getXML?: unknown }).getXML === "function";
+          let lineApplied: boolean;
+          if (canVerify) {
+            const lo = readOpacity(api, cmd.target).lineOpacity;
+            lineApplied = lo !== undefined ? Math.abs(lo - targetOpacity) <= 0.02 : targetOpacity >= 0.99;
+          } else {
+            lineApplied = lineOk;
+          }
+          if (!lineApplied) {
+            const fallbackCmd = `SetFilling(${cmd.target}, ${targetOpacity})`;
+            expanded.push(fallbackCmd);
+            const fillOk = api.evalCommand(fallbackCmd);
+            let fillApplied: boolean;
+            if (canVerify) {
+              const fo = readOpacity(api, cmd.target).fillOpacity;
+              fillApplied = fo !== undefined && Math.abs(fo - targetOpacity) <= 0.02;
+            } else {
+              fillApplied = fillOk;
+            }
+            if (!fillApplied) {
+              return {
+                ok: false,
+                command: cmd,
+                expanded,
+                error: `对象 ${cmd.target} 设置透明度失败（SetLineOpacity 与 SetFilling 均不支持，常见于 3D 立体）；该样式要求可放弃，不要循环重试`
+              };
+            }
           }
         }
         return { ok: true, command: cmd, expanded };
@@ -389,7 +470,8 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
           if (!isCoordLiteral(offsetVar) && api.exists(offsetVar)) {
             // 两步法：先把偏移量转成真正的 Vector，再 Point+Vector
             // 临时名用全局自增 id，避免多条 vector op 复用同名临时对象导致动态污染
-            const tmpId = genTmpId("_vv");
+            // ★ 临时名不能以 "_" 开头——GGB 拒绝下划线开头的对象名（实测 evalCommand 恒 false）
+            const tmpId = genTmpId("tmpVv");
             const c1 = `${tmpId} = Vector((0,0), ${offsetVar})`;
             expanded.push(c1);
             let ok = api.evalCommand(c1);
@@ -457,7 +539,8 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
         for (let fi = 0; fi < cmd.forces.length; fi++) {
           const f = cmd.forces[fi];
           // 临时名全局自增：单个 forceDiagram 内 fi 唯一，跨命令也唯一
-          const tmpId = genTmpId("_fv");
+          // ★ 同上：_fv 前缀会导致 GGB 静默拒绝，forceDiagram 全部力矢量失败
+          const tmpId = genTmpId("tmpFv");
           // Step 1: 用 Vector((0,0), endPoint) 创建位移矢量（而非 Point 相加）
           //         GGB 中 Vector((0,0),(dx,dy)) 始终产生 Vector，不会被推断为 Point
           const tmpCmd = `${tmpId} = Vector((0,0), ${f.vec})`;
@@ -542,43 +625,6 @@ function executeOne(api: GGBAppletApi, cmd: Command): ExecResult {
   }
 }
 
-// ──── 样式操作统一映射表 (OP_API_MAP) ────
-
-/**
- * style op 子操作的 {原生 API 调用 / evalCommand 回退} 映射。
- * 优先使用原生 API（更快、类型安全）；仅当无对应原生 API 时才回退 evalCommand。
- *
- * 键命名：style_{子字段名}
- * 值：null 表示「无原生 API，必须走 evalCommand」
- */
-export const OP_API_MAP = {
-  // 原生 API 可用
-  style_color: (api: GGBAppletApi, target: string, hex: string) => {
-    const [r, g, b] = hexToRgb(hex);
-    api.setColor(target, r, g, b);
-  },
-  style_thickness: (api: GGBAppletApi, target: string, t: number) => api.setLineThickness(target, t),
-  style_visible: (api: GGBAppletApi, target: string, v: boolean) => api.setVisible(target, v),
-  style_dashed: (api: GGBAppletApi, target: string) => api.setLineStyle(target, 1),
-  style_pointSize: (api: GGBAppletApi, target: string, s: number) => api.setPointSize(target, s),
-  style_pointStyle: (api: GGBAppletApi, target: string, s: number) => api.setPointStyle(target, s),
-  style_filling: (api: GGBAppletApi, target: string, v: number) => api.setFilling(target, v),
-
-  // 无原生 API，必须走 evalCommand（在白名单中，合法）
-  style_opacity: null, // → SetLineOpacity(target, opacity)
-  animate_repeat: null, // → SetAnimationType(target, type)
-
-  // 动画控制（原生 API 可用）
-  animate_start: (api: GGBAppletApi) => api.startAnimation(),
-  animate_stop: (api: GGBAppletApi) => api.stopAnimation(),
-  animate_speed: (api: GGBAppletApi, target: string, speed: number) => api.setAnimationSpeed(target, speed),
-  animate_set: (api: GGBAppletApi, target: string, on: boolean) => api.setAnimating(target, on),
-
-  // 3D 模式
-  view3D_enable: (api: GGBAppletApi) => api.enable3D(true),
-  view3D_perspective: (api: GGBAppletApi) => api.setPerspective("3d"),
-} as const;
-
 // ──── 画布配置 ────
 
 /** 画布模式 */
@@ -631,20 +677,6 @@ export function exportPNG(api: GGBAppletApi): string {
   return `data:image/png;base64,${base64}`;
 }
 
-/** 导出 SVG（回调式，3D 视图返回 null） */
-export function exportSVG(api: GGBAppletApi): Promise<string | null> {
-  return new Promise(resolve => {
-    api.exportSVG((svg: string | null) => resolve(svg));
-  });
-}
-
-/** 导出 PDF（回调式） */
-export function exportPDF(api: GGBAppletApi, scale = 1): Promise<string> {
-  return new Promise(resolve => {
-    api.exportPDF(scale, (pdf: string) => resolve(pdf));
-  });
-}
-
 // ──── 画布快照（供满足度评估使用） ────
 
 /**
@@ -654,11 +686,16 @@ export function exportPDF(api: GGBAppletApi, scale = 1): Promise<string> {
  * "填充透明度"——0 表示无内部填充（点/线/空心对象默认），**不代表对象不可见**。
  * 用 getFilling 当作整体透明度会把所有无填充对象标成 opacity=0（即历史 bug：审查误报"透明度为零"）。
  *
- * 正确读取：GGB 官方 getXML(label) 的对象 XML 含 lineOpacity / fillOpacity 属性（0-100）。
- * - lineOpacity：AI 用 SetLineOpacity 设置的真实线透明度（默认 100 = 不透明）
- * - fillOpacity：内部填充透明度（默认 0 = 无填充），XML 缺失时回退 getFilling()
+ * 正确读取：getXML(label) 的对象 XML——实测 5.4.927/5.4.929：
+ * - 线透明度在 `<lineStyle ... opacity="N"/>` 属性中，**0~255 刻度**（默认 178 ≈ 0.7），
+ *   SetLineOpacity(0.5) 后变为 128（=0.502）；对线段/圆（conic）均生效并写入该属性。
+ *   （旧版文档所称 lineOpacity="0~100" 属性在当前版本 XML 中不存在，保留解析仅作兼容。）
+ * - 填充透明度：XML fillOpacity 属性，缺失时回退 getFilling()（无填充默认 0）。
  * 两者均返回 0~1；无法读取时返回 undefined（调用方据此跳过，不产生误报）。
  */
+/** GGB 新建对象的默认线透明度（XML lineStyle opacity=178 / 255） */
+export const GGB_DEFAULT_LINE_OPACITY = 178 / 255;
+
 function readOpacity(
   api: GGBAppletApi, name: string
 ): { lineOpacity?: number; fillOpacity?: number } {
@@ -669,9 +706,12 @@ function readOpacity(
   if (typeof anyApi.getXML === "function") {
     try {
       const xml = anyApi.getXML(name);
-      const line = /lineOpacity="([\d.]+)"/.exec(xml)?.[1];
+      const lineStyle = /<lineStyle[^>]*?opacity="([\d.]+)"/.exec(xml)?.[1];
+      const line = lineStyle ?? /lineOpacity="([\d.]+)"/.exec(xml)?.[1];
       const fill = /fillOpacity="([\d.]+)"/.exec(xml)?.[1];
-      if (line !== undefined) lineOpacity = Math.min(1, Math.max(0, parseFloat(line) / 100));
+      // lineStyle opacity 是 0~255 刻度；遗留 lineOpacity 属性按 0~100 解析
+      if (lineStyle !== undefined) lineOpacity = Math.min(1, Math.max(0, parseFloat(lineStyle) / 255));
+      else if (line !== undefined) lineOpacity = Math.min(1, Math.max(0, parseFloat(line) / 100));
       if (fill !== undefined) fillOpacity = Math.min(1, Math.max(0, parseFloat(fill) / 100));
     } catch { /* getXML 不可用时走 getFilling 回退 */ }
   }
@@ -729,7 +769,10 @@ export function getRichSnapshot(api: GGBAppletApi): string {
       // ★ 透明度：区分"线透明度"（AI 用 SetLineOpacity 设置的）与"填充透明度"。
       //   无填充（=0）是点/线/空心对象的默认，绝不输出——否则模型误判对象不可见。
       const { lineOpacity, fillOpacity } = readOpacity(api, name);
-      if (lineOpacity !== undefined && lineOpacity < 1) styleMeta.push(`lineOpacity=${lineOpacity.toFixed(2)}`);
+      // 仅输出显式设置过的线透明度：GGB 默认 0.7（178/255）不算设置，避免快照逐对象噪音
+      if (lineOpacity !== undefined && lineOpacity < 1 && Math.abs(lineOpacity - GGB_DEFAULT_LINE_OPACITY) > 0.02) {
+        styleMeta.push(`lineOpacity=${lineOpacity.toFixed(2)}`);
+      }
       if (fillOpacity !== undefined && fillOpacity > 0 && fillOpacity < 1) styleMeta.push(`fillOpacity=${fillOpacity.toFixed(2)}`);
       const ptSize = api.getPointSize?.(name);
       // Point size default varies; report only if set
@@ -746,11 +789,6 @@ export function getRichSnapshot(api: GGBAppletApi): string {
     lines.push(parts.join("\n"));
   }
   return lines.join("\n\n");
-}
-
-/** 保留旧版简单快照作为别名（agent loop / tool executor 仍在使用） */
-export function getCanvasSnapshot(api: GGBAppletApi): string {
-  return getRichSnapshot(api);
 }
 
 function safeNum(v: number | undefined | null): string {
@@ -805,24 +843,4 @@ function diagnose(r: ExecResult): string | undefined {
     return "滑块创建失败，检查 Slider(min, max, step, ...) 参数是否合法（step>0, min<max）";
   }
   return raw;
-}
-
-// ──── 手动模式切换 ────
-
-/** 注册 setAppName 回调（ChatPanel 调用前由 App 注入，供手动 2D↔3D 切换使用） */
-let _setAppNameFn: ((name: "classic" | "3d") => void) | null = null;
-
-export function registerAppNameSetter(fn: (name: "classic" | "3d") => void): void {
-  _setAppNameFn = fn;
-}
-
-/** 手动切换 applet 模式（由 Toolbar 2D/3D 按钮调用） */
-export function switchAppletMode(name: "classic" | "3d"): void {
-  console.log(`[AiGGB] switching appName to '${name}'`);
-  if (_setAppNameFn) {
-    _setAppNameFn(name);
-    console.log(`[AiGGB] setAppName('${name}') called → GGBCanvas will rebuild`);
-  } else {
-    console.warn("[AiGGB] setAppName not registered");
-  }
 }

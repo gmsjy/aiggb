@@ -184,16 +184,14 @@ tests/
     ├── prompt-hash.ts       ← Prompt 版本指纹
     ├── load-env.ts          ← 零依赖 .env 加载器
     ├── visual-screenshots.ts ← 视觉回归主驱动（Playwright，按类别截图）
-    ├── visual-capture.ts    ← 浏览器内截图采集脚本
-    ├── visual.html / visual-runner.html ← 视觉测试宿主页面
+    ├── visual.html          ← 视觉测试宿主页面（内置 11-op 执行器）
     ├── gen-fixtures.js / gen-fixtures-v3.js ← 在线 fixtures 生成器
     ├── fixtures/            ← 离线回放 AI 响应
     ├── screenshots/         ← 视觉回归产物（按类别子目录）
     ├── versions.json        ← Prompt 版本账本（自动 golden 标记）
     ├── drift-analysis.json  ← 自动生成的漂移分析
     ├── prompt-suggestions.md← 自动生成的可读修复建议
-    ├── report.json          ← 最新测试报告（当前 63/63）
-    └── report-v4-flash.json / report-v4-pro.json / report-current.json ← 历史与模型对比报告
+    └── report.json          ← 最新测试报告（当前 63/63）
 ```
 
 ### 3.4 package.json 脚本
@@ -1585,6 +1583,13 @@ MVP 须通过以下 12 个场景：
 > 动机来自用户反馈「每次用序列命令都报错」——引擎对语法错误只会回一句「Sequence 执行失败」，
 > 模型拿不到可操作的反馈，于是下一轮继续犯同一个错。现在改为返回「括号不匹配在第几层 +
 > 逗号被误写成句点 + 循环变量必须是单个字母 + 正确形态示例」，让修复回路能精准自愈。
+>
+> **属性命令专项（v1.10）**：同样的「引擎只回 false」问题在属性命令上更隐蔽——
+> `SetColor` 0~1 浮点、3D 模式禁用 `SetFilling/SetPointSize` 等、中文色名、原生 setter 静默 no-op。
+> `validateGGBCommand(cmd, mode?)` 现在接受画布模式（3D 下拦截禁令清单并给替代方案），
+> 并对 Set*/Show*/Rename 检查值域（0~255 vs 0~1）、色名形态、参数个数（回退 ggbKB paramCount）。
+> 执行层 `style` op 同步补目标存在性预检（原生 setter 对不存在对象静默 no-op、恒 ok:true 的盲区）。
+> 六大报错模式的完整分析见 `docs/属性命令报错分析.md`。
 
 ### 10A.3 提示层约束（源头防漂）
 
@@ -1593,8 +1598,8 @@ MVP 须通过以下 12 个场景：
 | 约束项 | 实现位置 | 说明 |
 |---|---|---|
 | **铁律** | `prompts.ts:buildPromptBase()` | 纯 JSON 输出；数值字段严格 number；布尔字段严格 true/false；颜色 #RRGGBB；标识符 ASCII |
-| **命令白名单** | `commands.ts:GGB_COMMANDS` | 14 类 ~200 条经验证命令，含完整签名；作为 `${GGB_COMMANDS}` 嵌入 system prompt |
-| **假命令黑名单** | `commands.ts:GGB_BLACKLIST` | 25 条不存在命令（`PauseAnimation`/`SetOpacity`/`VectorField`…）明确禁止 |
+| **命令白名单** | `ggbKB.ts:buildCommandReference(mode, domain)` | 按 2D/3D 模式过滤的已验证命令速查（含签名/示例/中文意图别名），嵌入 system prompt |
+| **假命令黑名单** | `commands.ts:GGB_FORBIDDEN_COMMANDS` + `ggbKB.ts:buildHallucinationWarnings` | 25 条不存在命令（`PauseAnimation`/`SetOpacity`/`VectorField`…）schema 层硬拒绝 + 臆造→正确映射注入 prompt |
 | **5 阶段强制流程** | `commands.ts:GGB_5STAGE_FLOW` | 参数→基础点→图形→动画→属性；严禁匿名坐标、强制 Segment 两端点前置声明 |
 | **Point/Vector 类型区分** | `prompts.ts` 专节 | `(x,y)=Point`；`Vector((0,0),(x,y))=Vector`；`Point+Point=❌`；`Point+Vector=✓` |
 | **分母防零** | `prompts.ts`「已知坑」 | 所有含距离平方的分母必须加 `+0.001` |
@@ -1627,7 +1632,7 @@ MVP 须通过以下 12 个场景：
 | 标识符格式 | `schema.ts:Identifier` | 仅 `[A-Za-z_][A-Za-z0-9_]*` |
 | 长度限制 | `explanation`≤500、`cmd`≤500、commands≤64 | 防止输出膨胀 |
 | 起点存在性预检 | `ggbBridge.ts:vector/forceDiagram` | 执行前检查 `api.exists(from)` 或 `isCoordLiteral` |
-| **静态语法预检** | `commandValidate.ts:validateGGBCommand` | 执行前纯文本检查：括号配对（含坐标括号/嵌套调用）、`)` 后跟 `.` 的逗号手误、Sequence 参数契约（5 种官方重载分支 / 循环变量单字母 / 区间压缩 / 表达式尾部残留）、参数个数、表达式以运算符结尾。命中即**不调用 `api.evalCommand`**，直接把「具体错在哪 + 正确形态」作为 `error` 交给修复回路（`eval`/`eval_raw`/`eval_sequence` 三入口统一生效） |
+| **静态语法预检** | `commandValidate.ts:validateGGBCommand` | 执行前纯文本检查：括号配对（含坐标括号/嵌套调用）、`)` 后跟 `.` 的逗号手误、Sequence 参数契约（5 种官方重载分支 / 循环变量单字母 / 区间压缩 / 表达式尾部残留）、参数个数（含属性命令回退 ggbKB paramCount）、表达式以运算符结尾、**属性命令专项**（3D 禁令 `mode-forbidden` / SetColor 值域与色名 / 透明度 0~1，mode 经 ggbBridge/toolExecutor 透传）。命中即**不调用 `api.evalCommand`**，直接把「具体错在哪 + 正确形态」作为 `error` 交给修复回路（`eval`/`eval_raw`/`eval_sequence` 三入口统一生效） |
 
 ### 10A.6 执行层与修正闭环（自愈机制）
 
@@ -1801,7 +1806,7 @@ npm run test:hash        # 查看当前 prompt 指纹
 | v4-flash | 42/49 (85.7%) | 36/49 (73.5%) | 11.5s |
 | v4-pro | 42/49 (85.7%) | 37/49 (75.5%) | 18.7s |
 
-**结论**：v4-pro 提升微弱（+2%）但慢 63%。日常推荐 v4-flash，复杂动态 / 3D 场景切 v4-pro。模型对比原始报告见 `tests/report-v4-flash.json` / `report-v4-pro.json`。
+**结论**：v4-pro 提升微弱（+2%）但慢 63%。日常推荐 v4-flash，复杂动态 / 3D 场景切 v4-pro。
 
 ### 10C.7 A/B 测试（`test:ab`）与 runDrift 复用
 
@@ -1823,7 +1828,7 @@ npm run test:hash        # 查看当前 prompt 指纹
 | 项 | 说明 |
 |---|---|
 | 入口 | `tests/visual-screenshots.ts`（按类别参数化：`physics,dynamic,composite` 等） |
-| 宿主 | `tests/visual.html` / `visual-runner.html` + `tests/visual-capture.ts`（浏览器内采集） |
+| 宿主 | `tests/visual.html` —— 唯一 op 执行宿主（与 `demos:regen` 效果图管线共用；经 dev server 加载本地 GGB bundle，支持 `?app=3d`） |
 | 脚本 | `npm run test:visual`（精选类别）/ `npm run test:visual-all`（static+dynamic+physics+modify+composite） |
 | 产物 | `tests/screenshots/<类别>/` 下按用例 id 存档 PNG |
 | 触发时机 | prompt 或 `ggbBridge` 行为变更后人工运行；不纳入每次 commit 的 L1 |

@@ -15,7 +15,9 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = join(__dirname, "fixtures");
 const SCREENSHOTS_DIR = join(__dirname, "screenshots");
-const VISUAL_HTML = join(__dirname, "visual.html");
+// ★ 唯一宿主 tests/visual.html 经 dev server 加载（本地 GGB bundle，与生产一致、无 CDN）。
+//   前置条件：npm run dev 已在 5173 运行（file:// + CDN 的旧方式已废弃）
+const VISUAL_URL = "http://localhost:5173/tests/visual.html";
 const CASES_FILE = join(__dirname, "cases.json");
 
 const TARGET_CATEGORY = process.argv[2] ?? "physics,dynamic,composite";
@@ -59,7 +61,7 @@ async function main() {
 
     const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
     const cmdsJson = encodeURIComponent(JSON.stringify(fixture.commands));
-    const pageUrl = `file:///${VISUAL_HTML.replace(/\\/g, "/")}?cmds=${cmdsJson}`;
+    const pageUrl = `${VISUAL_URL}?cmds=${cmdsJson}`;
 
     console.log(`[${i + 1}/${targets.length}] ${tc.id}: ${tc.description}`);
 
@@ -102,7 +104,12 @@ async function main() {
 
       await page.close();
     } catch (err) {
-      console.log(`  ❌ ${err instanceof Error ? err.message : err}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      // 加载/DONE 超时最常见的根因是 dev server 未启动（宿主依赖本地 GGB bundle）
+      const hint = /DONE|Timeout|ERR_|Failed to fetch/i.test(msg)
+        ? "（前置条件：npm run dev 已在 http://localhost:5173 运行）"
+        : "";
+      console.log(`  ❌ ${msg}${hint}`);
       results.push({
         id: tc.id, title: tc.description, category: tc.category,
         screenshot: "", okCommands: 0, failCommands: 1, ok: false

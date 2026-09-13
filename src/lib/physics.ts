@@ -19,13 +19,3 @@ export const PHYSICS_CONSTANTS: Record<string, PhysicsConstantDef> = {
   h: { value: 6.626e-34, unit: "J·s", desc: "普朗克常量" },
   k_B: { value: 1.381e-23, unit: "J/K", desc: "玻尔兹曼常量" }
 };
-
-/** 默认物理配色 —— SPEC.md §4.4 (12) */
-export const PHYSICS_COLORS = {
-  position: "#1e88e5", // 位移 蓝
-  velocity: "#43a047", // 速度 绿
-  acceleration: "#fb8c00", // 加速度 橙
-  force: "#e53935", // 力 红
-  efield: "#8e24aa", // 电场 紫
-  bfield: "#00897b" // 磁场 青
-} as const;

@@ -18,6 +18,7 @@ import {
   clearTrajectories,
   type TrajectoryRecord,
 } from "./trajectoryStore";
+import { clearTraps } from "./trapStore";
 
 // ──── 记录类型 ────
 
@@ -389,9 +390,9 @@ async function importScenes(scenes: SceneRecord[]): Promise<number> {
   }
 }
 
-/** 清空全部训练数据（执行样本 + 场景 + 轨迹） */
+/** 清空全部训练数据（执行样本 + 场景 + 轨迹 + 陷阱——traps 由失败轨迹派生，随源数据一并清空） */
 export async function clearAllData(): Promise<void> {
-  await Promise.all([clearExecutions(), clearScenes(), clearTrajectories()]);
+  await Promise.all([clearExecutions(), clearScenes(), clearTrajectories(), clearTraps()]);
 }
 
 /** 训练数据统计（供 UI 展示） */

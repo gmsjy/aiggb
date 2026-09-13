@@ -9,6 +9,7 @@
  */
 
 import { z } from "zod";
+import { NumLike, IntLike, BoolLike } from "./schema";
 
 // ──── 安全等级 ────
 
@@ -109,15 +110,17 @@ export const EvalSequenceArgs = z.object({
 });
 
 // ── Modification ──
+// ★ 字段容错与 JSON 流水线的 style op（schema.ts）保持一致：NumLike/BoolLike 接受
+//   "0.5"/"true" 这类字符串形态，避免同一参数在一条路径通过、另一条路径被 Zod 拒绝
 export const SetStyleArgs = z.object({
   target: Identifier,
   color: ColorHex.optional(),
-  thickness: z.number().int().min(1).max(13).optional(),
-  opacity: z.number().min(0).max(1).optional(),
-  dashed: z.boolean().optional(),
-  visible: z.boolean().optional(),
-  pointSize: z.number().int().min(1).max(9).optional(),
-  pointStyle: z.number().int().min(-1).max(9).optional(),
+  thickness: IntLike.refine(n => n >= 1 && n <= 13, "thickness 需为 1~13 的整数").optional(),
+  opacity: NumLike.refine(n => n >= 0 && n <= 1, "opacity 需为 0~1 的小数").optional(),
+  dashed: BoolLike.optional(),
+  visible: BoolLike.optional(),
+  pointSize: IntLike.refine(n => n >= 1 && n <= 9, "pointSize 需为 1~9 的整数").optional(),
+  pointStyle: IntLike.refine(n => n >= -1 && n <= 9, "pointStyle 需为 -1~9 的整数").optional(),
 });
 export const SetAnimationArgs = z.object({
   target: Identifier,

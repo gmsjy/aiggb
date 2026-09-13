@@ -17,18 +17,9 @@
   --ok: #43a047;
   --warn: #fb8c00;
   --danger: #e53935;
-  --info: #00897b;
 
   --border: #1f2a3d;
   --border-strong: #2c3a52;
-
-  /* —— 物理色（与 prompt 同步） —— */
-  --phy-position: #1e88e5;
-  --phy-velocity: #43a047;
-  --phy-acceleration: #fb8c00;
-  --phy-force: #e53935;
-  --phy-efield: #8e24aa;
-  --phy-bfield: #00897b;
 
   /* —— 尺寸 —— */
   --radius-sm: 6px;
@@ -40,7 +31,6 @@
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
-  --space-6: 32px;
 
   --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",

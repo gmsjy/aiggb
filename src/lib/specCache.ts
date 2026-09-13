@@ -86,12 +86,13 @@ const CONSTANT_OBJECTS = new Set(["g", "c", "e", "eps0", "mu0", "k_e", "Grav", "
 
 /**
  * 画布对象指纹：仅取「有语义」的对象。
- * 排除 ggbBridge 的临时辅助对象（_vv/_fv 前缀，全局自增、同名场景每次结果不同）
+ * 排除 ggbBridge 的临时辅助对象（tmpVv/tmpFv 前缀，全局自增、同名场景每次结果不同；
+ * 历史会话的 constructionLog 里可能还有旧版 "_vv/_fv" 下划线前缀，一并排除）
  * 与物理常量，否则同一场景两次运行的指纹不同，缓存永远打不中。
  */
 function objectFingerprint(existingObjects: string[]): string {
   const meaningful = existingObjects
-    .filter(n => !n.startsWith("_") && !CONSTANT_OBJECTS.has(n))
+    .filter(n => !n.startsWith("_") && !/^tmp(Vv|Fv)/.test(n) && !CONSTANT_OBJECTS.has(n))
     .sort();
   return meaningful.length > 0 ? meaningful.join(",") : "_fresh";
 }

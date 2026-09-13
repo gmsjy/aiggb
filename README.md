@@ -18,9 +18,17 @@
 |---|---|
 | ![弹簧振子](docs/demos/P-spring.gif) | ![横波传播](docs/demos/P-wave.gif) |
 
+| 物理 · 斜面受力分析 | 物理 · 磁场圆周运动 |
+|---|---|
+| ![斜面受力分析](docs/demos/P-incline.gif) | ![磁场圆周运动](docs/demos/X-field-particle.gif) |
+
 | 数学 · 摆线 | 数学 · 旋转变换 |
 |---|---|
 | ![摆线](docs/demos/D-cycloid.gif) | ![旋转变换](docs/demos/D-rotation.gif) |
+
+| 3D · 棱锥与高（滑块驱动） | 3D · 内接棱柱逼近圆柱 |
+|---|---|
+| ![棱锥与高](docs/demos/H-pyramid.gif) | ![内接棱柱逼近圆柱](docs/demos/H-cylinder-net.gif) |
 
 </div>
 

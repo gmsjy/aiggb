@@ -17,7 +17,11 @@
  *   4. Sequence 表达式尾部残留字符（`(i,j,k).e` 这类多打一个字母）
  *   5. 命令参数个数（对照 ggbKB 的 paramCount）
  *   6. 表达式以运算符结尾
+ *   7. 属性命令专项（SetColor/SetFilling/SetLineOpacity…）：
+ *      3D 模式禁令（传入 mode 时）、RGB 值域 0~255、透明度 0~1、颜色名形态
  */
+
+import { findCommand } from "./ggbKB";
 
 // ── 类型 ──
 
@@ -29,7 +33,10 @@ export type CommandIssueKind =
   | "sequence-trailing"
   | "sequence-var-only"
   | "arg-count"
-  | "trailing-operator";
+  | "trailing-operator"
+  | "mode-forbidden"
+  | "value-range"
+  | "color-name";
 
 export interface CommandIssue {
   kind: CommandIssueKind;
@@ -396,6 +403,137 @@ function validateSequence(
   }
 }
 
+// ── 属性命令专项（Set*/Show*/Rename：值域 + 3D 模式禁令） ──
+
+/**
+ * 3D 模式下必失败的命令清单（与 prompts.ts MODE_3D_ADDON、ggbKB modes:["2d"] 三方一致）。
+ * 值为 KB 无 note 时的兜底替代建议；有 note 时优先用 ggbKB 的 note。
+ */
+const MODE_3D_FORBIDDEN: Record<string, string> = {
+  setviewdirection: "依靠鼠标旋转视角，不要用命令",
+  setfilling: "透明度改用 style op 的 opacity 字段",
+  setpointsize: "标记点改用 Sphere(P, 0.2)",
+  setpointstyle: "删除该样式设置",
+  setaxesratio: "等比例交给 view op 或用户手动",
+  setcaption: "标注改用 Text(\"<文字>\", 点)",
+  showlabel: "删除该命令",
+  setlabelmode: "删除该命令",
+  rename: "创建对象时直接用目标名字命名",
+  zoomin: "视窗改用 view op",
+};
+
+/** 参数个数回退范围：style 类属性命令（签名固定，无多重重载，静态个数校验不易误杀） */
+const STYLE_CMD_RE = /^(?:Set|Show)[A-Z]|^Rename/;
+/** 豁免：SetCoords 在 3D 有官方四参重载 SetCoords(obj, x, y, z)，KB 只录了 2D 三参形态 */
+const STYLE_ARG_COUNT_EXEMPT = new Set(["setcoords"]);
+
+/**
+ * 属性命令专项检查（第 7 项）。
+ * 只对 ggbKB 已收录的 Set*、Show*、Rename 命令生效，检查：
+ *   - 3D 模式禁令（mode 传入且命令 KB 标注仅 2D）
+ *   - SetColor 值域（r/g/b 0~255 整数；字符串色名形态）
+ *   - SetLineOpacity / SetFilling 透明度值域 0~1
+ * 仅检查数字/字符串字面量，表达式（如 `255*v`）交由引擎与修复回路。
+ */
+function validateSetProperty(
+  cmdName: string,
+  args: string[],
+  mode: "2d" | "3d" | undefined,
+  issues: CommandIssue[]
+): void {
+  const def = findCommand(cmdName);
+
+  // ① 3D 模式禁令：与 prompt 层禁令清单一致，把「引擎一句 false」提前变成可自愈诊断
+  if (mode === "3d") {
+    const key = (def?.name ?? cmdName).toLowerCase();
+    const fallback = MODE_3D_FORBIDDEN[key];
+    // 只拦「KB 明确标注仅 2D」的命令，避免误杀 KB 未收录但 3D 可用的写法
+    if (fallback && def && !def.modes.includes("3d")) {
+      issues.push({
+        kind: "mode-forbidden",
+        message:
+          `${def.name} 在 3D 模式下不可用（执行必失败）。${def.note || fallback}。` +
+          `请删除该命令并改用替代方案。`,
+      });
+    }
+  }
+
+  // ② SetColor 值域 / 色名形态
+  if (def?.name.toLowerCase() === "setcolor") {
+    if (args.length === 4) {
+      // SetColor(obj, r, g, b)：r/g/b 必须是 0~255 整数（0~1 浮点是最常见误用）
+      for (const [i, arg] of args.slice(1).entries()) {
+        if (!isNumberArg(arg)) continue;
+        const n = Number(unquote(arg));
+        if (Number.isInteger(n)) {
+          if (n < 0 || n > 255) {
+            issues.push({
+              kind: "value-range",
+              message: `SetColor 第 ${i + 2} 个参数（r/g/b）超出 0~255：${arg}。必须是 0~255 的整数。`,
+            });
+          }
+        } else if (n > 0 && n < 1) {
+          issues.push({
+            kind: "value-range",
+            message:
+              `SetColor 第 ${i + 2} 个参数（r/g/b）是 0~1 浮点 ${arg} —— 这是常见误用。` +
+              `r/g/b 必须是 **0~255 整数**：${arg} 应改为 ${Math.round(n * 255)}。` +
+              `例如 (0.9, 0.2, 0.2) → (230, 51, 51)。`,
+          });
+        } else {
+          issues.push({
+            kind: "value-range",
+            message: `SetColor 第 ${i + 2} 个参数（r/g/b）必须是 0~255 的整数，收到 ${arg}。`,
+          });
+        }
+      }
+    } else if (args.length === 2) {
+      // SetColor(obj, "颜色名")：只查几种必失败形态 —— 数字色参 / 中文色名 / 未加引号的裸标识符
+      const arg = args[1] ?? "";
+      const quoted = /^["']/.test(arg.trim());
+      if (!quoted && isNumberArg(arg)) {
+        issues.push({
+          kind: "value-range",
+          message:
+            `SetColor(${args.join(", ")}) 是「颜色名」形态 —— 第二个参数必须是颜色名字符串。` +
+            `要设置 RGB 应写 **4 个参数**：SetColor(obj, r, g, b)（r/g/b 是 0~255 整数）。`,
+        });
+      } else if (quoted && /\P{ASCII}/u.test(unquote(arg))) {
+        issues.push({
+          kind: "color-name",
+          message:
+            `SetColor 的颜色名必须是**英文**（如 "red"），收到中文 ${arg} —— GGB 不识别中文色名。` +
+            `改用英文色名字符串，或 SetColor(obj, r, g, b)（0~255 整数）。`,
+        });
+      } else if (!quoted && !isNumberArg(arg) && /^[A-Za-z_]\w*$/.test(arg.trim())) {
+        issues.push({
+          kind: "color-name",
+          message:
+            `SetColor 的颜色参数 ${arg} 未加引号 —— 裸标识符会被 GGB 当作对象引用而失败。` +
+            `颜色名需写成字符串 ${JSON.stringify(`"${arg.trim().toLowerCase()}"`)}，` +
+            `或改用 SetColor(obj, r, g, b)（0~255 整数）。`,
+        });
+      }
+    }
+    return;
+  }
+
+  // ③ 透明度值域：SetLineOpacity / SetFilling 第二个参数必须是 0~1
+  if (def && ["setlineopacity", "setfilling"].includes(def.name.toLowerCase()) && args.length === 2) {
+    const arg = args[1] ?? "";
+    if (isNumberArg(arg)) {
+      const n = Number(unquote(arg));
+      if (n < 0 || n > 1) {
+        issues.push({
+          kind: "value-range",
+          message: `${def.name} 的透明度必须是 0~1 之间的小数，收到 ${arg}。` +
+            `（注意与 SetColor 的 0~255 区分：透明度用 0~1）`,
+        });
+      }
+    }
+  }
+}
+
 // ── 主校验入口 ──
 
 /** 命令参数个数表（与 ggbKB 的 paramCount 保持一致的最小集合，避免循环依赖）
@@ -416,9 +554,10 @@ const ARG_COUNT_HINTS: Record<string, [number, number]> = {
 
 /**
  * 校验一条 GGB 命令串（eval / eval_raw / eval_sequence 展开后的形态）。
+ * `mode` 传入当前画布模式（"2d" | "3d"）时启用 3D 禁令检查；缺省不查模式。
  * 返回 issues 为空即通过。
  */
-export function validateGGBCommand(cmd: string): ValidationResult {
+export function validateGGBCommand(cmd: string, mode?: "2d" | "3d"): ValidationResult {
   const issues: CommandIssue[] = [];
   const raw = cmd.trim();
 
@@ -457,11 +596,24 @@ export function validateGGBCommand(cmd: string): ValidationResult {
   }
 
   // ④ 参数个数（括号不配平时切分失真，跳过）
-  if (balance.ok && cmdName && argsStr !== null) {
+  //    ARG_COUNT_HINTS 未命中时，对 style 类属性命令（Set*/Show*/Rename）回退到
+  //    ggbKB 的 paramCount —— 这些命令签名固定、无多重重载，静态校验不易误杀
+  const args =
+    balance.ok && cmdName && argsStr !== null ? splitTopLevelArgs(argsStr) : null;
+  if (args && cmdName) {
     const hint = ARG_COUNT_HINTS[capitalize(cmdName)];
-    if (hint) {
-      const given = splitTopLevelArgs(argsStr).length;
-      const [pmin, pmax] = hint;
+    const def = hint ? undefined : findCommand(cmdName);
+    const styleHint =
+      !hint &&
+      def &&
+      STYLE_CMD_RE.test(def.name) &&
+      !STYLE_ARG_COUNT_EXEMPT.has(def.name.toLowerCase())
+        ? def.paramCount
+        : undefined;
+    const effective = hint ?? styleHint;
+    if (effective) {
+      const given = args.length;
+      const [pmin, pmax] = effective;
       if (given < pmin || (pmax !== -1 && given > pmax)) {
         const range = pmax === -1 ? `至少 ${pmin}` : `${pmin}~${pmax}`;
         issues.push({
@@ -475,6 +627,11 @@ export function validateGGBCommand(cmd: string): ValidationResult {
   // ⑤ 表达式以运算符结尾
   const trailing = trailingOperatorIssue(raw);
   if (trailing) issues.push(trailing);
+
+  // ⑥ 属性命令专项（3D 禁令 / 值域 / 色名形态）
+  if (cmdName && args) {
+    validateSetProperty(cmdName, args, mode, issues);
+  }
 
   return { ok: issues.length === 0, issues, message: formatIssues(raw, issues) };
 }

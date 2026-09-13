@@ -19,7 +19,7 @@ const config: AIConfig = {
   provider: "deepseek",
   baseURL: process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com",
   apiKey: process.env.DEEPSEEK_API_KEY ?? "",
-  model: process.env.DEEPSEEK_MODEL ?? "deepseek-v4-flash",
+  model: process.env.DEEPSEEK_MODEL ?? "deepseek-flash",
 };
 
 const USER_INPUT = "绘制欧几里得勾股定理证明（直角三角形三边上的正方形，风车图）";

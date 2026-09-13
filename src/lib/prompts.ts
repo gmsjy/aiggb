@@ -145,6 +145,8 @@ const PHYSICS_ADDON = `
 - 力/速度矢量用 forceDiagram 或 vector op。禁止 Point+Point。
 - 分母含距离平方必须 +0.001 防除零（示例 4 的 Ex/Ey 公式）。
 - 轨迹默认 trail；频闪用 physicsTrace mode=stroboscopic。
+- ★ Min/Max 只支持单参数列表 Min({3,1,2})；两数取小/取大必须用 If(c, a, b)，Min(a,b)/Max(a,b) 双参数形式执行失败。
+- ★ GGB 命令名大小写敏感：If（不是 IF）、Curve、Min——写错大小写直接失败。
 - 默认配色：位移 #1e88e5、速度 #43a047、加速度 #fb8c00、力 #e53935、电场 #8e24aa、磁场 #00897b。`;
 
 function buildPromptBase(appMode: "2d" | "3d", domain: Domain, phase: "full" | "compile" = "full"): string {
@@ -328,6 +330,19 @@ ${failureLines}
    - 括号逐层闭合：Sequence 套 Cube/Vector 时最外层的 \")\" 最常漏。
    - 嵌套网格用两个独立 Sequence（外层 j、内层 i），不要在同一个 Sequence 里塞两个循环变量。
    - 三点式 Cube(A,B,C) 的 A/B/C 必须是已声明的 Point 且构成正方形；坐标字面量只可用于两点式 Cube(A,B)。
+
+10. ★ 属性命令（SetColor / SetLineOpacity / SetFilling / style op）专项修复：
+   - SetColor 收到 0~1 浮点（如 (0.9, 0.2, 0.2)）→ 各分量乘 255 四舍五入取整重发（→ (230, 51, 51)）。
+     r/g/b 永远是 0~255 整数；透明度才是 0~1 小数，两者不要混。
+   - 「设置透明度失败（SetLineOpacity 与 SetFilling 均不支持）」→ 该对象不支持透明度，
+     删掉该样式要求即可（非致命），不要换写法循环重试。
+   - 「对象 X 不存在，无法设置样式」→ 核对对象名（大小写须逐字符一致，对照上方画布状态）；
+     若确实未创建，先输出创建命令、再输出样式命令（顺序不能反）。
+   - 3D 模式禁用的属性命令按规则 8 删掉或替代。
+
+11. ★ Min/Max 与命令大小写专项：
+   - Min(a, b) / Max(a, b) 双参数形式执行失败（实测）→ 改用 If(c, a, b) 条件表达式，或 Min({列表}) 单参数列表。
+   - 命令名大小写敏感：IF → If；全大写/全小写错写一律按 KB 签名改正（如 Curve、Min、Segment）。
 
 【输出格式】★ 只输出纯 JSON，不要任何解释、不要 Markdown 代码块：
 {"explanation":"<一句话说明修复了什么>","commands":[<仅修复后的命令>]}

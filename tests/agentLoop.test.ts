@@ -234,6 +234,21 @@ test("参数类失败不计入熔断（模型可自行修正）", async () => {
   assert.equal(r.finalText, "改对了");
 });
 
+test("同名对象重复「不存在」→ 第 2 次注入停止重试指引", async () => {
+  const h = makeHarness([
+    // set_style 引用不存在的对象 → preflight 报「依赖对象 Appel 不存在」（recoverable，不进熔断）
+    toolResp(toolCall("set_style", { target: "Appel", color: "#ff0000" })),
+    toolResp(toolCall("set_style", { target: "Appel", color: "#00ff00" })),
+    textResp("已放弃该样式"),
+  ]);
+  const r = await runAgentLoop("把 Appel 改成红色", h.deps);
+  assert.equal(r.failed, false, "可修正失败不应熔断");
+  const hint = contents(r.messages, "user").find(t => t.includes("多次报「不存在」"));
+  assert.ok(hint, "第 2 次同名失败后应注入指引");
+  assert.ok(hint!.includes("Appel"));
+  assert.ok(hint!.includes("list_objects"), "指引应指向 list_objects 核对对象名");
+});
+
 // ═══════════════════════════════════════════════════
 // 6. 危险工具全部被拒
 // ═══════════════════════════════════════════════════

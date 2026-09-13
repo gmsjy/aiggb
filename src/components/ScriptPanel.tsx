@@ -18,13 +18,14 @@ import {
 } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 
-const STORAGE_KEY = "aiggb_script_collapsed";
+/** 折叠状态持久化键（App.tsx 也监听此键同步根布局 class，共享常量避免两处漂移） */
+export const SCRIPT_COLLAPSED_KEY = "aiggb_script_collapsed";
 
 export function ScriptPanel() {
   const messages = useAppStore(s => s.messages);
   const [copied, setCopied] = useState(false);
   const [collapsed, setCollapsed] = useState<boolean>(
-    () => localStorage.getItem(STORAGE_KEY) === "1"
+    () => localStorage.getItem(SCRIPT_COLLAPSED_KEY) === "1"
   );
   const bodyRef = useRef<HTMLPreElement>(null);
 
@@ -37,7 +38,7 @@ export function ScriptPanel() {
   }, [lines.length, collapsed]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0");
+    localStorage.setItem(SCRIPT_COLLAPSED_KEY, collapsed ? "1" : "0");
     window.dispatchEvent(new CustomEvent("aiggb:script-toggle"));
   }, [collapsed]);
 

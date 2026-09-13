@@ -16,8 +16,7 @@ const config: AIConfig = {
   provider: "test",
   baseURL: "http://localhost",
   apiKey: "k",
-  model: "m",
-  flashModel: "flash-m"
+  model: "m"
 };
 
 test("AI 返回 satisfied=true → 正确解析", async () => {

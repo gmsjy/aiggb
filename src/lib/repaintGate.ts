@@ -46,16 +46,6 @@ export function isDiagVerbose(): boolean {
   }
 }
 
-/** 设置逐节点诊断日志开关 */
-export function setDiagVerbose(on: boolean): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(DIAG_VERBOSE_KEY, on ? "1" : "0");
-  } catch {
-    /* 隐私模式等场景下忽略 */
-  }
-}
-
 /** 3D 批量渲染是否启用（默认启用；关闭可换取 3D 绘图区更平滑，代价是代数区逐行重建） */
 export function isBatch3DEnabled(): boolean {
   if (typeof localStorage === "undefined") return true;
@@ -96,11 +86,6 @@ let busyUntil = 0;
 /** 标记"正在重绘 / 刚恢复重绘"（批处理恢复、applet 重建后调用） */
 export function markRepaintBusy(ms: number = REPAINT_GRACE_MS): void {
   busyUntil = Date.now() + ms;
-}
-
-/** 清空静默期 */
-export function clearRepaintBusy(): void {
-  busyUntil = 0;
 }
 
 /** 是否处于重绘静默期（心跳应跳过画布存活判定） */

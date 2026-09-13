@@ -35,7 +35,7 @@ test("画布对象指纹变化 → 未命中", () => {
 test("临时对象与物理常量不计入指纹 → 仍命中", () => {
   const storage = createMemoryStorage();
   storeCachedSpec("画外接圆", "general", "2d", ["A", "B"], { spec: SPEC }, storage);
-  const hit = lookupCachedSpec("画外接圆", "general", "2d", ["A", "B", "_vv3", "_fv7", "g", "eps0"], storage);
+  const hit = lookupCachedSpec("画外接圆", "general", "2d", ["A", "B", "_vv3", "_fv7", "tmpVv1", "tmpFv2", "g", "eps0"], storage);
   assert.ok(hit);
 });
 

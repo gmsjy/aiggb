@@ -182,12 +182,6 @@ export function buildThinkingParam(config: AIConfig): Record<string, unknown> | 
   return null;
 }
 
-/** 是否处于「会思考」状态（"none" / 未设置 / 不支持 thinking 的 provider 均为 false） */
-export function isThinkingEnabled(config: AIConfig): boolean {
-  const effort = config.reasoningEffort;
-  return !!effort && effort !== "none" && getProviderQuirks(config).supportsThinking === true;
-}
-
 /** 多模态内容片段（OpenAI Vision API 兼容格式） */
 export type ContentPart =
   | { type: "text"; text: string }

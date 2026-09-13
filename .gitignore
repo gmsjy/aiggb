@@ -23,3 +23,14 @@ pnpm-debug.log*
 tests/drift-report.json
 tests/ab-report.json
 tests/report.json
+
+# demo 重生成临时帧
+scripts/.demos-frames/
+
+# 测试产物（可随时重生成，不入库）
+tests/screenshots/
+tests/drift-analysis.json
+tests/.tmp-*
+
+# 用户视角 E2E 运行产物（截图/results 每次重跑再生；report.md 强制保留）
+tests/user-e2e/
