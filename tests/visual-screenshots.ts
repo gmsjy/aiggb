@@ -33,6 +33,17 @@ interface ScreenshotResult {
   ok: boolean;
 }
 
+/**
+ * modify 类用例的前置画布状态（真实 GGB 需要具体定义，离线 runner 只 seed 对象名）。
+ * 坐标字面量一律用大写开头名字——GGB 会把小写名的 (x,y) 隐式推断为 Vector。
+ */
+const SEED_COMMANDS: Record<string, string[]> = {
+  "M-add-point": ["A = (0, 0)", "B = (4, 0)", "s = Segment(A, B)"],
+  "M-color-undo": ["A = (0, 0)", "B = (4, 0)", "C = (2, 3)", "circ = Circle(A, 2)"],
+  "M-change-speed": ["t = Slider(0, 10, 0.02, 1, 150, false, true, false, false)", "P = (1, 1)"],
+  "M-delete-object": ["P = (1, 1)", "A = (0, 0)", "B = (4, 0)", "c = Circle(A, 2)"],
+};
+
 async function main() {
   if (!existsSync(SCREENSHOTS_DIR)) mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
@@ -61,7 +72,9 @@ async function main() {
 
     const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
     const cmdsJson = encodeURIComponent(JSON.stringify(fixture.commands));
-    const pageUrl = `${VISUAL_URL}?cmds=${cmdsJson}`;
+    const seed = SEED_COMMANDS[tc.id];
+    const seedParam = seed ? `&seed=${encodeURIComponent(JSON.stringify(seed))}` : "";
+    const pageUrl = `${VISUAL_URL}?cmds=${cmdsJson}${seedParam}`;
 
     console.log(`[${i + 1}/${targets.length}] ${tc.id}: ${tc.description}`);
 

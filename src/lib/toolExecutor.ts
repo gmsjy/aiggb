@@ -13,7 +13,7 @@ import { TOOL_SCHEMAS } from "./tools";
 import { GGB_FORBIDDEN_COMMANDS } from "./commands";
 import { hexToRgb, fitViewToAspect, isScriptingCommand } from "./ggbBridge";
 import { correctCommand } from "./commandCorrect";
-import { validateGGBCommand, validateSequenceArgs } from "./commandValidate";
+import { validateGGBCommand } from "./commandValidate";
 import { shouldBatch, markRepaintBusy } from "./repaintGate";
 import { PHYSICS_CONSTANTS } from "./physics";
 
@@ -109,6 +109,106 @@ export function executeToolCalls(
 
 // ──── 分发 ────
 
+/** 组装 transform_object 的 GGB 命令（dispatch 与重放映射共用）。参数缺失返回 null */
+function buildTransformCommand(args: Record<string, unknown>): string | null {
+  const { name: n, mode, target } = args as { name: string; mode: string; target: string };
+  switch (mode) {
+    case "reflect":
+      return args.line !== undefined ? `${n} = Reflect(${target}, ${String(args.line)})` : null;
+    case "rotate":
+      return args.center !== undefined && args.angle !== undefined
+        ? `${n} = Rotate(${target}, ${typeof args.angle === "number" ? args.angle + "°" : String(args.angle)}, ${String(args.center)})`
+        : null;
+    case "translate":
+      return args.vector !== undefined ? `${n} = Translate(${target}, ${String(args.vector)})` : null;
+    case "dilate":
+      return args.center !== undefined && args.factor !== undefined
+        ? `${n} = Dilate(${target}, ${String(args.factor)}, ${String(args.center)})`
+        : null;
+    default:
+      return null;
+  }
+}
+
+/** 组装 eval_sequence 的 GGB 命令（dispatch / 重放映射 / 自动降档判定共用） */
+export function buildSequenceCommand(args: {
+  name: string; expr: string; var: string;
+  start: unknown; end: unknown; step: unknown;
+}): string {
+  return `${args.name} = Sequence(${args.expr}, ${args.var}, ${args.start}, ${args.end}, ${args.step})`;
+}
+
+/** 组装 create_readout 的 Text 命令（dispatch 与重放映射共用）。round 小写——大写 Round 在自托管 bundle 不可用 */
+function buildReadoutCommand(
+  name: string,
+  at: string,
+  items: Array<{ label: string; expr: string; unit?: string; decimals?: number }>
+): string {
+  const esc = (s: string) => s.replace(/"/g, "");
+  const segs = items.map(it => {
+    const dec = typeof it.decimals === "number" && it.decimals >= 0 && it.decimals <= 4 ? Math.floor(it.decimals) : 1;
+    return `${esc(it.label)} = " + round(${it.expr}, ${dec}) + "${esc(it.unit ?? "")}`;
+  });
+  return `${name} = Text("${segs.join('" + " | " + "')}", ${at})`;
+}
+
+/** 组装 create_spring 的命令列表（助手长度 + 锯齿 PolyLine + 隐藏助手；dispatch 与重放映射共用） */
+function buildSpringCommands(
+  name: string, from: string, to: string, coils: number, amp: number
+): string[] {
+  const lenName = `${name}Len`;
+  const pts = `(x(${from}) + (x(${to}) - x(${from})) * k / ${2 * coils} - (y(${to}) - y(${from})) * ${amp} / ${lenName} * sin(k * pi / ${coils}), y(${from}) + (y(${to}) - y(${from})) * k / ${2 * coils} + (x(${to}) - x(${from})) * ${amp} / ${lenName} * sin(k * pi / ${coils}))`;
+  return [
+    `${lenName} = Distance(${from}, ${to}) + 0.001`,
+    `${name} = PolyLine(Sequence(${pts}, k, 0, ${2 * coils}))`,
+    `SetVisible(${lenName}, false)`,
+  ];
+}
+
+// ──── 分形：L-system + 海龟图形（TS 侧数值生成，规避 GGB 列表函数/Zip 不可用） ────
+
+/** PolyLine 单命令段数护栏（4096 段实测 ~540ms 可接受，取 4500 留余量） */
+const FRACTAL_MAX_SEGMENTS = 4500;
+
+const FRACTAL_SPECS: Record<string, { axiom: string; rules: Record<string, string>; angleDeg: number; growth: number }> = {
+  koch: { axiom: "F", rules: { F: "F+F--F+F" }, angleDeg: 60, growth: 4 },
+  snowflake: { axiom: "F--F--F", rules: { F: "F+F--F+F" }, angleDeg: 60, growth: 4 },
+  sierpinski: { axiom: "A", rules: { A: "B-A-B", B: "A+B+A" }, angleDeg: 60, growth: 3 },
+  dragon: { axiom: "F", rules: { F: "F+G", G: "F-G" }, angleDeg: 90, growth: 2 },
+};
+
+/** 生成分形 PolyLine 的坐标串。深度超段数护栏时自动截断到允许的最大深度 */
+export function buildFractalPolyLine(
+  kind: "koch" | "snowflake" | "sierpinski" | "dragon",
+  depth: number
+): { coords: string; segments: number; depth: number } {
+  const spec = FRACTAL_SPECS[kind];
+  const initSegs = (spec.axiom.match(/F|A|B/g) || []).length;
+  let d = Math.max(1, Math.floor(Number(depth) || 1));
+  while (d > 1 && initSegs * Math.pow(spec.growth, d) > FRACTAL_MAX_SEGMENTS) d--;
+
+  let s = spec.axiom;
+  for (let i = 0; i < d; i++) {
+    let next = "";
+    for (const ch of s) next += spec.rules[ch] ?? ch;
+    s = next;
+  }
+  const rad = (spec.angleDeg * Math.PI) / 180;
+  const pts: string[] = [];
+  let x = 0, y = 0, head = 0;
+  pts.push(`(${x.toFixed(4)}, ${y.toFixed(4)})`);
+  for (const ch of s) {
+    if (ch === "F" || ch === "A" || ch === "B") {
+      x += Math.cos(head);
+      y += Math.sin(head);
+      pts.push(`(${x.toFixed(4)}, ${y.toFixed(4)})`);
+    } else if (ch === "+") head += rad;
+    else if (ch === "-") head -= rad;
+  }
+  if (kind === "snowflake") pts.push(pts[0]); // 闭合
+  return { coords: pts.join(", "), segments: pts.length - 1, depth: d };
+}
+
 /** 创建单个滑块的内部 helper，供 create_slider 和 create_sliders 共用 */
 function createOneSlider(
   api: GGBAppletApi,
@@ -158,23 +258,12 @@ function dispatch(
       const parts: string[] = [];
       if (ok.length) parts.push(`✓ ${ok.join(", ")}`);
       if (fail.length) parts.push(`✗ ${fail.join("; ")}`);
-      if (!parts.length) throw new Error("批量创建点全部失败");
+      // ★ 全部失败 → 硬失败（与旧 create_point 同口径）：否则 success:true 会骗过熔断与回放分类
+      if (ok.length === 0) throw new Error(`批量创建点全部失败：${fail.join("; ")}`);
       return parts.join("  ");
     }
 
     // ═══ 创建 ═══
-    case "create_point": {
-      const { name: n, x, y } = args as { name: string; x: number | string; y: number | string; z?: number | string };
-      const z = (args as { z?: number | string }).z;
-      const coords = z !== undefined
-        ? `(${x}, ${y}, ${z})`
-        : `(${x}, ${y})`;
-      const cmd = `${n} = ${coords}`;
-      const ok = api.evalCommand(cmd);
-      if (!ok) throw new Error(`创建点 ${n} 失败`);
-      return `点 ${n} 已创建于 ${coords}`;
-    }
-
     case "create_segment": {
       const { name: n, start, end } = args as { name: string; start: string; end: string };
       if (!api.exists(start)) throw new Error(`起点 ${start} 不存在`);
@@ -218,15 +307,9 @@ function dispatch(
       const parts: string[] = [];
       if (results.length) parts.push(results.join("；"));
       if (errors.length) parts.push(`✗ ${errors.join("; ")}`);
-      if (!parts.length) throw new Error("批量创建滑块全部失败");
+      // ★ 全部失败 → 硬失败（同 create_points 口径）
+      if (results.length === 0) throw new Error(`批量创建滑块全部失败：${errors.join("; ")}`);
       return parts.join("  ");
-    }
-
-    case "create_slider": {
-      return createOneSlider(api, args as {
-        name: string; min: number | string; max: number | string; step: number | string; value: number | string;
-        unit?: string; label?: string;
-      });
     }
 
     case "create_vector": {
@@ -278,6 +361,100 @@ function dispatch(
       return `参数曲线 ${n} 已创建（t: ${tMin}→${tMax}）`;
     }
 
+    // ═══ 几何动词层（transform 保留——°单位/按模式必填参数是真智能；
+    //     薄包装单命令 line/midpoint/intersect/locus 已由免确认 eval_raw + KB 惯用法承接） ═══
+    case "transform_object": {
+      const { name: n, mode, target } = args as { name: string; mode: string; target: string };
+      if (!api.exists(target)) throw new Error(`变换目标 ${target} 不存在`);
+      const cmd = buildTransformCommand(args);
+      if (!cmd) throw new Error(`变换参数不完整：mode=${mode}（按工具描述补全必填参数）`);
+      const ok = api.evalCommand(cmd);
+      if (!ok) throw new Error(`变换 ${mode} 执行失败：${cmd}`);
+      const labels: Record<string, string> = { reflect: "轴对称", rotate: "旋转", translate: "平移", dilate: "缩放" };
+      return `已${labels[mode] ?? mode}：${target} → ${n}`;
+    }
+
+    // ═══ 物理演示层（矢量随动 / 读数 / 弹簧 / 分形） ═══
+    case "attach_vector": {
+      const { name: n, anchor, exprX, exprY, scale } = args as {
+        name: string; anchor: string; exprX: string; exprY: string; scale?: number | string; color?: string; label?: string;
+      };
+      // 助手名大写开头（Mag/Tip）——小写名的坐标表达式会被 GGB 隐式推断为 Vector，Vector() 引用即失败
+      const magName = `Mag${n}`;
+      const tipName = `Tip${n}`;
+      // ① 模长助手（隐藏）：显式 scale 时仍生成（重放一致），只是不参与缩放
+      if (!api.evalCommand(`${magName} = sqrt((${exprX})^2 + (${exprY})^2)`)) {
+        throw new Error(`矢量分量表达式求值失败：sqrt((${exprX})^2 + (${exprY})^2)（检查括号配对与已定义的量）`);
+      }
+      // ② 缩放：显式 scale 优先；缺省按视窗宽度 15% 自动归一化
+      let effScale = typeof scale === "number" && Number.isFinite(scale) && scale > 0 ? scale : null;
+      let scaleNote = "显式";
+      if (effScale === null) {
+        const xmin = api.getXmin?.(), xmax = api.getXmax?.();
+        const viewW = xmin !== undefined && xmax !== undefined && xmax > xmin ? xmax - xmin : 10;
+        const targetLen = viewW * 0.15;
+        const mag = api.getValue(magName);
+        effScale = mag > 1e-9 ? Math.round(targetLen / mag * 1000) / 1000 : 0.2;
+        scaleNote = "自动归一化";
+      }
+      // ③ 尾点 + 矢量
+      if (!api.evalCommand(`${tipName} = ${anchor} + (${exprX} * ${effScale}, ${exprY} * ${effScale})`)) {
+        throw new Error(`矢量尾点创建失败：${tipName} = ${anchor} + ((${exprX}), (${exprY})) × ${effScale}`);
+      }
+      if (!api.evalCommand(`${n} = Vector(${anchor}, ${tipName})`)) {
+        throw new Error(`矢量 ${n} 创建失败`);
+      }
+      api.setVisible(magName, false);
+      api.setVisible(tipName, false);
+      const { color, label } = args as { color?: string; label?: string };
+      if (color) { const [r, g, b] = hexToRgb(color); api.setColor(n, r, g, b); }
+      api.setLineThickness(n, 4);
+      if (label) { api.setCaption(n, label); api.setLabelStyle(n, 3); }
+      return `矢量 ${n} 已锚定 ${anchor}（缩放 ×${effScale}，${scaleNote}；端点随 ${anchor} 实时跟随）`;
+    }
+
+    case "create_readout": {
+      const { name: n, at, items } = args as {
+        name: string; at: string;
+        items: Array<{ label: string; expr: string; unit?: string; decimals?: number }>;
+      };
+      const cmd = buildReadoutCommand(n, at, items);
+      if (!api.evalCommand(cmd)) {
+        throw new Error(`读数条 ${n} 创建失败：${cmd.slice(0, 120)}（检查 expr 是否引用了已定义的量）`);
+      }
+      return `读数条 ${n} 已创建于 ${at}（${items.length} 项，随动画实时刷新）`;
+    }
+
+    case "create_spring": {
+      const { name: n, from, to } = args as {
+        name: string; from: string; to: string; coils?: number; amp?: number; thickness?: number;
+      };
+      const coils = typeof args.coils === "number" && args.coils >= 4 && args.coils <= 16 ? Math.floor(args.coils) : 8;
+      const amp = typeof args.amp === "number" && args.amp > 0 && args.amp <= 2 ? args.amp : 0.3;
+      const [lenCmd, polyCmd] = buildSpringCommands(n, from, to, coils, amp);
+      if (!api.evalCommand(lenCmd)) {
+        throw new Error(`弹簧长度助手创建失败（检查 ${from} / ${to} 是否为已存在的点）`);
+      }
+      if (!api.evalCommand(polyCmd)) {
+        throw new Error(`弹簧 ${n} 创建失败`);
+      }
+      api.setVisible(`${n}Len`, false);
+      if (args.thickness !== undefined) api.setLineThickness(n, args.thickness as number);
+      return `弹簧 ${n} 已创建（${from} ↔ ${to}，${coils} 圈；端点移动实时伸缩）`;
+    }
+
+    case "create_fractal": {
+      const { name: n, kind, depth, color, thickness } = args as {
+        name: string; kind: "koch" | "snowflake" | "sierpinski" | "dragon"; depth: number; color?: string; thickness?: number;
+      };
+      const built = buildFractalPolyLine(kind, depth);
+      const ok = api.evalCommand(`${n} = PolyLine(${built.coords})`);
+      if (!ok) throw new Error(`分形 ${n} 创建失败（${kind} depth=${built.depth}，${built.segments} 段）`);
+      if (color) { const [r, g, b] = hexToRgb(color); api.setColor(n, r, g, b); }
+      api.setLineThickness(n, thickness ?? 2);
+      return `分形 ${n}（${kind}，depth=${built.depth}，${built.segments} 段）已创建。深度固定——如需「逐级生长」演示，按 depth 1..N 多次创建并切换可见性`;
+    }
+
     // ═══ 物理专用 ═══
     case "physics_constants": {
       const { names } = args as { names: string[] };
@@ -302,18 +479,6 @@ function dispatch(
       return mode === "trail"
         ? `轨迹已开启：${target}（拖尾模式）`
         : `轨迹已开启：${target}（频闪模式，实际采样由 Sequence 显式生成）`;
-    }
-
-    case "set_unit_axes": {
-      const { xUnit, yUnit, xLabel, yLabel } = args as {
-        xUnit: string; yUnit: string; xLabel?: string; yLabel?: string;
-      };
-      const xl = xLabel ? `${xLabel}/${xUnit}` : `/${xUnit}`;
-      const yl = yLabel ? `${yLabel}/${yUnit}` : `/${yUnit}`;
-      if (api.setAxisLabels) {
-        api.setAxisLabels(1, xl, yl, "");
-      }
-      return `坐标轴已设置：x=${xl} y=${yl}`;
     }
 
     // ═══ 修改 ═══
@@ -429,29 +594,75 @@ function dispatch(
       return details.join(", ") + suffix;
     }
 
-    // ═══ 高级 ═══
-    case "eval_sequence": {
-      const { name: n, expr, var: loopVar, start, end, step } = args as {
-        name: string; expr: string; var: string; start: number | string; end: number | string; step: number | string;
-      };
-      // ★ 参数级静态预检：循环变量必须是单个字母、区间必须是独立数值（最高频失败点）
-      const argProblem = validateSequenceArgs({ name: n, expr, var: loopVar, start, end, step });
-      if (argProblem) throw new Error(argProblem);
-      const cmd = `${n} = Sequence(${expr}, ${loopVar}, ${start}, ${end}, ${step})`;
-      // RAG 纠正：Levenshtein 模糊修正命令名
-      const correction = correctCommand(cmd);
-      const finalCmd = correction.changed ? correction.corrected : cmd;
-      // ★ 命令级静态预检：括号配对 / 逗号误写 / 参数个数
-      const check = validateGGBCommand(finalCmd, appMode);
-      if (!check.ok) throw new Error(check.message);
-      const ok = api.evalCommand(finalCmd);
-      if (!ok) throw new Error(`Sequence 执行失败：${finalCmd}`);
-      const note = correction.changed
-        ? `（已纠正：${correction.suggestions.join("; ")}）`
-        : "";
-      return `序列 ${n} 已创建${note}`;
+    case "get_canvas_info": {
+      const r2 = (v: number) => Math.round(v * 100) / 100;
+      const lines: string[] = [];
+      const xmin = api.getXmin?.(), xmax = api.getXmax?.(), ymin = api.getYmin?.(), ymax = api.getYmax?.();
+      const hasView = xmin !== undefined && xmax !== undefined && ymin !== undefined && ymax !== undefined;
+      lines.push(hasView
+        ? `视窗: x[${r2(xmin!)}, ${r2(xmax!)}], y[${r2(ymin!)}, ${r2(ymax!)}]`
+        : "视窗: 未知（当前 applet 不支持读取）");
+      const names = api.getAllObjectNames();
+      if (names.length === 0) {
+        lines.push("对象: 画布为空");
+        return lines.join("\n");
+      }
+      let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity, counted = 0;
+      const outside: string[] = [];
+      for (const n of names) {
+        const bb = api.getBoundingBox?.(n);
+        if (!bb || bb.length < 6) continue;
+        counted++;
+        bx0 = Math.min(bx0, bb[0]); by0 = Math.min(by0, bb[1]);
+        bx1 = Math.max(bx1, bb[3]); by1 = Math.max(by1, bb[4]);
+        if (hasView && (bb[3] < xmin! || bb[0] > xmax! || bb[4] < ymin! || bb[1] > ymax!)) {
+          outside.push(n);
+        }
+      }
+      if (counted === 0) {
+        lines.push(`对象: ${names.slice(0, 30).join(", ")}${names.length > 30 ? ` 等共 ${names.length} 个` : ""}（包围盒不可用）`);
+      } else {
+        lines.push(`对象包围盒并集: x[${r2(bx0)}, ${r2(bx1)}], y[${r2(by0)}, ${r2(by1)}]（${counted}/${names.length} 个可测）`);
+        if (outside.length > 0) {
+          lines.push(`⚠ 完全在视窗外: ${outside.join(", ")} → 建议调用 fit_view_to`);
+        }
+      }
+      return lines.join("\n");
     }
 
+    case "fit_view_to": {
+      const { targets, padding } = args as { targets?: string[]; padding?: number };
+      const pad = typeof padding === "number" && padding >= 0 && padding <= 0.5 ? padding : 0.1;
+      const wanted = targets ?? [];
+      const missing = wanted.filter(t => !api.exists(t));
+      const names = wanted.length > 0 ? wanted.filter(t => api.exists(t)) : api.getAllObjectNames();
+      if (names.length === 0) {
+        return wanted.length > 0 ? `目标对象均不存在：${missing.join(", ")}` : "画布为空，无需调整视窗";
+      }
+      let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity, counted = 0;
+      for (const n of names) {
+        const bb = api.getBoundingBox?.(n);
+        if (!bb || bb.length < 6) continue;
+        counted++;
+        bx0 = Math.min(bx0, bb[0]); by0 = Math.min(by0, bb[1]);
+        bx1 = Math.max(bx1, bb[3]); by1 = Math.max(by1, bb[4]);
+      }
+      if (counted === 0) {
+        return "无法测量对象包围盒（applet 不支持），视窗未调整——请改用 set_view 手动指定";
+      }
+      // 单点/共线时维度为 0 → 以中心坐标或 1 兜底，保证视窗不为零宽
+      const px = (bx1 - bx0 > 0 ? bx1 - bx0 : Math.max(Math.abs(bx0), 1)) * pad;
+      const py = (by1 - by0 > 0 ? by1 - by0 : Math.max(Math.abs(by0), 1)) * pad;
+      const fit = fitViewToAspect(api, bx0 - px, bx1 + px, by0 - py, by1 + py);
+      api.setCoordSystem(fit.xmin, fit.xmax, fit.ymin, fit.ymax);
+      const r2 = (v: number) => Math.round(v * 100) / 100;
+      return `视窗已适配 ${counted} 个对象 → x[${r2(fit.xmin)}, ${r2(fit.xmax)}], y[${r2(fit.ymin)}, ${r2(fit.ymax)}]` +
+        (missing.length > 0 ? `（跳过不存在: ${missing.join(", ")}）` : "");
+    }
+
+    // ═══ 高级 ═══
+    // ★ eval_sequence 工具已下线：Sequence 由免确认 eval_raw 直接提交（validateGGBCommand
+    //   的 Sequence 五重载契约 + validateSequenceArgs 语义校验不变，走 eval_raw 路径生效）
     case "eval_raw": {
       const { command } = args as { command: string };
       // RAG 纠正：Levenshtein 模糊修正 + 臆造命令映射
@@ -496,8 +707,9 @@ function checkSafety(name: string, args: Record<string, unknown>): string | null
       return `命令被安全拦截：使用了禁止的 GGB 命令。请用专用工具替代。`;
     }
 
-    // XSS 拦截
-    if (/<script|javascript:|on\w+=/i.test(cmd)) {
+    // XSS 拦截：<script>/javascript: 对原始命令检查（字面量里出现也难有合法用途）；
+    // on\w+= 用剥离字面量后的命令，避免 Text("onward=5") 之类的文本内容被误伤
+    if (/<script|javascript:/i.test(cmd) || /on\w+=/i.test(stripped)) {
       return "命令被安全拦截：含有危险片段";
     }
   }
@@ -604,6 +816,50 @@ function preFlightCheck(
       }
       break;
     }
+
+    case "transform_object": {
+      const mode = args.mode as string | undefined;
+      if (mode === "reflect" && args.line === undefined) return `reflect 需要 line（对称轴对象名）`;
+      if (mode === "rotate" && (args.center === undefined || args.angle === undefined)) {
+        return `rotate 需要 center（旋转中心）与 angle（角度）`;
+      }
+      if (mode === "translate" && args.vector === undefined) return `translate 需要 vector（平移矢量对象名）`;
+      if (mode === "dilate" && (args.center === undefined || args.factor === undefined)) {
+        return `dilate 需要 center（缩放中心）与 factor（缩放因子）`;
+      }
+      for (const k of ["line", "center", "vector"] as const) {
+        const v = args[k];
+        if (typeof v === "string" && !api.exists(v)) return `依赖对象 ${v} 不存在；请先创建它`;
+      }
+      break;
+    }
+
+    case "attach_vector": {
+      const a = String(args.anchor ?? "");
+      if (api.exists(a)) {
+        const anchorType = api.getObjectType(a);
+        if (!/point/i.test(anchorType)) {
+          return `attach_vector 的 anchor 必须是 Point（当前 ${a} 类型为 ${anchorType}）`;
+        }
+      }
+      break;
+    }
+
+    case "create_readout": {
+      const at = String(args.at ?? "");
+      if (api.exists(at)) {
+        const atType = api.getObjectType(at);
+        if (!/point/i.test(atType)) return `create_readout 的 at 必须是 Point（当前类型 ${atType}）`;
+      }
+      break;
+    }
+
+    case "create_spring": {
+      if (args.from === args.to && args.from !== undefined) {
+        return `弹簧两端点不能相同（from=to=${String(args.from)}）`;
+      }
+      break;
+    }
   }
 
   // 依赖检查：from/center/position 等引用的对象若存在性可判定且缺失 → 提示
@@ -613,6 +869,12 @@ function preFlightCheck(
     ["create_trace", "target"], ["set_animation", "target"],
     ["set_style", "target"], ["get_object_info", "name"],
     ["delete_object", "target"],
+    // ★ create_vector 的 from 必须与 dispatch 同口径走预检：否则 from 缺失落到 dispatch
+    //   抛「起点 X 不存在」——按硬失败计入熔断，且文案不匹配 MISSING_OBJ_RE 拿不到重试指引
+    ["create_vector", "from"],
+    ["transform_object", "target"],
+    ["attach_vector", "anchor"], ["create_readout", "at"],
+    ["create_spring", "from"], ["create_spring", "to"],
   ];
   for (const [toolName, field] of refTargets) {
     if (name === toolName) {
@@ -624,6 +886,39 @@ function preFlightCheck(
   }
 
   return null; // 通过
+}
+
+// ──── eval_raw / eval_sequence 自动安全降档 ────
+
+/**
+ * eval_raw 命令的免确认判定。满足全部条件 → 危险降为安全（不弹用户确认）：
+ *   ① 赋值形态（标识符 = ...）——产生新对象的声明式构造（Cube/Sphere/Surface/IntersectPath
+ *      等 3D 命令全是此形态）；纯 scripting 命令（SetColor/ZoomIn 等）无 "=" 天然排除
+ *   ② 不含 Delete（删除破坏性明确且成败不可辨，必须人工确认）
+ *   ③ 通过硬黑名单 + XSS 安全拦截
+ *   ④ 通过静态语法预检（括号配对/参数个数/3D 禁令）
+ */
+export function isEvalRawAutoSafe(command: string, appMode?: "2d" | "3d"): boolean {
+  const cmd = command.trim();
+  if (!/^[A-Za-z_]\w*\s*=\s*\S/.test(cmd)) return false;
+  if (/\bDelete\s*\(/i.test(cmd)) return false;
+  // 剥离字符串字面量后查黑名单（与 checkSafety 同语义），XSS 检查拆两半（同 eval_raw 执行路径）
+  const stripped = cmd.replace(/"[^"\\]*(?:\\.[^"\\]*)*"/g, "").replace(/'[^'\\]*(?:\\.[^'\\]*)*"/g, "");
+  if (FORBIDDEN_RE.test(stripped)) return false;
+  if (/<script|javascript:/i.test(cmd) || /on\w+=/i.test(stripped)) return false;
+  return validateGGBCommand(cmd, appMode).ok;
+}
+
+/** eval_raw 工具调用的自动降档判定（args 来自模型输出，未经 Zod） */
+export function isEvalAutoSafe(
+  toolName: string,
+  args: Record<string, unknown>,
+  appMode?: "2d" | "3d"
+): boolean {
+  if (toolName === "eval_raw") {
+    return isEvalRawAutoSafe(String(args.command ?? ""), appMode);
+  }
+  return false;
 }
 
 // ──── 格式化 ────
@@ -653,6 +948,8 @@ export function toolCallToEvalCommands(name: string, argsJson: string): string[]
   try { args = JSON.parse(argsJson) as Record<string, unknown>; } catch { return []; }
 
   switch (name) {
+    // ═══ 已下线工具的重放兼容（create_point/slider/line/midpoint/intersect/locus/eval_sequence）：
+    //     历史轨迹按工具名查映射回放 constructionLog，不能随工具下线而断 ═══
     case "create_point": {
       const { name: n, x, y } = args as { name: string; x: number | string; y: number | string; z?: number | string };
       const z = (args as { z?: number | string }).z;
@@ -705,6 +1002,26 @@ export function toolCallToEvalCommands(name: string, argsJson: string): string[]
         : `Curve(${xExpr}, ${yExpr}, t, ${tMin}, ${tMax})`;
       return [`${n} = ${curveCmd}`];
     }
+    case "create_line": {
+      const { name: n, from, to } = args as { name: string; from: string; to: string };
+      return [`${n} = Line(${from}, ${to})`];
+    }
+    case "create_midpoint": {
+      const { name: n, a, b } = args as { name: string; a: string; b: string };
+      return [`${n} = Midpoint(${a}, ${b})`];
+    }
+    case "create_intersect": {
+      const { name: n, first, second } = args as { name: string; first: string; second: string };
+      return [`${n} = Intersect(${first}, ${second})`];
+    }
+    case "create_locus": {
+      const { name: n, point, path } = args as { name: string; point: string; path: string };
+      return [`${n} = Locus(${point}, ${path})`];
+    }
+    case "transform_object": {
+      const cmd = buildTransformCommand(args);
+      return cmd ? [cmd] : [];
+    }
     case "eval_raw": {
       const { command } = args as { command: string };
       return [command];
@@ -713,7 +1030,7 @@ export function toolCallToEvalCommands(name: string, argsJson: string): string[]
       const { name: n, expr, var: loopVar, start, end, step } = args as {
         name: string; expr: string; var: string; start: number | string; end: number | string; step: number | string;
       };
-      return [`${n} = Sequence(${expr}, ${loopVar}, ${start}, ${end}, ${step})`];
+      return [buildSequenceCommand({ name: n, expr, var: loopVar, start, end, step })];
     }
     case "physics_constants": {
       const { names } = args as { names: string[] };
@@ -721,6 +1038,41 @@ export function toolCallToEvalCommands(name: string, argsJson: string): string[]
         const def = PHYSICS_CONSTANTS[n];
         return def ? `${n} = ${def.value}` : `# unknown constant: ${n}`;
       });
+    }
+    case "attach_vector": {
+      const { name: n, anchor, exprX, exprY, scale } = args as {
+        name: string; anchor: string; exprX: string; exprY: string; scale?: number | string;
+      };
+      const s = typeof scale === "number" && Number.isFinite(scale) && scale > 0 ? scale : 0.2;
+      return [
+        `Mag${n} = sqrt((${exprX})^2 + (${exprY})^2)`,
+        `Tip${n} = ${anchor} + (${exprX} * ${s}, ${exprY} * ${s})`,
+        `${n} = Vector(${anchor}, Tip${n})`,
+        `SetVisible(Mag${n}, false)`,
+        `SetVisible(Tip${n}, false)`,
+      ];
+    }
+    case "create_readout": {
+      const { name: n, at, items } = args as {
+        name: string; at: string;
+        items: Array<{ label: string; expr: string; unit?: string; decimals?: number }>;
+      };
+      return [buildReadoutCommand(n, at, items)];
+    }
+    case "create_spring": {
+      const { name: n, from, to, coils, amp } = args as {
+        name: string; from: string; to: string; coils?: number; amp?: number;
+      };
+      const c = typeof coils === "number" && coils >= 4 && coils <= 16 ? Math.floor(coils) : 8;
+      const a = typeof amp === "number" && amp > 0 && amp <= 2 ? amp : 0.3;
+      return buildSpringCommands(n, from, to, c, a);
+    }
+    case "create_fractal": {
+      const { name: n, kind, depth } = args as {
+        name: string; kind: "koch" | "snowflake" | "sierpinski" | "dragon"; depth: number;
+      };
+      const built = buildFractalPolyLine(kind, depth);
+      return [`${n} = PolyLine(${built.coords})`];
     }
     // set_style / set_animation / set_view / set_unit_axes / create_trace / create_text
     // delete_object / clear_canvas / get_object_info / list_objects

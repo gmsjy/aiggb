@@ -25,6 +25,7 @@ import { TOOL_DEFINITIONS, getToolSafety, isKnownTool, TOOL_SCHEMAS, buildToolCa
 import {
   executeToolCall as defaultExecuteToolCall,
   executeToolCalls as defaultExecuteToolCalls,
+  isEvalAutoSafe,
   type ToolCallRequest,
   type ToolResult
 } from "./toolExecutor";
@@ -58,8 +59,14 @@ const USER_DENIED_MSG = "用户拒绝了此操作";
  */
 const TRUNCATION_RETRY_BUDGET_SCALE = 2;
 
-/** 截断重试时降到的思考档位（腾出正文/工具调用空间；GLM 经 buildThinkingParam 落为 disabled） */
+/** 截断重试时降到的思考档位（腾出正文/工具调用空间）。
+ *  ★ GLM 注意：thinking.type 是二元开关，"low" 经 buildThinkingParam 仍落为 enabled——
+ *    GLM 侧只有扩容生效；GLM-5.2+ 支持 reasoning_effort 后降档才真正起作用。 */
 const TRUNCATION_RETRY_REASONING = "low" as const;
+
+/** 截断类空响应的最大重试次数。长任务中截断易复发（预算随历史膨胀更易吃满），
+ *  全 loop 只给一次机会会让第二次截断直接失败回滚；非截断空响应仍限 1 次 */
+const TRUNCATION_RETRY_MAX = 2;
 
 // ──── 类型 ────
 
@@ -106,8 +113,9 @@ export interface AgentLoopDeps {
   getMessages(): ChatTurn[];
   /** 流式展示 AI 的中间思考（可选） */
   onThinking?(message: string): void;
-  /** 每次 AI 调用的 token 用量回传（累计到 UI 统计）。reasoning = 其中的思考 token */
-  onTokenUsage?(usage: { prompt: number; completion: number; reasoning?: number }): void;
+  /** 每次 AI 调用的 token 用量回传（累计到 UI 统计）。reasoning = 其中的思考 token；
+   *  cacheHit = 命中服务端前缀缓存（DeepSeek KV Cache）的输入 token */
+  onTokenUsage?(usage: { prompt: number; completion: number; reasoning?: number; cacheHit?: number }): void;
   /** Agent 模式专用模型名（已解析，含回退链） */
   agentModel: string;
   // ── 可注入依赖（测试用 mock 替换，生产环境使用默认实现） ──
@@ -121,6 +129,11 @@ export interface AgentLoopDeps {
   persistTrajectory?: (rec: TrajectoryRecord) => void;
   /** 画布状态核对规格（带图轮注入；缺省 = 无终止核对） */
   stateCheck?: StateCheckSpec;
+  /** 历史高频陷阱提示（pipeline 注入 buildTrapPrompt 产物；追加到 system prompt 尾部） */
+  trapPrompt?: string;
+  /** 轮次耗尽续作：上一轮暂停时的完整对话缓存（pipeline 注入；缺省 = 全新轮）。
+   *  缓存含原始请求与已尝试的工具序列，恢复时换新 system prompt 并立即压缩 */
+  resumeMessages?: AgentMessage[];
 }
 
 /** agent loop 执行结果 */
@@ -133,8 +146,12 @@ export interface AgentLoopResult {
   iterations: number;
   /** 被拒绝的工具调用详情 */
   deniedTools: string[];
-  /** 是否失败（熔断 / 超限 / 空响应放弃）。pipeline 据此决定快照回滚 */
+  /** 是否失败（熔断 / 空响应放弃）。pipeline 据此决定快照回滚。
+   *  ★ 轮次耗尽不在此列——那标记为 incomplete（画布保留、可续作） */
   failed?: boolean;
+  /** 轮次耗尽的可续作暂停：画布保留当前进度、不回滚，成功命令照常写入 constructionLog；
+   *  本轮对话由 pipeline 缓存，用户发送后续指令即注入 resumeMessages 增量续作 */
+  incomplete?: boolean;
 }
 
 // ──── 确认回调（由 UI 层注入） ────
@@ -157,7 +174,7 @@ export function unregisterConfirmationHandler(): void {
 
 // ──── System Prompt 构建 ────
 
-function buildAgentSystemPrompt(domain: Domain, appMode: "2d" | "3d", canvasEmpty: boolean, maxToolsPerTurn?: number): string {
+function buildAgentSystemPrompt(domain: Domain, appMode: "2d" | "3d", canvasEmpty: boolean, maxToolsPerTurn?: number, trapPrompt?: string): string {
   const modeHeader = appMode === "3d"
     ? `【3D 三维模式】使用 (x,y,z) 坐标。Cube/Sphere/Tetrahedron/IntersectPath/Surface 等 3D 命令需走 eval_raw。SetViewDirection/SetCaption/SetFilling/SetPointSize/SetAxesRatio/ZoomIn 在纯 3D applet 中不可用。Cross(u,v) 返回自由 Vector → 用 end=O+wVec; Vector(O,end) 两步法。`
     : `【2D 平面模式】使用 (x,y) 坐标，禁止 z 轴和 3D 几何命令。`;
@@ -173,26 +190,29 @@ function buildAgentSystemPrompt(domain: Domain, appMode: "2d" | "3d", canvasEmpt
 → 第 1 步：直接开始，注入物理常量
   调用：physics_constants({names: ["g"]})
   → 观察："物理常量已注入：g"
-→ 第 2 步：创建 3 个滑块（一次调用 3 个安全工具）
-  调用：create_slider({name:"v0",min:1,max:50,step:1,value:20,unit:"m/s",label:"初速"})
-  调用：create_slider({name:"theta",min:0,max:1.5708,step:0.01,value:0.785,unit:"rad",label:"仰角"})
-  调用：create_slider({name:"t",min:0,max:5,step:0.02,value:0,unit:"s",label:"时间"})
+→ 第 2 步：创建 3 个滑块（单次批量调用）
+  调用：create_sliders({sliders:[{name:"v0",min:1,max:50,step:1,value:20,unit:"m/s",label:"初速"},{name:"theta",min:0,max:1.5708,step:0.01,value:0.785,unit:"rad",label:"仰角"},{name:"t",min:0,max:5,step:0.02,value:0,unit:"s",label:"时间"}]})
   → 观察：全部成功
 → 第 3 步：创建质点
   调用：create_function({name:"Px",expression:"v0*cos(theta)*t"})
   调用：create_function({name:"Py",expression:"v0*sin(theta)*t-0.5*g*t^2"})
   调用：create_point({name:"P",x:"Px(t)",y:"Py(t)"})
   → 观察：全部成功
-→ 第 4 步：速度矢量 + 轨迹 + 坐标轴 + 动画
-  调用：create_vector({name:"vArrow",from:"P",to:"P+(v0*cos(theta)/5,v0*sin(theta)-g*t)/5",color:"#43a047"})
+→ 第 4 步：速度矢量（随动）+ 实时读数 + 轨迹
+  调用：attach_vector({name:"vArrow",anchor:"P",exprX:"v0*cos(theta)",exprY:"v0*sin(theta)-g*t",color:"#43a047",label:"v"})
+  调用：create_readout({name:"hud",at:"P",items:[{label:"t",expr:"t",unit:"s",decimals:1},{label:"y",expr:"v0*sin(theta)*t-0.5*g*t^2",unit:"m",decimals:1}]})
   调用：create_trace({target:"P",mode:"trail"})
-  调用：set_unit_axes({xUnit:"m",yUnit:"m"})
   → 观察：全部成功
-→ 第 5 步：视窗 + 启动动画
-  调用：set_view({xmin:-2,xmax:50,ymin:-2,ymax:20})
+→ 第 5 步：视窗（含轴单位） + 启动动画
+  调用：set_view({xmin:-2,xmax:50,ymin:-2,ymax:20,xUnit:"m",yUnit:"m"})
   调用：set_animation({target:"t",action:"start",speed:0.5,repeat:"increasing"})
   → 最终回复："斜抛运动构造完成 ✓ P 点自动运动 + 拖尾轨迹 + 速度矢量。拖动 v0/θ 滑块可实时调整参数。"`
     : `【增量修改模式】画布已有对象，请直接分析需求并修改。非必要不调用 list_objects/get_object_info——从用户消息中的 [当前画布已有对象] 即可知悉画布状态。优先在现有对象上修改（set_style/set_animation/delete_object），而非清空重建。`;
+
+  // ★ 历史陷阱节追加在 prompt 尾部：内容随陷阱库变化，放尾部使主体保持字节稳定（KV Cache 前缀命中）
+  const trapSection = trapPrompt && trapPrompt.trim()
+    ? `\n\n【历史高频陷阱——此前运行中反复出现的错误，严禁重蹈】\n${trapPrompt}`
+    : "";
 
   return `你是 AiGGB 图形构造代理，通过逐步调用工具在 GeoGebra 画布上创建或修改交互式数学/物理图形。
 
@@ -221,13 +241,18 @@ ${canvasGuide}
 - SetColor r/g/b 必须 0~255 整数。
 - Min(a,b)/Max(a,b) 双参数形式执行失败 → 用 If(c, a, b)。
 - 命令名大小写敏感：If（不是 IF）、Curve、Segment。
+- ★ 坐标字面量赋给小写名会被 GGB 隐式推断为 Vector（实测 contact/c2 等），后续 Segment(C, xxx) 引用即失败——坐标点一律用大写开头名字（A、B、Contact）。
+- ★ Angle(P1, 顶点, P2) 三参必须全部是已声明的大写 Point：先建底角顶点与两边端点再取角；滑块 t 的大写 T 是不存在的名字。斜面倾角：ang = Angle(Hx, O, Ps)（Hx 水平参考点、O 底角、Ps 斜面上点）。
+- 角度标注直接 a1 = Angle(A, O, B)（自带弧线与度数显示，无需自造 Arc）。
+- 摆锤/质点用小圆表示：半径取特征长度的 4%~6%（如 L=1 → Circle(P, 0.05)）。
+- 切线扫描（导数几何意义）：P = Point(f) 让点落在曲线上，t = Tangent(P, f) 作切线——均为赋值形态免确认。
 
 【工具分组速览（按需选用，非全部必用）】
 ${buildToolCategoryOverview()}
 
 【命名约定】
 - 点：大写 A,B,C；滑块：小写 t,v0,theta；矢量：带 Vec/Arrow 后缀
-- 标识符仅 ASCII 字母数字下划线，禁止中文变量名。`;
+- 标识符仅 ASCII 字母数字下划线，禁止中文变量名。` + trapSection;
 }
 
 // ──── 主循环 ────
@@ -255,7 +280,7 @@ export async function runAgentLoop(
   // ★ 是否回传 reasoning_content：仅 provider 明确要求时（V4）。其他 provider 无该字段，回传即 no-op
   const roundtripReasoning = quirks.mustRoundtripReasoning === true;
 
-  const systemPrompt = buildAgentSystemPrompt(deps.domain, deps.appMode, initialObjs.length === 0, quirks.maxToolsPerTurn);
+  const systemPrompt = buildAgentSystemPrompt(deps.domain, deps.appMode, initialObjs.length === 0, quirks.maxToolsPerTurn, deps.trapPrompt);
 
   const userPrefix = quirks.agentForceUserPrefix
     ? "[指令] 本任务使用工具调用模式。每收到一条消息必须立即调用工具。禁止先输出分析/规划再调用工具——工具调用优先于文字分析。用工具执行结果验证，而非文字推测。\n\n"
@@ -270,11 +295,32 @@ export async function runAgentLoop(
     ? `\n[当前画布已有对象：${initialObjs.join(", ")}]`
     : "\n[当前画布为空]";
 
+  // ★ 轮次耗尽续作：优先复用上一轮暂停时的对话缓存（尽可能利用缓存——原始请求、
+  //    已尝试的工具序列与失败信息全保留），而非仅从 ChatTurn 重建。缓存首元素是旧
+  //    system prompt → 丢弃换新（模式/画布可能已变）；缓存的 index 1 恰是原始用户请求，
+  //    与 compressHistory 的保留位约定天然对齐；跳过 convertHistory（避免与缓存重复）
+  const resumedMsgs = deps.resumeMessages && deps.resumeMessages.length > 1
+    ? deps.resumeMessages.slice(1)
+    : null;
+  const resumed = resumedMsgs !== null;
+
   let messages: AgentMessage[] = [
     { role: "system", content: systemPrompt },
-    ...historyMsgs,
-    { role: "user", content: userPrefix + userText + canvasStatus }
+    ...(resumedMsgs ?? historyMsgs),
+    { role: "user", content: (resumed ? "[续作] " : "") + userPrefix + userText + canvasStatus }
   ];
+
+  // ★ 当前用户请求的下标（压缩时必须保留）。多轮对话时不是 messages[1]——那里是历史消息，
+  //    写死 messages[1] 会让压缩丢掉当前任务指令（模型只剩画布快照 + 最近操作，目标漂移）。
+  //    续作轮的原始请求位于 index 1（缓存布局不变式），新指令在尾部随 recent 窗口保留
+  let currentUserIndex = resumed ? 1 : 1 + historyMsgs.length;
+
+  // ★ 续作轮立即压缩一次：缓存常超压缩阈值，若不先压缩，首轮 truncateHistory 只保
+  //    system + 尾部 40 条，会把原始请求截掉。传 params.interval 强制满足压缩轮次条件
+  if (resumedMsgs) {
+    const params = getCompressParams(quirks.contextWindow);
+    messages = compressHistory(messages, deps.getApi() ?? initialApi, params.interval, params, currentUserIndex);
+  }
 
   const agentChatFn = deps.agentChatImpl ?? defaultAgentChat;
   const executeToolCallFn = deps.executeToolCallImpl ?? defaultExecuteToolCall;
@@ -283,11 +329,15 @@ export async function runAgentLoop(
   const deniedTools: string[] = [];
   let finalText = "";
   let iterations = 0;
-  let failed = false;         // ★ 失败标记（熔断/超限/空响应放弃）——pipeline 据此回滚快照
+  let failed = false;         // ★ 失败标记（熔断/空响应放弃）——pipeline 据此回滚快照
+  let incomplete = false;     // ★ 轮次耗尽的可续作暂停——画布保留、不回滚，对话入缓存供接力
   let approveAll = false; // ★ 信任会话标志，闭环内持久
   let consecutiveFailures = 0; // ★ 连续工具执行失败计数（熔断）
   let forceStop = false;      // ★ 熔断后禁止继续工具调用
-  let emptyResponseRetried = false; // ★ 空响应重试标志（仅重试 1 次）
+  let emptyResponseRetried = false; // ★ 非截断空响应重试标志（仅重试 1 次）
+  let truncationRetries = 0;        // ★ 截断类空响应已重试次数（独立预算 ≤TRUNCATION_RETRY_MAX，不随成功轮复位）
+  let parseFailRounds = 0;          // ★ 参数 JSON 解析失败的连续轮数（第 2 轮起注入指引）
+  let brokeOut = false;             // ★ 循环是否经 break 退出（区分自然耗尽——break 时 iterations 也可能 === MAX）
   let retryOverrides: AgentChatOverrides | undefined; // ★ 截断重试的参数覆盖（扩容预算 + 降思考档）
   let checkRounds = 0; // ★ 状态核对反馈计数
   // ★ 同一对象反复报「不存在」的计数（按对象名）。这类失败被归为「可修正」不进熔断，
@@ -313,7 +363,9 @@ export async function runAgentLoop(
     // ★ 智能压缩：定期将旧消息替换为画布状态摘要，防止长对话上下文爆炸
     //    （压缩阈值随 provider 上下文窗口缩放——V4 1M 下不频繁压缩）
     const compressParams = getCompressParams(quirks.contextWindow);
-    messages = compressHistory(messages, api, iterations, compressParams);
+    const compressed = compressHistory(messages, api, iterations, compressParams, currentUserIndex);
+    if (compressed !== messages) currentUserIndex = 1; // 压缩后当前请求固定位于 index 1
+    messages = compressed;
 
     // 截断历史（保留 system + 最近 N 条，保证 tool_calls/tool 配对完整）
     const truncated = truncateHistory(messages, getHistoryWindow(quirks.contextWindow));
@@ -343,6 +395,7 @@ export async function runAgentLoop(
     if (forceStop && response.toolCalls.length > 0) {
       finalText = `连续 ${MAX_CONSECUTIVE_FAILURES} 轮工具调用失败，构造中止。`;
       failed = true;
+      brokeOut = true;
       break;
     }
 
@@ -379,6 +432,7 @@ export async function runAgentLoop(
       }
 
       finalText = response.content;
+      brokeOut = true;
       break;
     }
 
@@ -393,11 +447,17 @@ export async function runAgentLoop(
         `completionTokens=${completionTokens ?? "?"}（推理 ${reasoningTokens ?? "?"}）, msgCount=${messages.length}`
       );
 
-      if (!emptyResponseRetried) {
-        emptyResponseRetried = true;
+      // ★ 截断与非截断空响应的重试预算分开计：截断易复发，给 TRUNCATION_RETRY_MAX 次；
+      //   普通空响应仍限 1 次（截断的重试机会不因用过普通重试而消失，反之亦然）
+      const isTruncation = response.finishReason === "length";
+      const usedRetries = isTruncation ? truncationRetries : (emptyResponseRetried ? 1 : 0);
+      const retryBudget = isTruncation ? TRUNCATION_RETRY_MAX : 1;
+      if (usedRetries < retryBudget) {
+        if (isTruncation) truncationRetries++;
+        else emptyResponseRetried = true;
         // ★ finish_reason="length" 是明确的截断信号，即使 streamsFinishReason=false 也应信任
         //   （该 flag 仅表示 provider 可能省略 finish_reason，不代表返回的值不可信）
-        const truncated = response.finishReason === "length";
+        const truncated = isTruncation;
         // ★ 截断的根因是输出预算被 thinking 吃光：重试必须改变条件（扩容 + 降思考档），
         //   否则同样的参数只会得到同样的截断（这是「空响应重试」此前失效的原因）
         retryOverrides = truncated
@@ -423,11 +483,19 @@ export async function runAgentLoop(
         : `（finish_reason=${response.finishReason || "无"}，模型未生成有效输出，请检查 Agent 模型是否支持 Function Calling）`;
       finalText = `AI 未返回有效响应${diag}`;
       failed = true;
+      brokeOut = true;
       break;
     }
 
     // 情况 3：有工具调用 → 分类处理
     const toolCalls = response.toolCalls;
+
+    // ★ 参数 JSON 解析失败计数（tool_calls 流式被截断的典型症状）：Zod 会归为「参数校验失败」
+    //    → recoverable → 永不熔断，可能无限轮转烧满迭代预算 → 单独跟踪（见下方熔断与指引）
+    let parseFailCount = 0;
+    for (const tc of toolCalls) {
+      try { JSON.parse(tc.function.arguments); } catch { parseFailCount++; }
+    }
 
     // ★ 过滤未知工具（AI hallucinate 的不存在的工具名）：
     //    直接返回错误给 AI，不执行、不走用户确认
@@ -438,7 +506,13 @@ export async function runAgentLoop(
     const dangerousCalls: ToolCallDelta[] = [];
 
     for (const tc of knownCalls) {
-      if (getToolSafety(tc.function.name) === "dangerous") {
+      // ★ eval_raw 自动降档：赋值形态 + 安全拦截 + 静态预检全通过 → 免确认
+      //   （3D 构造 Cube/Sphere/Surface 全是赋值形态；Delete / 非赋值 scripting 仍走确认）
+      const rawArgs = safeParseJSON(tc.function.arguments, tc.function.name);
+      if (tc.function.name === "eval_raw" &&
+          isEvalAutoSafe(tc.function.name, rawArgs, deps.appMode)) {
+        safeCalls.push(tc);
+      } else if (getToolSafety(tc.function.name) === "dangerous") {
         dangerousCalls.push(tc);
       } else {
         safeCalls.push(tc);
@@ -489,7 +563,7 @@ export async function runAgentLoop(
       } else {
         deps.onThinking?.("等待确认…");
         const { results, newApproveAll } = await handleDangerousTools(
-          api, dangerousCalls, deniedTools, approveAll, executeToolCallFn, deps.appMode
+          api, dangerousCalls, deniedTools, approveAll, executeToolCallFn, deps.appMode, deps.signal
         );
         approveAll = newApproveAll;
         dangerousResults = results;
@@ -538,9 +612,12 @@ export async function runAgentLoop(
 
     if (executed.length > 0) {
       const hard = executed.filter(s => !s.recoverable); // 真正的执行失败
-      if (hard.length === 0) {
+      if (hard.length === 0 && parseFailCount === 0) {
         // 本轮失败全是参数问题 → 模型可修正，清零熔断
         consecutiveFailures = 0;
+      } else if (hard.length === 0) {
+        // 仅参数 JSON 解析失败：不属于可自愈的参数错误（多为流式截断）→ 计入熔断防无限轮转
+        consecutiveFailures++;
       } else {
         consecutiveFailures = hard.every(s => s.failed) ? consecutiveFailures + 1 : 0;
       }
@@ -570,6 +647,22 @@ export async function runAgentLoop(
         }
       } catch { /* 非 JSON 结果忽略 */ }
     }
+
+    // ★ 解析失败指引：连续 ≥2 轮时点明根因（单轮调用过多 → 参数被截断）并给出出路
+    if (parseFailCount > 0) {
+      parseFailRounds++;
+      if (parseFailRounds >= 2) {
+        messages.push({
+          role: "user",
+          content: `参数 JSON 已连续 ${parseFailRounds} 轮解析失败（本轮 ${parseFailCount} 个调用）。` +
+            `常见原因是单轮工具调用过多导致参数被截断：请减少单轮调用个数、把复杂调用拆成多次，` +
+            `或直接用文字总结当前进度。`
+        });
+      }
+    } else {
+      parseFailRounds = 0;
+    }
+
     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
       finalText = `连续 ${MAX_CONSECUTIVE_FAILURES} 轮工具调用失败，构造中止。`;
       messages.push({
@@ -580,9 +673,18 @@ export async function runAgentLoop(
     }
   }
 
-  if (iterations >= MAX_AGENT_ITERATIONS) {
-    finalText = `已达到最大迭代次数 (${MAX_AGENT_ITERATIONS})，构造可能不完整。`;
-    failed = true;
+  // ★ 轮次自然耗尽 → 可续作暂停（不清空画布、不回滚）：finalText 三要素——已达上限 /
+  //   画布保留进度（对象数）/ 发后续指令即可继续。该文本随摘要进入对话历史，成为下一轮
+  //   模型可见的衔接上下文；本轮完整对话由 pipeline 缓存供续作注入。
+  //   仅熔断 / 空响应放弃才保持 failed=true（触发 pipeline 快照回滚）
+  if (!brokeOut && iterations >= MAX_AGENT_ITERATIONS) {
+    const objCount = deps.getApi()?.getAllObjectNames().length ?? 0;
+    finalText = `已达到单轮最大迭代次数（${MAX_AGENT_ITERATIONS} 轮），本轮到此暂停。` +
+      (objCount > 0
+        ? `画布已保留当前进度（现有 ${objCount} 个对象）`
+        : "画布暂无新增对象") +
+      `。请直接发送后续指令（如「继续完成剩余部分」「把 X 改成 Y」），我会基于当前画布继续调整。`;
+    incomplete = true;
   }
 
   // ★ 改造五：记录 ReAct 轨迹（成功/失败均记录，供训练数据闭环 + 失败回放）
@@ -590,7 +692,7 @@ export async function runAgentLoop(
   const record = buildTrajectoryRecord(userText, { finalText, messages, iterations, deniedTools });
   deps.persistTrajectory?.(record);
 
-  return { finalText, messages, iterations, deniedTools, failed };
+  return { finalText, messages, iterations, deniedTools, failed, incomplete };
 }
 
 // ──── 安全工具执行 ────
@@ -621,7 +723,7 @@ function executeDangerousTools(
     name: tc.function.name,
     arguments: safeParseJSON(tc.function.arguments, tc.function.name)
   }));
-  // ★ 同样批处理：危险工具（eval_raw/eval_sequence）常一次写多条命令，
+  // ★ 同样批处理：危险工具（eval_raw 非赋值形态）可能一次写多条命令，
   //   不批处理会让代数区逐行重建闪烁（见 repaintGate.ts 说明）
   return withRepaintBatch(api, requests.length, appMode, () =>
     requests.map(req => executeToolCallFn(api, req))
@@ -636,7 +738,8 @@ async function handleDangerousTools(
   deniedTools: string[],
   approveAll: boolean,
   executeToolCallFn: typeof defaultExecuteToolCall,
-  appMode?: "2d" | "3d"
+  appMode?: "2d" | "3d",
+  signal?: AbortSignal
 ): Promise<{ results: ToolResult[]; newApproveAll: boolean }> {
   const requests: ToolCallRequest[] = calls.map(tc => ({
     id: tc.id,
@@ -667,7 +770,22 @@ async function handleDangerousTools(
     };
   }
 
-  const decisions = await _confirmFn(confirmRequests);
+  // ★ 确认等待可被中止：用户在对话框打开期间点「清空/撤销」（abortCurrentRun）时，
+  //   运行锁不再悬挂到用户回答对话框为止
+  let onAbort: () => void = () => {};
+  const decisions = signal
+    ? await Promise.race([
+        _confirmFn(confirmRequests),
+        new Promise<never>((_, reject) => {
+          onAbort = () => reject(new DOMException("The operation was aborted.", "AbortError"));
+          if (signal.aborted) {
+            onAbort();
+            return;
+          }
+          signal.addEventListener("abort", onAbort, { once: true });
+        })
+      ]).finally(() => signal.removeEventListener("abort", onAbort))
+    : await _confirmFn(confirmRequests);
 
   // ★ 按 toolCallId 匹配决策，而非按下标索引——UI 返回的决策顺序/条数可能与请求不一致，
   //   按下标会导致 requests[i] 越界崩溃。
@@ -729,8 +847,6 @@ function describeToolCall(name: string, args: Record<string, unknown>): string {
   switch (name) {
     case "eval_raw":
       return `执行原始命令：${args.command}`;
-    case "eval_sequence":
-      return `创建序列：${args.name || "?"}`;
     case "delete_object":
       return `删除对象：${args.target}`;
     case "clear_canvas":
@@ -739,10 +855,6 @@ function describeToolCall(name: string, args: Record<string, unknown>): string {
       return `创建函数/表达式：${args.name} = ${String(args.expression).slice(0, 60)}`;
     case "create_parametric":
       return `创建参数曲线：${args.name}`;
-    case "create_point":
-      return `创建点：${args.name}(${args.x}, ${args.y})`;
-    case "create_slider":
-      return `创建滑块：${args.name} ${args.min}~${args.max}`;
     default:
       return `${name}(${JSON.stringify(args).slice(0, 100)})`;
   }
@@ -830,18 +942,21 @@ function getHistoryWindow(contextWindow?: number): number {
  * 从实际 GGB API 获取当前画布对象列表（而非从消息历史重建），准确且便宜。
  *
  * 压缩策略：
- *   - 保留 system prompt + 原始用户请求 → 不丢任务意图
+ *   - 保留 system prompt + 当前用户请求 → 不丢任务意图（★ 多轮对话时当前请求不在
+ *     messages[1]，必须由调用方传入下标，写死 messages[1] 会保留成历史消息）
  *   - 插入画布状态快照（对象名/类型/定义）→ 保留"当前有什么"
  *   - 保留最近 N 条消息 → 保留最新操作上下文
  *   - 丢弃中间冗余的工具调用/结果对
  *
- * 返回压缩后的消息数组（原地不修改原数组）。
+ * 返回压缩后的消息数组（原地不修改原数组；未触发压缩时原样返回同一引用）。
+ * 导出供单测。
  */
-function compressHistory(
+export function compressHistory(
   messages: AgentMessage[],
   api: GGBAppletApi,
   iterations: number,
-  params: CompressParams
+  params: CompressParams,
+  currentUserIndex = 1
 ): AgentMessage[] {
   if (messages.length < params.threshold) return messages;
   if (iterations % params.interval !== 0) return messages;
@@ -867,10 +982,10 @@ function compressHistory(
     summary = `[画布状态快照 — 第 ${iterations} 轮]\n${details.join("\n")}${suffix}`;
   }
 
-  // 保留：system(0)、原始用户消息(1 或 2)、摘要、最近 N 条
+  // 保留：system(0)、当前用户请求（currentUserIndex）、摘要、最近 N 条
   const system = messages[0];
-  const userRequest = messages[1]; // 含 userPrefix + userText + canvasStatus
-  const recentStart = Math.max(2, messages.length - params.keepRecent);
+  const userRequest = messages[currentUserIndex] ?? messages[1]; // 含 userPrefix + userText + canvasStatus
+  const recentStart = Math.max(currentUserIndex + 1, messages.length - params.keepRecent);
   const recent = messages.slice(recentStart);
 
   // 修复可能的消息配对断裂（recent 开头可能是孤立的 tool 消息）
@@ -885,43 +1000,63 @@ function compressHistory(
 }
 
 /**
- * 修复消息数组开头的配对问题：移除开头孤立的 tool 消息（缺少 assistant(tool_calls)），
- * 移除末尾悬空的 assistant(tool_calls)（缺少 tool 响应）。
+ * 删除配对断裂的消息，迭代到不动点：
+ *   - assistant(tool_calls) 有任一 tool_call 缺响应 → 整条删除
+ *   - tool 消息无 assistant 父消息（父被删或本就孤立）→ 删除
+ * ★ 必须迭代：单遍过滤在「同一 assistant 的部分 tool 响应缺失」时会泄漏——
+ *   assistant 因未全 resolved 被删，其已保留的 tool 响应变成孤儿，OpenAI 兼容端点直接 400
  */
-function fixPairingBoundary(msgs: AgentMessage[]): AgentMessage[] {
-  // 收集所有 assistant(tool_calls) 的 tool_call_id
-  const pending = new Set<string>();
-  const resolved = new Set<string>();
-  for (const m of msgs) {
-    if (m.role === "assistant" && m.tool_calls) {
-      for (const tc of m.tool_calls) pending.add(tc.id);
+function dropBrokenToolPairs(msgs: AgentMessage[]): AgentMessage[] {
+  let cur = msgs;
+  for (;;) {
+    const pending = new Set<string>();
+    const resolved = new Set<string>();
+    for (const m of cur) {
+      if (m.role === "assistant" && m.tool_calls) {
+        for (const tc of m.tool_calls) pending.add(tc.id);
+      }
+      if (m.role === "tool" && m.tool_call_id && pending.has(m.tool_call_id)) {
+        resolved.add(m.tool_call_id);
+      }
     }
-    if (m.role === "tool" && m.tool_call_id) {
-      resolved.add(m.tool_call_id);
-    }
+    let changed = false;
+    cur = cur.filter(m => {
+      if (m.role === "tool") {
+        const orphan = !m.tool_call_id || !pending.has(m.tool_call_id);
+        if (orphan) changed = true;
+        return !orphan;
+      }
+      if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+        const complete = m.tool_calls.every(tc => resolved.has(tc.id));
+        if (!complete) changed = true;
+        return complete;
+      }
+      return true;
+    });
+    if (!changed) return cur;
   }
+}
 
-  const clean = msgs.filter(m => {
-    // 孤立的 tool 消息（无对应 assistant tool_calls）
-    if (m.role === "tool" && m.tool_call_id && !pending.has(m.tool_call_id)) return false;
-    // 孤立的 assistant(tool_calls)（无 tool 响应）
-    if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
-      return m.tool_calls.every(tc => resolved.has(tc.id));
-    }
-    return true;
-  });
-
-  // 收缩尾部悬空的 assistant(tool_calls)
-  let end = clean.length - 1;
+/** 收缩尾部悬空的 assistant(tool_calls)（其 tool 响应缺失） */
+function shrinkDanglingTail(msgs: AgentMessage[]): AgentMessage[] {
+  let end = msgs.length - 1;
   while (end >= 0) {
-    const m = clean[end];
+    const m = msgs[end];
     if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
       end--;
     } else {
       break;
     }
   }
-  return clean.slice(0, end + 1);
+  return msgs.slice(0, end + 1);
+}
+
+/**
+ * 修复消息数组开头的配对问题：移除开头孤立的 tool 消息（缺少 assistant(tool_calls)），
+ * 移除末尾悬空的 assistant(tool_calls)（缺少 tool 响应）。
+ */
+function fixPairingBoundary(msgs: AgentMessage[]): AgentMessage[] {
+  return shrinkDanglingTail(dropBrokenToolPairs(msgs));
 }
 
 /** 截断对话历史，保留 system 消息 + 最近 N 条，同时保证 tool_calls/tool 消息配对完整 */
@@ -931,48 +1066,6 @@ export function truncateHistory(messages: AgentMessage[], windowSize: number): A
   const rest = messages.filter(m => m.role !== "system");
   const kept = rest.slice(-(windowSize - systemMsgs.length));
 
-  // 修复截断边界导致的消息配对问题：
-  //   1. 移除开头孤立的 tool 消息（其 assistant(tool_calls) 已被截掉）
-  //   2. 移除末尾孤立的 assistant(tool_calls)（其 tool 响应已被截掉）
-  //   3. 中间区域校验 tool_call_id 完整性
-  const fixBoundaries = (msgs: AgentMessage[]): AgentMessage[] => {
-    // —— 向前扫描：收集可用的 tool_call_id ——
-    const pending = new Map<string, number>(); // tool_call_id → assistant 在 msgs 中的 index
-    const resolved = new Set<string>();         // 已匹配到 tool 响应的 tool_call_id
-    for (let i = 0; i < msgs.length; i++) {
-      const m = msgs[i];
-      if (m.role === "assistant" && m.tool_calls) {
-        for (const tc of m.tool_calls) pending.set(tc.id, i);
-      }
-      if (m.role === "tool" && m.tool_call_id && pending.has(m.tool_call_id)) {
-        resolved.add(m.tool_call_id);
-      }
-    }
-
-    // —— 过滤 ——
-    const clean = msgs.filter(m => {
-      // 孤立的 tool 消息：无对应 assistant
-      if (m.role === "tool" && !pending.has(m.tool_call_id!)) return false;
-      // assistant 消息，其所有 tool_calls 都必须有响应
-      if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
-        return m.tool_calls.every(tc => resolved.has(tc.id));
-      }
-      return true;
-    });
-
-    // 过滤后可能仍有尾部残余：收缩到最后一个完整配对
-    // 找到最后一个合法的 tool 或非 tool_calls 的 assistant/user 消息作为结尾
-    let end = clean.length - 1;
-    while (end >= 0) {
-      const m = clean[end];
-      if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
-        end--; // 悬空的 assistant(tool_calls) → 去掉
-      } else {
-        break;
-      }
-    }
-    return clean.slice(0, end + 1);
-  };
-
-  return [...systemMsgs, ...fixBoundaries(kept)];
+  // 修复截断边界导致的消息配对断裂（迭代到不动点，杜绝孤儿 tool / 悬空 assistant）
+  return [...systemMsgs, ...shrinkDanglingTail(dropBrokenToolPairs(kept))];
 }

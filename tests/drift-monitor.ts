@@ -43,6 +43,8 @@ const VERSIONS_FILE = join(__dirname, "versions.json");
 const N_REPEAT = Number(process.env.DRIFT_N ?? "10");
 const DRIFT_CATEGORIES = new Set(["regression", "clarify", "physics"]);
 const SAMPLE_SIZE = Number(process.env.DRIFT_SAMPLE ?? "6");
+/** 定向复跑单个用例（如 DRIFT_CASE_ID=P-incline），用于失败根因定位 */
+const DRIFT_CASE_ID = process.env.DRIFT_CASE_ID ?? "";
 
 // ============ 类型定义 ============
 
@@ -117,6 +119,7 @@ export async function runDrift(config: AIConfig, opts: DriftRunOptions): Promise
   }>;
   const sample = allCases
     .filter((c: { category: string }) => DRIFT_CATEGORIES.has(c.category))
+    .filter((c: { id: string }) => !DRIFT_CASE_ID || c.id === DRIFT_CASE_ID)
     .slice(0, sampleSize);
 
   const cases: DriftCaseResult[] = [];
@@ -173,7 +176,13 @@ export async function runDrift(config: AIConfig, opts: DriftRunOptions): Promise
         run.layers.execution.total = results.length;
         run.layers.execution.failures = results
           .filter(r => !r.ok)
-          .map(r => `${r.command.op}: ${r.error ?? "?"}`);
+          .map(r => {
+            // ★ 记录命令原文（eval 取 cmd，其余取整个命令 JSON）——只有 op+error 无法定位漂移根因
+            const detail = r.command.op === "eval"
+              ? (r.command as { cmd?: string }).cmd ?? ""
+              : JSON.stringify(r.command);
+            return `${r.command.op}: ${r.error ?? "?"} | ${detail.slice(0, 160)}`;
+          });
 
         // L4 端到端
         run.pass = results.every(r => r.ok);

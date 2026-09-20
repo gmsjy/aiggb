@@ -89,9 +89,10 @@ export interface HallucinationEntry {
 export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
   // ─── 点 / 向量 ───
   {
-    name: "Point", signature: "Point(x [, y])", paramCount: [1, 2],
+    name: "Point", signature: "Point(object) | Point(x, y)", paramCount: [1, 2],
     modes: ["2d", "3d"], category: "point",
-    examples: ["A = Point({1,2})", "B = Point(a)"],
+    examples: ["A = Point({1,2})", "F = Point(f)（点落在函数 f 的曲线上，动画 F 即沿曲线扫描）", "B = Point(a)"],
+    note: "单参数 Point(曲线/多边形边) = 点在对象上：切线扫描（配合 Tangent）、单位圆→正弦等演示的地基原语",
   },
   {
     name: "Vector", signature: "Vector(A, B)", paramCount: [2, 2],
@@ -110,6 +111,13 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     aliases: ["中点", "两点中点"],
   },
   {
+    name: "Locus", signature: "Locus(P, Q)", paramCount: [2, 2],
+    modes: ["2d", "3d"], category: "point",
+    examples: ["loc = Locus(P, Q)（Q 为驱动点/路径，P 为随 Q 运动的从动点）"],
+    aliases: ["轨迹", "点的轨迹", "动点轨迹"],
+    note: "轨迹生成：先构造「驱动点在路径上运动 → 从动点」的依赖链，再对从动点取 Locus",
+  },
+  {
     name: "Center", signature: "Center(c)", paramCount: [1, 1],
     modes: ["2d", "3d"], category: "point",
     examples: ["O = Center(c)"],
@@ -120,6 +128,7 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     modes: ["2d", "3d"], category: "point",
     examples: ["P = Intersect(f, g)", "Q = Intersect(c, l, 2)"],
     aliases: ["交点", "求交", "相交点"],
+    note: "两对象有多个交点时用第 3 参选第 n 个（从 1 起）；省略则取第一个交点",
   },
   {
     name: "UnitVector", signature: "UnitVector(v)", paramCount: [1, 1],
@@ -141,7 +150,7 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     overloads: [
       { args: ["Point", "Point"], semantic: "两点之间的线段" },
     ],
-    note: "两端点必须是已声明的 Point，禁止匿名坐标 Segment((x1,y1),(x2,y2))",
+    note: "两端点必须是已声明的 Point，禁止匿名坐标 Segment((x1,y1),(x2,y2))；且端点名不能是小写开头——GGB 会把小写名的坐标字面量（如 contact = (r*t, 0)）隐式推断为 Vector，Segment 引用即失败。坐标点一律用大写开头名字",
     aliases: ["线段", "两点连线（有限长）"],
   },
   {
@@ -803,6 +812,7 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     name: "Angle", signature: "Angle(line, plane) | Angle(P1, vertex, P2)", paramCount: [2, 3],
     modes: ["2d", "3d"], category: "metric",
     examples: ["a = Angle(l, plane)", "a = Angle(P1, O, P2)"],
+    note: "三点形态 P1/vertex/P2 必须全部是【已声明的 Point】（先创建底角顶点与两条边的端点，再取 Angle）——引用滑块 t 时写大写 T 大小写不符必失败；斜面倾角：O=(0,0)、Hx=(4,0) 水平参考点、Ps=斜面上点，则 ang = Angle(Hx, O, Ps)",
   },
 
   // ─── 3D 视图 ───

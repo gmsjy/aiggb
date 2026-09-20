@@ -90,25 +90,80 @@ export const CreateParametricArgs = z.object({
 export const PhysicsConstantsArgs = z.object({
   names: z.array(z.string().min(1).max(10)).min(1).max(8),
 });
+
+// ── 几何动词层（safe；rotate 的 ° 单位/按模式必填参数是真智能，薄包装单命令留给免确认 eval_raw） ──
+export const TransformObjectArgs = z.object({
+  name: Identifier,
+  mode: z.enum(["reflect", "rotate", "translate", "dilate"]),
+  target: Identifier,
+  /** reflect：对称轴（Line 对象） */
+  line: Identifier.optional(),
+  /** rotate/dilate：中心点 */
+  center: Identifier.optional(),
+  /** rotate：角度（数值按度处理；字符串表达式需自带单位语义） */
+  angle: ExprLike.optional(),
+  /** translate：平移矢量（Vector 对象名） */
+  vector: Identifier.optional(),
+  /** dilate：缩放因子 */
+  factor: ExprLike.optional(),
+});
+export const GetCanvasInfoArgs = z.object({});
+export const FitViewToArgs = z.object({
+  /** 要适配的对象名；缺省 = 全部对象 */
+  targets: z.array(Identifier).min(1).max(20).optional(),
+  /** 视窗外边距比例 0~0.5，缺省 0.1 */
+  padding: NumLike.optional(),
+});
+
+// ── 物理演示层（矢量随动 / 动态读数 / 真弹簧）──
+export const AttachVectorArgs = z.object({
+  name: Identifier,
+  /** 锚点（动点，必须已存在的 Point） */
+  anchor: Identifier,
+  /** 矢量 x 分量表达式（相对锚点，如 "v0*cos(theta)"） */
+  exprX: z.string().min(1).max(120),
+  /** 矢量 y 分量表达式 */
+  exprY: z.string().min(1).max(120),
+  /** 缩放系数；缺省按视窗宽度 15% 自动归一化（推荐省略） */
+  scale: NumLike.optional(),
+  color: ColorHex.optional(),
+  label: z.string().max(20).optional(),
+});
+export const CreateReadoutArgs = z.object({
+  name: Identifier,
+  /** 读数条定位点（已存在的 Point） */
+  at: Identifier,
+  items: z.array(z.object({
+    label: z.string().min(1).max(20),
+    expr: z.string().min(1).max(60),
+    unit: z.string().max(8).optional(),
+    /** 小数位数 0~4，缺省 1 */
+    decimals: IntLike.optional(),
+  })).min(1).max(6),
+});
+export const CreateSpringArgs = z.object({
+  name: Identifier,
+  from: Identifier,
+  to: Identifier,
+  /** 弹簧圈数 4~16，缺省 8 */
+  coils: IntLike.optional(),
+  /** 锯齿振幅，缺省 0.3 */
+  amp: NumLike.optional(),
+  thickness: IntLike.optional(),
+});
+// ── 分形（L-system 数值生成，PolyLine 渲染）──
+export const CreateFractalArgs = z.object({
+  name: Identifier,
+  kind: z.enum(["koch", "snowflake", "sierpinski", "dragon"]),
+  /** 迭代深度 1~6（超限按各 kind 的段数护栏截断）；固定数值，不支持滑块绑定 */
+  depth: IntLike,
+  color: ColorHex.optional(),
+  thickness: IntLike.optional(),
+});
 export const CreateTraceArgs = z.object({
   target: Identifier,
   mode: z.enum(["trail", "stroboscopic"]),
 });
-export const SetUnitAxesArgs = z.object({
-  xUnit: z.string().max(8),
-  yUnit: z.string().max(8),
-  xLabel: z.string().max(20).optional(),
-  yLabel: z.string().max(20).optional(),
-});
-export const EvalSequenceArgs = z.object({
-  name: Identifier,
-  expr: z.string().min(1).max(300),
-  var: z.string().min(1).max(10).regex(/^[a-z][a-z0-9_]*$/i, "循环变量需为合法标识符"),
-  start: ExprLike,
-  end: ExprLike,
-  step: ExprLike,
-});
-
 // ── Modification ──
 // ★ 字段容错与 JSON 流水线的 style op（schema.ts）保持一致：NumLike/BoolLike 接受
 //   "0.5"/"true" 这类字符串形态，避免同一参数在一条路径通过、另一条路径被 Zod 拒绝
@@ -284,15 +339,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     type: "function",
     function: {
-      name: "create_point",
-      description: "在画布上创建一个点。x/y/z 可以是数值或表达式字符串（如 \"v0*cos(theta)*t\"）。2D 时只填 x,y；3D 时可填 z。多个点请用 create_points。",
-      parameters: { type: "object", ...toJsonSchema(CreatePointArgs) },
-    },
-    safety: "safe",
-  },
-  {
-    type: "function",
-    function: {
       name: "create_segment",
       description: "连接两个已存在的点，创建一条线段。",
       parameters: { type: "object", ...toJsonSchema(CreateSegmentArgs) },
@@ -323,15 +369,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       name: "create_sliders",
       description: "★ 批量创建多个滑块（推荐）。一次调用创建 1~6 个滑块，减少 API 往返。当需要多个参数（如初速、角度、时间）时优先用此工具。用法：sliders=[{name,min,max,step,value,unit?,label?},...]。",
       parameters: { type: "object", ...toJsonSchema(CreateSlidersArgs) },
-    },
-    safety: "safe",
-  },
-  {
-    type: "function",
-    function: {
-      name: "create_slider",
-      description: "创建一个数值滑块。min/max/value/step 可以是数值或表达式。用于角度、速度、时间等可调参数。多个滑块请用 create_sliders。",
-      parameters: { type: "object", ...toJsonSchema(CreateSliderArgs) },
     },
     safety: "safe",
   },
@@ -371,6 +408,52 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     safety: "safe",
   },
+  // ═══ 几何动词层（safe；薄包装类单命令构造已由免确认 eval_raw 承接，见 KB 惯用法） ═══
+  {
+    type: "function",
+    function: {
+      name: "transform_object",
+      description: "几何变换。mode=reflect（line=对称轴对象）/ rotate（center=中心，angle=角度数值按度）/ translate（vector=平移矢量对象）/ dilate（center=中心，factor=缩放因子）。target 是被变换对象。",
+      parameters: { type: "object", ...toJsonSchema(TransformObjectArgs) },
+    },
+    safety: "safe",
+  },
+  {
+    type: "function",
+    function: {
+      name: "attach_vector",
+      description: "★ 矢量随动（物理演示核心）：在动点 anchor 上附加矢量箭头（速度/力/加速度），exprX/exprY 是相对 anchor 的分量表达式，端点随动画实时跟随。scale 缺省按视窗宽度自动归一化（推荐省略，杜绝出框）。",
+      parameters: { type: "object", ...toJsonSchema(AttachVectorArgs) },
+    },
+    safety: "safe",
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_readout",
+      description: "★ 动态读数条：在定位点 at 处生成随动画实时刷新的数值文本（如 t = 1.2 s | v = 8.3 m/s）。items 每项 {label, expr, unit?, decimals?}。",
+      parameters: { type: "object", ...toJsonSchema(CreateReadoutArgs) },
+    },
+    safety: "safe",
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_spring",
+      description: "创建真弹簧（锯齿 PolyLine）：端点 from/to 移动时弹簧实时伸缩弯曲。替代把弹簧画成 Segment 的降级做法。",
+      parameters: { type: "object", ...toJsonSchema(CreateSpringArgs) },
+    },
+    safety: "safe",
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_fractal",
+      description: "★ 分形演示（L-system 数值生成）：kind=koch（科赫曲线）/ snowflake（科赫雪花，闭合）/ sierpinski（箭头曲线）/ dragon（龙曲线）。depth 1~6 固定数值（不支持滑块绑定）；如需「逐级生长」可按 depth 1,2,3 多次创建并切换可见性。",
+      parameters: { type: "object", ...toJsonSchema(CreateFractalArgs) },
+    },
+    safety: "safe",
+  },
 
   // ═══ 物理专用（safe） ═══
   {
@@ -388,15 +471,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
       name: "create_trace",
       description: "为对象添加运动轨迹。mode=trail（拖尾轨迹）或 stroboscopic（频闪采样）。",
       parameters: { type: "object", ...toJsonSchema(CreateTraceArgs) },
-    },
-    safety: "safe",
-  },
-  {
-    type: "function",
-    function: {
-      name: "set_unit_axes",
-      description: "设置带单位的坐标轴标签，如 xUnit=\"m\" yUnit=\"s\"。",
-      parameters: { type: "object", ...toJsonSchema(SetUnitAxesArgs) },
     },
     safety: "safe",
   },
@@ -469,26 +543,35 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     },
     safety: "safe",
   },
+  {
+    type: "function",
+    function: {
+      name: "get_canvas_info",
+      description: "读取当前视窗范围 + 全部对象的包围盒并集 + 完全在视窗外的对象清单。完成构造后先调用它自查是否出框，再决定是否 fit_view_to。",
+      parameters: { type: "object", ...toJsonSchema(GetCanvasInfoArgs) },
+    },
+    safety: "safe",
+  },
+  {
+    type: "function",
+    function: {
+      name: "fit_view_to",
+      description: "按对象包围盒自适应视窗（含画布宽高比校正），解决出框/过度留白。targets 缺省 = 全部对象；padding 为边距比例（0~0.5，缺省 0.1）。",
+      parameters: { type: "object", ...toJsonSchema(FitViewToArgs) },
+    },
+    safety: "safe",
+  },
 
   // ═══ 高级 ═══
   {
     type: "function",
     function: {
-      name: "eval_sequence",
-      description:
-        "生成序列对象列表。用于批量创建对象网格（如电场箭头、采样点）。" +
-        "expr 是含循环变量的表达式，var 是循环变量名。⚠ 可能产生大量对象。" +
-        "★ 最终形态为 name = Sequence(expr, var, start, end, step)：var 必须是单个 ASCII 字母（i/j/k/t/n）；" +
-        "start/end/step 各自是单个数值（不可写成 \"0,1,0.1\"）；expr 内所有括号必须闭合，嵌套网格请在 expr 里再写一个 Sequence 并用不同字母做内层变量。",
-      parameters: { type: "object", ...toJsonSchema(EvalSequenceArgs) },
-    },
-    safety: "dangerous",
-  },
-  {
-    type: "function",
-    function: {
       name: "eval_raw",
-      description: "执行原始 GeoGebra 命令。仅限无法用专用工具表达的复杂操作：3D 几何体（Cube/Sphere/Tetrahedron）、IntersectPath 截面、Surface 曲面、SolveODE 等。⚠ 需要用户确认。",
+      description:
+        "执行原始 GeoGebra 命令。★ 赋值形态（name = ...）经静态预检后免确认，适合：3D 几何体（c = Cube(A,B,C)）、" +
+        "截面（s = IntersectPath(p, c)）、曲面 Surface、点在曲线上（P = Point(f)）、切线（t = Tangent(P, f)）、" +
+        "序列（pts = Sequence(expr, i, 1, 5, 1)：var 必须单个 ASCII 字母、start/end/step 各为单个数值、括号逐层闭合）。" +
+        "⚠ 非赋值命令（SetColor/ZoomIn 等 scripting）与 Delete 需要用户确认。",
       parameters: { type: "object", ...toJsonSchema(EvalRawArgs) },
     },
     safety: "dangerous",
@@ -498,20 +581,24 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
 // ──── 工具名 → Zod schema 映射（供 toolExecutor 校验） ────
 
 export const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
-  create_point: CreatePointArgs,
   create_points: CreatePointsArgs,
   create_segment: CreateSegmentArgs,
   create_circle: CreateCircleArgs,
   create_polygon: CreatePolygonArgs,
-  create_slider: CreateSliderArgs,
   create_sliders: CreateSlidersArgs,
   create_vector: CreateVectorArgs,
   create_text: CreateTextArgs,
   create_function: CreateFunctionArgs,
   create_parametric: CreateParametricArgs,
+  transform_object: TransformObjectArgs,
+  attach_vector: AttachVectorArgs,
+  create_readout: CreateReadoutArgs,
+  create_spring: CreateSpringArgs,
+  create_fractal: CreateFractalArgs,
+  get_canvas_info: GetCanvasInfoArgs,
+  fit_view_to: FitViewToArgs,
   physics_constants: PhysicsConstantsArgs,
   create_trace: CreateTraceArgs,
-  set_unit_axes: SetUnitAxesArgs,
   set_style: SetStyleArgs,
   set_animation: SetAnimationArgs,
   set_view: SetViewArgs,
@@ -519,7 +606,6 @@ export const TOOL_SCHEMAS: Record<string, z.ZodTypeAny> = {
   clear_canvas: ClearCanvasArgs,
   get_object_info: GetObjectInfoArgs,
   list_objects: ListObjectsArgs,
-  eval_sequence: EvalSequenceArgs,
   eval_raw: EvalRawArgs,
 };
 
@@ -549,20 +635,23 @@ export type ToolCategory =
  */
 export const TOOL_CATEGORIES: Record<string, ToolCategory> = {
   // create
-  create_points: "create", create_point: "create", create_segment: "create",
+  create_points: "create", create_segment: "create",
   create_circle: "create", create_polygon: "create", create_sliders: "create",
-  create_slider: "create", create_vector: "create", create_text: "create",
+  create_vector: "create", create_text: "create",
   create_function: "create", create_parametric: "create",
+  transform_object: "create",
+  attach_vector: "physics", create_spring: "physics",
+  create_readout: "create", create_fractal: "create",
   // physics
-  physics_constants: "physics", create_trace: "physics", set_unit_axes: "physics",
+  physics_constants: "physics", create_trace: "physics",
   // modify
-  set_style: "modify", set_animation: "modify", set_view: "modify",
+  set_style: "modify", set_animation: "modify", set_view: "modify", fit_view_to: "modify",
   // delete
   delete_object: "delete", clear_canvas: "delete",
   // query
-  get_object_info: "query", list_objects: "query",
+  get_object_info: "query", list_objects: "query", get_canvas_info: "query",
   // advanced
-  eval_sequence: "advanced", eval_raw: "advanced",
+  eval_raw: "advanced",
 };
 
 const CATEGORY_LABELS: Record<ToolCategory, string> = {

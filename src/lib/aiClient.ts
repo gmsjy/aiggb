@@ -226,8 +226,9 @@ export interface AgentResponse {
   finishReason: string | null;
   /** V4 thinking 模式的推理过程（多轮回传用） */
   reasoningContent?: string;
-  /** 本次调用 token 用量（provider 返回 usage 时）。reasoning = 其中的思考 token 数 */
-  usage?: { prompt: number; completion: number; reasoning?: number };
+  /** 本次调用 token 用量（provider 返回 usage 时）。reasoning = 其中的思考 token 数；
+   *  cacheHit = 命中服务端前缀缓存（KV Cache）的输入 token 数（DeepSeek 提供） */
+  usage?: { prompt: number; completion: number; reasoning?: number; cacheHit?: number };
 }
 
 // ──── 错误类型 ────
@@ -277,6 +278,14 @@ interface ChatCompletionResponse {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
+    /** KV Cache：本次输入中命中服务端前缀缓存的 token 数 */
+    prompt_cache_hit_tokens?: number;
+    /** KV Cache：本次输入中未命中的 token 数 */
+    prompt_cache_miss_tokens?: number;
+    /** prompt 明细（DeepSeek：cached_tokens 与 prompt_cache_hit_tokens 同值；OpenAI 风格字段） */
+    prompt_tokens_details?: { cached_tokens?: number } | null;
+    /** completion 明细（官方 schema：reasoning_tokens = 思维链 token 数） */
+    completion_tokens_details?: { reasoning_tokens?: number } | null;
   };
 }
 
@@ -399,7 +408,7 @@ export async function chat(
   messages: ChatMessage[],
   signal?: AbortSignal,
   modelOverride?: string,
-  onUsage?: (usage: { prompt: number; completion: number }) => void
+  onUsage?: (usage: { prompt: number; completion: number; reasoning?: number; cacheHit?: number }) => void
 ): Promise<AIResponseT> {
   const caps = getProviderCapabilities(config);
   const body: Record<string, unknown> = {
@@ -475,11 +484,13 @@ export async function chat(
     );
   }
 
-  // ★ token 用量回传（AB 测试统计 thinking 成本）
+  // ★ token 用量回传（AB 测试统计 thinking 成本；reasoning/cacheHit 见 AgentResponse.usage）
   if (onUsage && data.usage) {
     onUsage({
       prompt: data.usage.prompt_tokens ?? 0,
-      completion: data.usage.completion_tokens ?? 0
+      completion: data.usage.completion_tokens ?? 0,
+      reasoning: data.usage.completion_tokens_details?.reasoning_tokens,
+      cacheHit: data.usage.prompt_cache_hit_tokens ?? data.usage.prompt_tokens_details?.cached_tokens
     });
   }
   return result.data;
@@ -509,6 +520,11 @@ interface StreamChunk {
     total_tokens?: number;
     /** 思考 token 明细（部分 provider 提供，如 DeepSeek：reasoning_tokens） */
     completion_tokens_details?: { reasoning_tokens?: number } | null;
+    /** KV Cache 命中/未命中明细（DeepSeek 提供） */
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
+    /** prompt 明细（cached_tokens 兜底字段，OpenAI 风格） */
+    prompt_tokens_details?: { cached_tokens?: number } | null;
   } | null;
 }
 
@@ -579,7 +595,15 @@ export async function agentChat(
     if (onContent && content) onContent(content);
     const reasoning = msg?.reasoning_content ?? undefined;
     if (onReasoning && reasoning) onReasoning(reasoning);
-    return { content, toolCalls, finishReason, reasoningContent: reasoning };
+    const fallbackUsage = data.usage
+      ? {
+          prompt: data.usage.prompt_tokens ?? 0,
+          completion: data.usage.completion_tokens ?? 0,
+          reasoning: data.usage.completion_tokens_details?.reasoning_tokens,
+          cacheHit: data.usage.prompt_cache_hit_tokens ?? data.usage.prompt_tokens_details?.cached_tokens
+        }
+      : undefined;
+    return { content, toolCalls, finishReason, reasoningContent: reasoning, usage: fallbackUsage };
   }
 
   if (!resp.body) {
@@ -594,7 +618,7 @@ export async function agentChat(
   let reasoningContent = "";
   const toolCalls: ToolCallDelta[] = [];
   let finishReason: string | null = null;
-  let usage: { prompt: number; completion: number; reasoning?: number } | undefined;
+  let usage: { prompt: number; completion: number; reasoning?: number; cacheHit?: number } | undefined;
 
   const handleLine = (line: string): void => {
     const trimmed = line.trim();
@@ -615,11 +639,13 @@ export async function agentChat(
 
     // ★ 捕获流式 usage（include_usage 时在最后一块返回）
     //   completion_tokens_details.reasoning_tokens = 思考占用的输出 token（与正文共享预算）
+    //   prompt_cache_hit_tokens / prompt_tokens_details.cached_tokens = KV Cache 命中输入 token
     if (chunk.usage) {
       usage = {
         prompt: chunk.usage.prompt_tokens ?? 0,
         completion: chunk.usage.completion_tokens ?? 0,
-        reasoning: chunk.usage.completion_tokens_details?.reasoning_tokens
+        reasoning: chunk.usage.completion_tokens_details?.reasoning_tokens,
+        cacheHit: chunk.usage.prompt_cache_hit_tokens ?? chunk.usage.prompt_tokens_details?.cached_tokens
       };
     }
 
@@ -701,8 +727,8 @@ export async function chatRaw(
   maxTokens?: number,
   /** 约束 AI 输出为 JSON（用于 Phase 1 精炼和满足度评估，降低非 JSON 输出率） */
   jsonMode?: boolean,
-  /** 可选：回传本次调用 token 用量（统计用） */
-  onUsage?: (usage: { prompt: number; completion: number }) => void
+  /** 可选：回传本次调用 token 用量（统计用；reasoning = 思维链 token，cacheHit = KV Cache 命中） */
+  onUsage?: (usage: { prompt: number; completion: number; reasoning?: number; cacheHit?: number }) => void
 ): Promise<string> {
   const body: Record<string, unknown> = {
     model: modelOverride ?? config.model,
@@ -729,7 +755,9 @@ export async function chatRaw(
   if (onUsage && data.usage) {
     onUsage({
       prompt: data.usage.prompt_tokens ?? 0,
-      completion: data.usage.completion_tokens ?? 0
+      completion: data.usage.completion_tokens ?? 0,
+      reasoning: data.usage.completion_tokens_details?.reasoning_tokens,
+      cacheHit: data.usage.prompt_cache_hit_tokens ?? data.usage.prompt_tokens_details?.cached_tokens
     });
   }
   return data.choices?.[0]?.message?.content ?? "";

@@ -20,6 +20,12 @@
 const params = new URLSearchParams(location.search);
 const commandsJson = params.get("cmds");
 const appName = params.get("app") === "3d" ? "3d" : "classic";
+// ★ 前置画布种子（modify 类用例依赖已有对象）：eval 命令数组，在 fixture 命令之前执行、不计入 DONE 统计
+const seedJson = params.get("seed");
+let seedCommands = [];
+if (seedJson) {
+  try { seedCommands = JSON.parse(decodeURIComponent(seedJson)); } catch (e) { console.error("seed JSON 无效", e); }
+}
 if (!commandsJson) {
   document.body.innerHTML = "<h2>No commands provided. Use ?cmds=... query param.</h2>";
 } else {
@@ -173,6 +179,8 @@ if (!commandsJson) {
 
     let ok = 0, fail = 0;
     const failedIdx = [];
+    // ★ 先执行种子命令（前置画布状态），不计入统计
+    for (const sc of seedCommands) api.evalCommand(sc);
     for (let i = 0; i < commands.length; i++) {
       if (executeOne(api, commands[i])) ok++; else { fail++; failedIdx.push(i); }
     }

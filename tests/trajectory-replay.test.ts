@@ -34,13 +34,13 @@ function makeRec(): TrajectoryRecord {
     messages: [
       { role: "user", content: "画圆" },
       // tc1: 原始成功（O 点）
-      { role: "assistant", content: null, tool_calls: [toolCallMsg("tc1", "create_point", { name: "O", x: 0, y: 0 })] },
+      { role: "assistant", content: null, tool_calls: [toolCallMsg("tc1", "create_points", { points: [{ name: "O", x: 0, y: 0 }] })] },
       toolResp("tc1", true),
       // tc2: 原始失败（引用未定义 X）→ 现在也应失败
-      { role: "assistant", content: null, tool_calls: [toolCallMsg("tc2", "create_point", { name: "A", x: "MissingX", y: "MissingY" })] },
+      { role: "assistant", content: null, tool_calls: [toolCallMsg("tc2", "create_points", { points: [{ name: "A", x: "MissingX", y: "MissingY" }] })] },
       toolResp("tc2", false, "创建点 A 失败"),
       // tc3: 原始失败（当时真实 GGB 崩）→ 现在 MockGGB 能成功
-      { role: "assistant", content: null, tool_calls: [toolCallMsg("tc3", "create_point", { name: "P", x: 0, y: 0 })] },
+      { role: "assistant", content: null, tool_calls: [toolCallMsg("tc3", "create_points", { points: [{ name: "P", x: 0, y: 0 }] })] },
       toolResp("tc3", false, "GGB 执行超时"),
     ],
   };

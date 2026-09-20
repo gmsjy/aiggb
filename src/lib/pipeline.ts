@@ -16,7 +16,8 @@ import {
   resolveModel,
   type AIConfig,
   type ChatMessage,
-  type ContentPart
+  type ContentPart,
+  type AgentMessage
 } from "./aiClient";
 import { collectFailures, executeCommands, resetTmpIds, getRichSnapshot, exportPNG, type ExecResult } from "./ggbBridge";
 import {
@@ -129,7 +130,7 @@ export interface PipelineDeps {
   /** 解析后的视觉模型名（用于题目图片识别） */
   visionModel?: string;
   /** 每次 AI 调用的 token 用量回传（累计到 UI 统计） */
-  onTokenUsage?: (usage: { prompt: number; completion: number }) => void;
+  onTokenUsage?: (usage: { prompt: number; completion: number; reasoning?: number; cacheHit?: number }) => void;
   /** Agent 循环实现注入（单测 mock 用） */
   runAgentLoopImpl?: typeof runAgentLoop;
 }
@@ -795,6 +796,43 @@ export async function runAgentPipeline(
   return runAgentRound(userText, deps, cb);
 }
 
+// ──── 轮次耗尽续作缓存（模块级会话内存） ────
+// 「画布保留 + 后续指令接力」的上下文侧：暂停轮的完整对话缓存下来，下一轮注入
+// resumeMessages 续作（原始请求/已尝试工具序列/失败信息全保留，进入循环前压缩）。
+// 清空画布/撤销未主动清理时靠 TTL + 画布指纹校验兜底失效。
+
+interface AgentResumeCache {
+  /** 暂停轮的完整对话（首元素为该轮 system prompt，恢复时被新 prompt 替换） */
+  messages: AgentMessage[];
+  /** 暂停时画布对象数（恢复时校验画布未被清空/撤销） */
+  canvasObjCount: number;
+  ts: number;
+}
+
+const RESUME_CACHE_TTL_MS = 10 * 60_000;
+let agentResumeCache: AgentResumeCache | null = null;
+
+/** 清空续作缓存（清空画布/撤销/切模式时可调用；不调也有 TTL + 画布校验兜底） */
+export function clearAgentResumeCache(): void {
+  agentResumeCache = null;
+}
+
+/** 读取续作缓存（校验 TTL 与画布指纹；读取不清空——完成/失败轮才清除） */
+function peekAgentResumeCache(api: GGBAppletApi | null): AgentMessage[] | undefined {
+  const c = agentResumeCache;
+  if (!c) return undefined;
+  if (Date.now() - c.ts > RESUME_CACHE_TTL_MS) {
+    agentResumeCache = null;
+    return undefined;
+  }
+  const currentCount = api ? api.getAllObjectNames().length : 0;
+  if (c.canvasObjCount > 0 && currentCount === 0) {
+    agentResumeCache = null; // 暂停时有对象、现在画布空了 → 被清空/撤销，缓存上下文失真
+    return undefined;
+  }
+  return c.messages;
+}
+
 /** runAgentRound 可选参数（仅带图轮使用） */
 interface AgentRoundOpts {
   stateCheck?: import("./agentLoop").StateCheckSpec;
@@ -824,8 +862,17 @@ async function runAgentRound(
 
   // ★ 高风险操作快照：整轮 agent 模式开始前保存 base64 快照。
   //    Agent 逐步执行可能部分成功部分失败 → 画布停在"半成品"。
-  //    失败时（熔断/超限/空响应放弃/异常）恢复到本轮开始前，给用户一个干净起点。
+  //    失败时（熔断/空响应放弃/异常）恢复到本轮开始前，给用户一个干净起点。
+  //    （轮次耗尽为 incomplete：画布保留、不回滚，见 AgentLoopResult.incomplete）
   const agentSnapshot = await takeSnapshot(api);
+
+  // ★ 续作缓存：上一轮轮次耗尽暂停时缓存了完整对话 → 本轮注入接力（尽可能利用缓存，
+  //    原始请求与已尝试的工具序列不丢；peek 内部做 TTL + 画布指纹校验）
+  const resumeMessages = peekAgentResumeCache(api);
+
+  // ★ 历史陷阱注入：让 agent 回路吃到「失败轨迹 → 陷阱 → 提示」闭环（此前只有两阶段修复回路有）
+  const traps = await refreshTraps().catch(() => [] as Awaited<ReturnType<typeof refreshTraps>>);
+  const trapPrompt = buildTrapPrompt(traps);
 
   let result: AgentLoopResult | null = null;
   // ★ 是否已回滚：true 时本轮命令未生效，不写入 constructionLog（否则 undo 重放出错）
@@ -852,9 +899,14 @@ async function runAgentRound(
       onTokenUsage: u => deps.onTokenUsage?.(u),
       // ★ 状态核对（仅带图轮注入）
       stateCheck: opts?.stateCheck,
+      // ★ 轮次耗尽续作：注入上一轮暂停时的对话缓存
+      resumeMessages,
+      // ★ 历史高频陷阱提示（追加到 system prompt 尾部）
+      trapPrompt,
     });
 
-    // ★ 失败回滚：AgentLoopResult.failed（熔断/超限/空响应放弃）→ 恢复本轮开始前快照
+    // ★ 失败回滚：AgentLoopResult.failed（熔断/空响应放弃）→ 恢复本轮开始前快照
+    //    （轮次耗尽 = incomplete，画布保留不回滚，对话入续作缓存）
     if (result.failed && !deps.signal.aborted && agentSnapshot !== null) {
       const restored = await restoreSnapshot(deps.getApi() ?? api, agentSnapshot);
       if (restored) {
@@ -862,8 +914,23 @@ async function runAgentRound(
         console.log(`[AiGGB:DIAG] ${getTraceId()} agent 失败回滚：恢复本轮开始前快照`);
       }
     }
+
+    // ★ 续作缓存维护：轮次耗尽 → 缓存完整对话供下轮接力；完成/失败 → 失效
+    if (result.incomplete) {
+      const apiNow = deps.getApi();
+      agentResumeCache = {
+        messages: result.messages,
+        canvasObjCount: apiNow ? apiNow.getAllObjectNames().length : 0,
+        ts: Date.now(),
+      };
+    } else {
+      agentResumeCache = null;
+    }
   } catch (err) {
     if (deps.signal.aborted) throw err;
+
+    // 非中止异常 → 本轮回滚，续作缓存一并失效（旧上下文已与回滚后的画布不符）
+    agentResumeCache = null;
 
     // ★ 异常时也尝试回滚（若有部分执行），避免半成品画布
     if (agentSnapshot !== null && !deps.signal.aborted) {
@@ -901,6 +968,8 @@ async function runAgentRound(
   //      此时提示"已回滚"会误导用户（配合 buildAgentSummary 的轮数/次数区分）
   const summary = rollbackHappened && countToolCalls(result.messages) > 0
     ? `${buildAgentSummary(result)}\n\n⚠ 本轮构造失败，画布已回滚到开始前状态。`
+    : result.incomplete
+    ? `${buildAgentSummary(result)}\n\n⏸ 已达单轮最大轮次，画布已保留当前进度——发送后续指令（如「继续完成剩余部分」）即可继续调整。`
     : buildAgentSummary(result);
 
   // ★ 从工具调用历史提取可重放的 eval 命令（供 undo 回放 + constructionLog 兜底）
@@ -959,11 +1028,27 @@ async function runAgentRound(
 
   // ★ 满足度评估（Phase 3.1）：审查画布。已回滚则跳过（画布非本轮产物）
   if (rollbackHappened) return;
+  let evalIssues: string[] = [];
   try {
-    await evaluateAgentResult(result, deps, opts?.evalBasis);
+    evalIssues = await evaluateAgentResult(result, deps, opts?.evalBasis);
   } catch (err) {
     if (deps.signal.aborted) throw err;
     console.warn("[Pipeline] agent 满足度评估跳过", err);
+  }
+
+  // ★ 未完成项入续作缓存：incomplete 轮的评估 issues 追加为缓存尾部 user 消息——
+  //   续作轮压缩后仍落在 recent 窗口内，模型第一轮就知道剩余工作，省去重新探索
+  if (result.incomplete && agentResumeCache && evalIssues.length > 0) {
+    agentResumeCache = {
+      ...agentResumeCache,
+      messages: [
+        ...agentResumeCache.messages,
+        {
+          role: "user",
+          content: `[上一轮未完成项]\n${evalIssues.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n（用户发送续作指令时，请针对以上问题继续调整）`,
+        },
+      ],
+    };
   }
 }
 
@@ -993,10 +1078,11 @@ function buildAgentSummary(result: AgentLoopResult): string {
   return parts.join("\n");
 }
 
-/** 对 agent 模式执行完的结果做满足度评估（复用 evaluateAndRepair 的核心逻辑） */
-async function evaluateAgentResult(result: AgentLoopResult, deps: PipelineDeps, evalBasis?: string): Promise<void> {
+/** 对 agent 模式执行完的结果做满足度评估，返回 issues（空数组 = 通过或评估失败跳过）。
+ *  incomplete 轮的 issues 会被写入续作缓存，作为「上一轮未完成项」提示续作轮 */
+async function evaluateAgentResult(result: AgentLoopResult, deps: PipelineDeps, evalBasis?: string): Promise<string[]> {
   const api = deps.getApi();
-  if (!api) return;
+  if (!api) return [];
 
   // ★ 等待浏览器下一帧，确保 3D 渲染管线空闲
   if (typeof requestAnimationFrame !== "undefined") {
@@ -1016,10 +1102,10 @@ async function evaluateAgentResult(result: AgentLoopResult, deps: PipelineDeps, 
   } catch (err) {
     if (deps.signal.aborted) throw err;
     console.warn("[Pipeline] agent 满足度评估失败，跳过", err);
-    return;
+    return [];
   }
 
-  if (evalResult.satisfied) return;
+  if (evalResult.satisfied) return [];
 
   deps.appendMessage({
     id: deps.newMessageId(),
@@ -1028,6 +1114,7 @@ async function evaluateAgentResult(result: AgentLoopResult, deps: PipelineDeps, 
   });
 
   // agent 模式不自动修复（AI 已经在循环中尝试了），仅报告
+  return evalResult.issues;
 }
 
 // ── 多模态题目识别 ──

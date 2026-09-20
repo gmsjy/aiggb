@@ -26,6 +26,7 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
   const totalPrompt = tokenHistory.reduce((a, r) => a + r.prompt, 0);
   const totalCompletion = tokenHistory.reduce((a, r) => a + r.completion, 0);
   const totalAll = totalPrompt + totalCompletion;
+  const totalCacheHit = tokenHistory.reduce((a, r) => a + (r.cacheHit ?? 0), 0);
 
   const [providerId, setProviderId] = useState<string>(existing?.provider ?? "deepseek");
   const [baseURL, setBaseURL] = useState<string>(
@@ -446,6 +447,7 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
               {tokenHistory.length > 0 && (
                 <span className="usage-summary-inline">
                   · {tokenHistory.length} 次对话 · 累计 {fmtTokens(totalAll)} tok
+                  {totalCacheHit > 0 && <> · 缓存命中 {fmtTokens(totalCacheHit)}</>}
                 </span>
               )}
             </summary>
@@ -462,6 +464,14 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
                 <span className="usage-total-label">合计</span>
                 <span className="usage-total-value">{fmtTokens(totalAll)}</span>
               </div>
+              {totalCacheHit > 0 && (
+                <div className="usage-total">
+                  <span className="usage-total-label" title="命中服务端前缀缓存（KV Cache）的输入 token，计费更低">
+                    缓存命中 ⚡
+                  </span>
+                  <span className="usage-total-value">{fmtTokens(totalCacheHit)}</span>
+                </div>
+              )}
             </div>
             <TokenUsageChart history={tokenHistory} />
           </details>

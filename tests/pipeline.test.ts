@@ -10,17 +10,18 @@
  *   5. 确认等待中被 abort → reject AbortError，不追加消息
  *   6. 执行失败 → checker 修复回路成功
  *   7. 模板缓存命中 → Phase 1 不发 chatRaw 请求
+ *   8. agent 轮次耗尽（incomplete）→ 不回滚、命令入 constructionLog、续作缓存生命周期
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { runPipeline, runVisionPipeline, type PipelineDeps, type ReviewHandle, type ProblemHandle } from "../src/lib/pipeline";
+import { runPipeline, runVisionPipeline, runAgentPipeline, type PipelineDeps, type ReviewHandle, type ProblemHandle } from "../src/lib/pipeline";
 import type { StateCheckSpec } from "../src/lib/agentLoop";
 import { createMemoryStorage, type SpecStorage } from "../src/lib/specCache";
 import { TEMPLATES } from "../src/lib/templates";
 import { MockGGB } from "./mockGGB";
 import type { AIResponse, Command } from "../src/lib/schema";
-import type { ChatMessage } from "../src/lib/aiClient";
+import type { ChatMessage, AgentMessage } from "../src/lib/aiClient";
 import type { GGBAppletApi } from "../src/types/ggb";
 import type { ChatTurn } from "../src/store/useAppStore";
 
@@ -453,4 +454,90 @@ test("视觉核对：文本不通过 + 视觉通过 → issues 仅含文本项",
   assert.equal(r!.satisfied, false);
   assert.deepEqual(r!.issues, ["缺少轨迹"], "视觉通过时不应追加 [视觉] 项");
   assert.ok(r!.summary.includes("视觉合格"));
+});
+
+// ═══════════════════════════════════════════════════
+// 8. agent 轮次耗尽（incomplete）→ 画布保留 + 续作缓存生命周期
+// ═══════════════════════════════════════════════════
+
+test("agent 轮次耗尽 → 不回滚、成功命令入 constructionLog、摘要引导续作、缓存随轮次接力", async () => {
+  const h = makeHarness();
+  const setBase64Calls: string[] = [];
+  (h.mock as unknown as Record<string, unknown>).setBase64 = (s: string) => { setBase64Calls.push(s); };
+  h.deps.evalSatisfactionImpl = async () => ({ satisfied: true, issues: [], summary: "通过" });
+
+  const pausedMessages: AgentMessage[] = [
+    { role: "system", content: "旧 system" },
+    { role: "user", content: "原始请求：构造长任务" },
+    { role: "assistant", content: null, tool_calls: [
+      { id: "tc1", type: "function", function: { name: "create_point", arguments: '{"name":"A","x":0,"y":0}' } },
+    ] },
+    { role: "tool", tool_call_id: "tc1", content: JSON.stringify({ success: true, result: "点 A 已创建于 (0, 0)" }) },
+  ];
+  const capturedResume: (AgentMessage[] | undefined)[] = [];
+  h.deps.runAgentLoopImpl = async (_text, loopDeps) => {
+    capturedResume.push(loopDeps.resumeMessages);
+    return {
+      finalText: "已达到单轮最大迭代次数（30 轮），本轮到此暂停。画布已保留当前进度（现有 1 个对象）。",
+      messages: pausedMessages,
+      iterations: 30,
+      deniedTools: [],
+      incomplete: true,
+    };
+  };
+
+  // 第 1 轮：轮次耗尽暂停
+  await runAgentPipeline("构造长任务", h.deps, {});
+  assert.equal(capturedResume[0], undefined, "首轮无续作缓存");
+  assert.equal(setBase64Calls.length, 0, "incomplete 轮不应恢复快照（画布保留）");
+  let lastAssistant = [...h.messages].reverse().find(m => m.role === "assistant");
+  assert.ok(lastAssistant, "应追加 assistant 摘要消息");
+  assert.match(lastAssistant!.payload.explanation, /已达单轮最大轮次/);
+  assert.match(lastAssistant!.payload.explanation, /后续指令/);
+  assert.ok(
+    lastAssistant!.payload.commands.some(c => c.op === "eval" && c.cmd.includes("A = (0, 0)")),
+    "成功命令应写入消息/constructionLog（undo 回放与画布一致）"
+  );
+
+  // 第 2 轮：续作指令 → 注入上一轮对话缓存；该轮正常完成 → 缓存清除
+  h.deps.runAgentLoopImpl = async (_text, loopDeps) => {
+    capturedResume.push(loopDeps.resumeMessages);
+    return { finalText: "完成", messages: [], iterations: 2, deniedTools: [] };
+  };
+  await runAgentPipeline("继续完成剩余部分", h.deps, {});
+  assert.equal(capturedResume[1], pausedMessages, "续作轮应收到暂停轮的完整对话缓存");
+
+  // 第 3 轮：上一轮已完成（非 incomplete）→ 缓存失效
+  await runAgentPipeline("再加个圆", h.deps, {});
+  assert.equal(capturedResume[2], undefined, "完成轮之后缓存应失效");
+});
+
+test("incomplete 轮的满足度 issues 写入续作缓存", async () => {
+  const h = makeHarness();
+  h.deps.evalSatisfactionImpl = async () => ({ satisfied: false, issues: ["缺少轨迹标注", "P 点超出视窗"], summary: "不通过" });
+  const captured: (AgentMessage[] | undefined)[] = [];
+  h.deps.runAgentLoopImpl = async (_text, loopDeps) => {
+    captured.push(loopDeps.resumeMessages);
+    return {
+      finalText: "已达到单轮最大迭代次数（30 轮），本轮到此暂停。画布已保留当前进度。",
+      messages: [
+        { role: "system", content: "旧 system" },
+        { role: "user", content: "原始请求：构造长任务" },
+      ] as AgentMessage[],
+      iterations: 30,
+      deniedTools: [],
+      incomplete: true,
+    };
+  };
+
+  await runAgentPipeline("构造长任务", h.deps, {});
+  await runAgentPipeline("继续完成剩余部分", h.deps, {});
+
+  const resume = captured[1];
+  assert.ok(resume, "续作轮应收到缓存");
+  const last = resume![resume!.length - 1];
+  assert.equal(last.role, "user");
+  assert.match(String(last.content), /上一轮未完成项/);
+  assert.match(String(last.content), /缺少轨迹标注/);
+  assert.match(String(last.content), /P 点超出视窗/);
 });

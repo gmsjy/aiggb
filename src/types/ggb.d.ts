@@ -74,6 +74,13 @@ export interface GGBAppletApi {
   // ── 构造 / UI ──
   setCoordSystem: (xmin: number, xmax: number, ymin: number, ymax: number) => void;
   setCoordSystem3D?: (xmin: number, xmax: number, ymin: number, ymax: number, zmin: number, zmax: number, yVertical: boolean) => void;
+  /** 当前视窗边界（GGB 官方 API，方法名小写 min/max）。get_canvas_info / fit_view_to 用 */
+  getXmin?: () => number;
+  getXmax?: () => number;
+  getYmin?: () => number;
+  getYmax?: () => number;
+  /** 对象包围盒 [xmin, ymin, zmin, xmax, ymax, zmax]（2D 对象 z 为 0）。部分 applet 版本缺失需降级 */
+  getBoundingBox?: (label: string) => number[];
   /** 同步 applet 内部尺寸（resize 时更新 viewWidth/viewHeight，坐标系据此重算缩放） */
   setSize?: (width: number, height: number) => void;
   /** 当前 applet 像素尺寸（视窗宽高比校正用）。GGB 官方 API。 */

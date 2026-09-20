@@ -92,18 +92,22 @@ test("agent 冒烟：单摆 — 常量+滑块+函数+线段+矢量+动画 → �
   const scripts: AgentResponse[] = [
     toolResp(call("physics_constants", { names: ["g"] })),
     toolResp(
-      call("create_slider", { name: "L", min: 0.5, max: 2, step: 0.01, value: 1 }),
-      call("create_slider", { name: "theta0", min: 0, max: 1.57, step: 0.01, value: 0.5236 }),
-      call("create_slider", { name: "t", min: 0, max: 10, step: 0.02, value: 0 }),
+      call("create_sliders", {
+        sliders: [
+          { name: "L", min: 0.5, max: 2, step: 0.01, value: 1 },
+          { name: "theta0", min: 0, max: 1.57, step: 0.01, value: 0.5236 },
+          { name: "t", min: 0, max: 10, step: 0.02, value: 0 },
+        ],
+      }),
     ),
-    toolResp(call("create_point", { name: "O", x: 0, y: 0 })),
+    toolResp(call("create_points", { points: [{ name: "O", x: 0, y: 0 }] })),
     toolResp(
       call("create_function", { name: "omega0", expression: "sqrt(g/L)" }),
       call("create_function", { name: "theta", expression: "theta0*cos(omega0*t)" }),
     ),
     toolResp(
       call("create_function", { name: "dtheta", expression: "-theta0*omega0*sin(omega0*t)" }),
-      call("create_point", { name: "P", x: "L*sin(theta)", y: "-L*cos(theta)" }),
+      call("create_points", { points: [{ name: "P", x: "L*sin(theta)", y: "-L*cos(theta)" }] }),
     ),
     toolResp(
       call("create_segment", { name: "rod", start: "O", end: "P" }),
@@ -115,7 +119,7 @@ test("agent 冒烟：单摆 — 常量+滑块+函数+线段+矢量+动画 → �
     ),
     toolResp(
       call("create_trace", { target: "P", mode: "trail" }),
-      call("set_unit_axes", { xUnit: "m", yUnit: "m" }),
+      call("set_view", { xUnit: "m", yUnit: "m" }),
     ),
     toolResp(
       call("set_view", { xmin: -1.5, xmax: 1.5, ymin: -1.5, ymax: 0.5 }),
@@ -142,12 +146,16 @@ test("agent 冒烟：单摆 — 常量+滑块+函数+线段+矢量+动画 → �
 test("agent 冒烟：电场 — 电荷+Ex/Ey/Emag+Sequence 网格 → 对象就绪且可重放", async () => {
   const scripts: AgentResponse[] = [
     toolResp(
-      call("create_slider", { name: "d", min: 1, max: 4, step: 0.1, value: 2 }),
-      call("create_slider", { name: "qmag", min: 1, max: 5, step: 0.5, value: 1 }),
+      call("create_sliders", {
+        sliders: [
+          { name: "d", min: 1, max: 4, step: 0.1, value: 2 },
+          { name: "qmag", min: 1, max: 5, step: 0.5, value: 1 },
+        ],
+      }),
     ),
     toolResp(
-      call("create_point", { name: "A", x: "d", y: 0 }),
-      call("create_point", { name: "B", x: "-d", y: 0 }),
+      call("create_points", { points: [{ name: "A", x: "d", y: 0 }] }),
+      call("create_points", { points: [{ name: "B", x: "-d", y: 0 }] }),
     ),
     toolResp(
       call("create_function", { name: "Ex", expression: "qmag*(x-d)/((x-d)^2+y^2+0.01)^1.5 - qmag*(x+d)/((x+d)^2+y^2+0.01)^1.5" }),
@@ -162,7 +170,7 @@ test("agent 冒烟：电场 — 电荷+Ex/Ey/Emag+Sequence 网格 → 对象就�
       }),
     ),
     toolResp(
-      call("set_unit_axes", { xUnit: "m", yUnit: "m" }),
+      call("set_view", { xUnit: "m", yUnit: "m" }),
       call("set_view", { xmin: -5, xmax: 5, ymin: -4, ymax: 4 }),
     ),
     textResp("电场矢量网格构造完成 ✓"),
@@ -182,18 +190,18 @@ test("agent 冒烟：电场 — 电荷+Ex/Ey/Emag+Sequence 网格 → 对象就�
 // 场景 3：3D 正方体截面（general, 3d）—— eval_raw + 危险工具确认
 // ═══════════════════════════════════════════════════
 
-test("agent 冒烟：3D 正方体 — eval_raw(Cube/IntersectPath) + 确认 → 对象就绪且可重放", async () => {
+test("agent 冒烟：3D 正方体 — eval_raw 赋值形态免确认 → 对象就绪且可重放", async () => {
   const scripts: AgentResponse[] = [
     toolResp(
-      call("create_point", { name: "A", x: 0, y: 0, z: 0 }),
-      call("create_point", { name: "B", x: 3, y: 0, z: 0 }),
-      call("create_point", { name: "C", x: 3, y: 3, z: 0 }),
+      call("create_points", { points: [{ name: "A", x: 0, y: 0, z: 0 }] }),
+      call("create_points", { points: [{ name: "B", x: 3, y: 0, z: 0 }] }),
+      call("create_points", { points: [{ name: "C", x: 3, y: 3, z: 0 }] }),
     ),
     toolResp(call("eval_raw", { command: "cube = Cube(A,B,C)" })),
     toolResp(call("eval_raw", { command: "section = IntersectPath(Plane(A,C,F), cube)" })),
     textResp("3D 正方体截面完成 ✓"),
   ];
-  // eval_raw 是 dangerous → 注册确认 handler 放行（approve_all 同时验证信任会话）
+  // 赋值形态 eval_raw 已自动降档为 safe → 确认 handler 不应被调用
   let confirmCalls = 0;
   registerConfirmationHandler(async () => { confirmCalls++; return [{ action: "approve_all" }]; });
 
@@ -204,7 +212,7 @@ test("agent 冒烟：3D 正方体 — eval_raw(Cube/IntersectPath) + 确认 → 
   for (const obj of ["A", "B", "C", "cube", "section", "F"]) {
     assert.ok(mock.exists(obj), `对象 ${obj} 应存在（F 由 Cube 派生）`);
   }
-  assert.ok(confirmCalls >= 1, "eval_raw 应触发确认");
+  assert.equal(confirmCalls, 0, "赋值形态 eval_raw 应免确认直接执行");
   assertReplayable(r, mock);
 });
 
@@ -214,8 +222,9 @@ test("agent 冒烟：3D 正方体 — eval_raw(Cube/IntersectPath) + 确认 → 
 
 test("agent 冒烟：eval_raw 被拒 → 不执行、画布无污染", async () => {
   const scripts: AgentResponse[] = [
-    toolResp(call("eval_raw", { command: "A = (0,0)" })),
-    toolResp(call("create_point", { name: "A", x: 0, y: 0 })),
+    // 非赋值 scripting 命令仍是 dangerous → 走确认（赋值形态已自动降档）
+    toolResp(call("eval_raw", { command: "ZoomIn(2)" })),
+    toolResp(call("create_points", { points: [{ name: "A", x: 0, y: 0 }] })),
     textResp("改用安全工具完成"),
   ];
   registerConfirmationHandler(async () => [{ action: "deny", toolCallId: "smoke1" }]);
@@ -226,4 +235,46 @@ test("agent 冒烟：eval_raw 被拒 → 不执行、画布无污染", async () 
   assert.equal(r.failed, false);
   assert.deepEqual(r.deniedTools, ["eval_raw"]);
   assert.ok(mock.exists("A"), "改走 create_point 后对象应创建");
+});
+
+// ═══════════════════════════════════════════════════
+// 场景 5：物理演示层新工具 — attach_vector 随动矢量 + create_readout 动态读数
+// ═══════════════════════════════════════════════════
+
+test("agent 冒烟：斜抛矢量随动 + 动态读数 → 对象就绪且可重放", async () => {
+  const scripts: AgentResponse[] = [
+    toolResp(call("physics_constants", { names: ["g"] })),
+    toolResp(
+      call("create_sliders", {
+        sliders: [
+          { name: "v0", min: 1, max: 50, step: 1, value: 20 },
+          { name: "theta", min: 0, max: 1.5708, step: 0.01, value: 0.785 },
+          { name: "t", min: 0, max: 5, step: 0.02, value: 0 },
+        ],
+      }),
+    ),
+    toolResp(call("create_points", { points: [{ name: "P", x: "v0*cos(theta)*t", y: "v0*sin(theta)*t-0.5*g*t^2" }] })),
+    toolResp(call("attach_vector", {
+      name: "vArrow", anchor: "P",
+      exprX: "v0*cos(theta)", exprY: "v0*sin(theta)-g*t", color: "#43a047",
+    })),
+    toolResp(call("create_readout", {
+      name: "hud", at: "P",
+      items: [{ label: "t", expr: "t", unit: "s" }, { label: "y", expr: "v0*sin(theta)*t-0.5*g*t^2", unit: "m" }],
+    })),
+    toolResp(
+      call("set_view", { xmin: -2, xmax: 45, ymin: -2, ymax: 25 }),
+      call("set_animation", { target: "t", action: "start", speed: 0.5, repeat: "increasing" }),
+    ),
+    textResp("斜抛 + 矢量随动 + 实时读数构造完成 ✓"),
+  ];
+  const { deps, mock } = makeAgent(scripts, "2d", "physics");
+  const r = await runAgentLoop("斜抛运动演示，带速度矢量和实时读数", deps);
+
+  assert.equal(r.failed, false);
+  for (const obj of ["v0", "theta", "t", "P", "vArrow", "MagvArrow", "TipvArrow"]) {
+    assert.ok(mock.exists(obj), `对象 ${obj} 应存在`);
+  }
+  assert.equal(mock.getObjectType("vArrow"), "Vector");
+  assertReplayable(r, mock);
 });

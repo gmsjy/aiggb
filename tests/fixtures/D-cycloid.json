@@ -29,7 +29,7 @@
     },
     {
       "op": "eval",
-      "cmd": "contact = (r*theta, 0)"
+      "cmd": "Contact = (r*theta, 0)"
     },
     {
       "op": "eval",
@@ -41,7 +41,7 @@
     },
     {
       "op": "eval",
-      "cmd": "radiusToContact = Segment(C, contact)"
+      "cmd": "radiusToContact = Segment(C, Contact)"
     },
     {
       "op": "eval",
@@ -60,7 +60,7 @@
     },
     {
       "op": "eval",
-      "cmd": "SetPointSize(contact, 3)"
+      "cmd": "SetPointSize(Contact, 3)"
     },
     {
       "op": "style",
@@ -82,7 +82,7 @@
     },
     {
       "op": "style",
-      "target": "contact",
+      "target": "Contact",
       "color": "#43a047",
       "visible": true
     },

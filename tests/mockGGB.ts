@@ -32,6 +32,7 @@ export class MockGGB implements Pick<GGBAppletApi,
   | "getFilling" | "getPointSize" | "getPointStyle" | "getCaption"
   | "getXcoord" | "getYcoord" | "getZcoord" | "getValue" | "getValueString"
   | "getDefinitionString" | "getCommandString" | "getObjectType" | "isDefined"
+  | "getXmin" | "getXmax" | "getYmin" | "getYmax" | "getBoundingBox"
 > {
   private objects = new Map<string, GGBObject>();
   /** 简单样式存储：对象名 → 部分样式属性 */
@@ -167,7 +168,9 @@ export class MockGGB implements Pick<GGBAppletApi,
   }
 
   private findMissingRefs(rhs: string): string[] {
-    const tokens = rhs.match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g) ?? [];
+    // ★ 字符串字面量（动态文本的标签/单位）内容不参与引用检查——真实 GGB 中引号内是纯文本
+    const withoutStrings = rhs.replace(/"[^"\\]*(?:\\.[^"\\]*)*"/g, '""');
+    const tokens = withoutStrings.match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g) ?? [];
     // ★ Sequence(expr, var, start, end, step) 的循环变量是声明（非引用），须豁免
     const seqVars = this.extractSequenceVars(rhs);
     const builtin = new Set([
@@ -325,7 +328,28 @@ export class MockGGB implements Pick<GGBAppletApi,
   setCaption = (name: string, c: string) => { getOrCreateStyle(this.styles, name).caption = c; };
   setLabelStyle = () => {};
   setLabelVisible = () => {};
-  setCoordSystem = () => {};
+  // ★ 视窗状态（get_canvas_info / fit_view_to / setCoordSystem 往返用）
+  private view = { xmin: -10, xmax: 10, ymin: -10, ymax: 10 };
+  setCoordSystem = (xmin: number, xmax: number, ymin: number, ymax: number) => {
+    this.view = { xmin, xmax, ymin, ymax };
+  };
+  getXmin = () => this.view.xmin;
+  getXmax = () => this.view.xmax;
+  getYmin = () => this.view.ymin;
+  getYmax = () => this.view.ymax;
+  /** 近似包围盒：Point 取定义坐标字面量；其余对象以 getValue ±1 近似；解析不出返回空数组（调用方降级） */
+  getBoundingBox = (label: string): number[] => {
+    const obj = this.objects.get(label);
+    if (!obj) return [];
+    const m = /^\(([^,]+),\s*([^,)]+)(?:,\s*([^)]+))?\)$/.exec(obj.expr ?? "");
+    if (obj.type === "Point" && m) {
+      const x = Number(m[1]), y = Number(m[2]);
+      if (Number.isFinite(x) && Number.isFinite(y)) return [x, y, 0, x, y, 0];
+    }
+    const val = this.getValue(label);
+    if (Number.isFinite(val) && obj.type !== "Point") return [val - 1, val - 1, 0, val + 1, val + 1, 0];
+    return [];
+  };
   setAxisLabels = () => {};
   setAxisUnits = () => {};
   setAnimating = () => {};

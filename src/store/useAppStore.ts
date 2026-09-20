@@ -65,6 +65,8 @@ export interface TokenRecord {
   prompt: number;
   /** 输出 token */
   completion: number;
+  /** 命中服务端前缀缓存（KV Cache）的输入 token（DeepSeek 提供；旧记录无此字段） */
+  cacheHit?: number;
 }
 
 function readTokenHistory(): TokenRecord[] {
@@ -142,10 +144,11 @@ interface AppState extends PersistedState {
    */
   constructionLog: string[];
   isThinking: boolean;
-  /** 会话累计 token 用量（prompt/completion，运行期不持久化，随会话清空） */
-  tokenUsage: { prompt: number; completion: number };
+  /** 会话累计 token 用量（prompt/completion，运行期不持久化，随会话清空）。
+   *  cacheHit = 累计命中服务端前缀缓存（KV Cache）的输入 token */
+  tokenUsage: { prompt: number; completion: number; cacheHit?: number };
   /** 本轮对话累计 token（runRound 结束入历史，不持久化） */
-  roundTokenUsage: { prompt: number; completion: number };
+  roundTokenUsage: { prompt: number; completion: number; cacheHit?: number };
   /** token 用量历史（每轮对话一条，持久化，设置面板统计图消费） */
   tokenHistory: TokenRecord[];
 
@@ -171,8 +174,8 @@ interface AppState extends PersistedState {
   setAppName: (name: "classic" | "3d") => void;
   setAgentMode: (on: boolean) => void;
   recordTemplateUse: (id: string) => void;
-  /** 累加一次 AI 调用的 token 用量 */
-  addTokenUsage: (u: { prompt: number; completion: number }) => void;
+  /** 累加一次 AI 调用的 token 用量（cacheHit = KV Cache 命中输入 token，可选） */
+  addTokenUsage: (u: { prompt: number; completion: number; cacheHit?: number }) => void;
   /** 一轮对话开始：清零本轮累计 */
   startRound: () => void;
   /** 一轮对话结束：本轮累计入历史（持久化）并清零 */
@@ -250,18 +253,25 @@ export const useAppStore = create<AppState>()(
       addTokenUsage: u => set(state => ({
         tokenUsage: {
           prompt: state.tokenUsage.prompt + u.prompt,
-          completion: state.tokenUsage.completion + u.completion
+          completion: state.tokenUsage.completion + u.completion,
+          cacheHit: (state.tokenUsage.cacheHit ?? 0) + (u.cacheHit ?? 0)
         },
         roundTokenUsage: {
           prompt: state.roundTokenUsage.prompt + u.prompt,
-          completion: state.roundTokenUsage.completion + u.completion
+          completion: state.roundTokenUsage.completion + u.completion,
+          cacheHit: (state.roundTokenUsage.cacheHit ?? 0) + (u.cacheHit ?? 0)
         }
       })),
       startRound: () => set({ roundTokenUsage: { prompt: 0, completion: 0 } }),
       finishRound: () => {
         const round = get().roundTokenUsage;
         if (round.prompt > 0 || round.completion > 0) {
-          const record: TokenRecord = { ts: Date.now(), prompt: round.prompt, completion: round.completion };
+          const record: TokenRecord = {
+            ts: Date.now(),
+            prompt: round.prompt,
+            completion: round.completion,
+            ...(round.cacheHit ? { cacheHit: round.cacheHit } : {})
+          };
           const history = [...get().tokenHistory, record].slice(-MAX_TOKEN_HISTORY);
           writeTokenHistory(history);
           set({ tokenHistory: history, roundTokenUsage: { prompt: 0, completion: 0 } });

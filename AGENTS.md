@@ -46,7 +46,7 @@
 | `schema.ts` | AI 输出 Zod 校验 | `Command`（discriminatedUnion，14 op）、`AIResponse`（含 `ask`、`self_check`）、`NumLike`/`BoolLike`/`IntLike` 容错、`SafeCmd`（臆造命令硬黑名单 + XSS 过滤）、`CoordExpr`（vector/forceDiagram 坐标表达式注入防护）、`withTextSafety`（caption/label/unit 文本安全）；`superRefine` 做 slider/view 语义 + ask 互斥校验 |
 | `ggbKB.ts` | **RAG 命令知识库** | `GGB_COMMAND_DEFS`（~126 条命令：签名/参数/2D3D 适用）、`HALLUCINATION_MAP`（25 条臆造→正确映射）、`buildCommandReference(mode, domain)`、`buildHallucinationWarnings(mode)`、`findCommand`、`findHallucination` |
 | `commandCorrect.ts` | 后置命令纠正器 | `correctCommand(cmd)`（Levenshtein ≤2 模糊纠正 + 臆造查表 + 参数个数校验）、`batchCorrect()`、`correctionsToRepairContext()` |
-| `commandValidate.ts` | **执行前静态语法预检**（纯 TS） | `validateGGBCommand(cmd, mode?)` → `{ok, issues[], message}`：括号配对（含坐标括号与嵌套调用）、`).` 句点误用（逗号手误）、Sequence 参数契约（官方 5 种重载分支判定 / 循环变量单字母 / 区间压缩 / 尾部残留）、参数个数（ARG_COUNT_HINTS + 属性命令回退 ggbKB paramCount）、运算符结尾、**属性命令专项**（3D 模式禁令 `mode-forbidden` / SetColor 值域与色名 `value-range`/`color-name` / 透明度 0~1，mode 经 ggbBridge/toolExecutor 透传）；`validateSequenceArgs(args)` → eval_sequence 工具参数级检查；被 `ggbBridge.executeOne`（eval）与 `toolExecutor`（eval_raw / eval_sequence）统一调用，把无语义的引擎 false 变成可自愈的具体诊断 |
+| `commandValidate.ts` | **执行前静态语法预检**（纯 TS） | `validateGGBCommand(cmd, mode?)` → `{ok, issues[], message}`：括号配对（含坐标括号与嵌套调用）、`).` 句点误用（逗号手误）、Sequence 参数契约（官方 5 种重载分支判定 / 循环变量单字母 / 区间压缩 / 尾部残留）、参数个数（ARG_COUNT_HINTS + 属性命令回退 ggbKB paramCount）、运算符结尾、**属性命令专项**（3D 模式禁令 `mode-forbidden` / SetColor 值域与色名 `value-range`/`color-name` / 透明度 0~1，mode 经 ggbBridge/toolExecutor 透传）；`validateSequenceArgs(args)` → Sequence 契约/循环变量参数级校验（供 eval_raw 路径与 KB 自查复用）；被 `ggbBridge.executeOne`（eval）与 `toolExecutor`（eval_raw）统一调用，把无语义的引擎 false 变成可自愈的具体诊断 |
 | `specSchema.ts` | Phase 1 输出校验 | `RefinedSpec`（`{title?, spec?, ask?}`，spec/ask 互斥） |
 | `specCache.ts` | 意图→规格缓存 | `lookupCachedSpec`/`storeCachedSpec`（模板精确匹配优先 + 存储精确键）、**`SpecStorage` 注入接口 + `createMemoryStorage()`（供单测）**；LRU ≤50 条、TTL 30 天、键含画布对象指纹（排除 `_` 前缀临时对象与物理常量，保证同场景稳定命中） |
 | `commands.ts` | 命令黑名单/流程 | `GGB_FORBIDDEN_COMMANDS`（硬黑名单，被 schema 引用）、`GGB_5STAGE_FLOW`（参数→点→图形→动画→属性）；命令签名/模式数据的权威来源是 ggbKB.ts |
@@ -54,7 +54,7 @@
 | `templates.ts` | 12 个一键模板（物理 2D 4 + 数学 2D 4 + 3D 4） | `Template {id, icon, title, subtitle, prompt, domain, mode}`；prompt 即精炼规格，天然命中 specCache |
 | `repaintGate.ts` | **画布重绘门控**（闪烁防治，纯 TS） | `shouldBatch(count, appMode)`（**任何非空批次都批处理**，3D 可关闭）；`withRepaintBatch(api, count, appMode, fn)`（暂停重绘 → 执行 → 恢复 + 静默期，抛错也恢复）；`isBatch3DEnabled`/`setBatch3DEnabled`（`localStorage: aiggb_batch_3d`）；`isDiagVerbose`（`aiggb_diag` 逐节点日志开关，手改 localStorage）；`markRepaintBusy`/`isRepaintBusy`（`REPAINT_GRACE_MS=2000`，busyUntil 到时自动失效）|
 | `ggbBridge.ts` | op → GGB API 执行器 | `executeCommands(api, commands, appMode?)` — 批量渲染走 `repaintGate.shouldBatch`（暂停重绘 → 整批执行 → 恢复 + `markRepaintBusy` 静默期）；`collectFailures`、**`resetTmpIds`**（vector 容错重试时复位临时对象计数）、`exportGGB`/`exportPNG`（画布导出，Toolbar 消费）|
-| `agentLoop.ts` | **ReAct Agent 工具调用循环** | `runAgentLoop(userText, deps)` — observe→plan→act 循环，最大 30 次迭代，**每轮刷新 api 句柄**（防 applet 重建失效）、**连续 3 轮工具失败熔断**（`MAX_CONSECUTIVE_FAILURES`，参数/预检类错误不计入，给模型自我修正机会）、全拒绝判定按**本轮**被拒数（避免跨轮累积误触发）、危险工具确认按 `toolCallId` 匹配；**`onThinking` 回调**（分析/规划/执行工具/等待确认 4 个节点 + V4 `reasoning_content` 增量 🧠 实时展示）经 pipeline 透传 UI 减少等待焦虑；`reasoning_content` 回传受 `mustRoundtripReasoning` quirk 门控；空响应重试的截断判定**直接信任 `finish_reason="length"`**（不再依赖 `streamsFinishReason` 门控）；**`StateCheckSpec` 终止核对钩子**：AI 输出纯文本视为完成时用 `getRichSnapshot` 快照调 `check()`，未通过把 issues 反馈注入循环继续修正（`MAX_STATE_CHECK_ROUNDS=2`，共享 30 迭代预算；核对异常按通过结束——失败不阻断）；`buildStateCheckFeedback` 组装反馈消息；`convertHistory` 对 user turn attachments 折叠 `[附件:图片×N]` 占位；`registerConfirmationHandler`/`unregisterConfirmationHandler` 危险工具确认注入；`AgentLoopDeps`（含 `agentModel` + `stateCheck?`）、`AgentLoopResult` |
+| `agentLoop.ts` | **ReAct Agent 工具调用循环** | `runAgentLoop(userText, deps)` — observe→plan→act 循环，最大 30 次迭代，**每轮刷新 api 句柄**（防 applet 重建失效）、**连续 3 轮工具失败熔断**（`MAX_CONSECUTIVE_FAILURES`，参数/预检类错误不计入，给模型自我修正机会）、全拒绝判定按**本轮**被拒数（避免跨轮累积误触发）、危险工具确认按 `toolCallId` 匹配；**`onThinking` 回调**（分析/规划/执行工具/等待确认 4 个节点 + V4 `reasoning_content` 增量 🧠 实时展示）经 pipeline 透传 UI 减少等待焦虑；`reasoning_content` 回传受 `mustRoundtripReasoning` quirk 门控；空响应重试的截断判定**直接信任 `finish_reason="length"`**（不再依赖 `streamsFinishReason` 门控）；**`StateCheckSpec` 终止核对钩子**：AI 输出纯文本视为完成时用 `getRichSnapshot` 快照调 `check()`，未通过把 issues 反馈注入循环继续修正（`MAX_STATE_CHECK_ROUNDS=2`，共享 30 迭代预算；核对异常按通过结束——失败不阻断）；`buildStateCheckFeedback` 组装反馈消息；`convertHistory` 对 user turn attachments 折叠 `[附件:图片×N]` 占位；`registerConfirmationHandler`/`unregisterConfirmationHandler` 危险工具确认注入；**轮次耗尽 → `AgentLoopResult.incomplete`**（画布保留不回滚、对话入 pipeline 续作缓存 `agentResumeCache`，下轮 `resumeMessages` 注入接力，TTL 10min + 画布指纹校验兜底）；`AgentLoopDeps`（含 `agentModel` + `stateCheck?` + `resumeMessages?`）、`AgentLoopResult` |
 | `toolExecutor.ts` | Agent 工具 → GGB API 分发 | `executeToolCall(api, call)`/`executeToolCalls(api, calls, appMode?)` — 批处理走 `repaintGate.shouldBatch`（任何非空批次）+ 恢复后静默期；运行时**不再切透视**（v1.8：classic 下 `setPerspective` 会触发 DockGlassPane → 画布消失 → 硬重建）；~20 个工具 case（create_point/slider/vector/style/animation…）|
 | `tools.ts` | 工具 Function Calling 定义 | `TOOL_DEFINITIONS`（OpenAI tool schemas）、`TOOL_SCHEMAS`（Zod 校验）、`getToolSafety(name)` → `"safe"\|"dangerous"`；dangerous 工具（eval_raw/delete/clear）需用户确认 |
 | `satisfactionEval.ts` | Phase 3.1 满足度评估 | `evaluateSatisfaction(config, spec, snapshot, signal?, modelOverride?)` — 轻量模型对比画布快照与精炼规格，输出 `SatisfactionResult{satisfied, issues[], summary}`；失败不阻断流程；**`evaluateVisual(config, basis, imageDataUrl, signal?, visionModel?, ...)`** — 画布截图（exportPNG）+ 视觉模型审查渲染效果（出框/遮挡/样式/可读性），跳过 thinking + 显式 4096、解析容错、失败不阻断；带图轮 stateCheck 双路合并（视觉 issues 带 `[视觉]` 前缀） |
@@ -110,7 +110,7 @@ Schema 校验失败 → `chatWithFormatRetry`（≤2 次格式重试，raw + det
 2. **自检层**：compile prompt 强制 AI 输出 `self_check`（逐项核对白名单/3D 禁用/Point+Vector/除零/参数个数/Sequence 契约）
 3. **清洗层**：`aiClient` stripCodeFence（BOM 剥离 + 去 code fence）
 4. **校验层**：`schema.ts`（臆造命令硬黑名单、slider/view 语义、ask 互斥、forceDiagram.vec 形态、CoordExpr 注入防护、withTextSafety 文本安全）
-5. **语法预检层**：`commandValidate.ts`（**执行前**纯文本静态检查：括号配对、逗号误写成句点、Sequence 参数契约、参数个数、运算符结尾、**属性命令专项**——3D 模式禁令 / SetColor 值域 0~255 与色名形态 / 透明度 0~1）——把引擎那句无语义的「执行失败」换成「具体错在哪 + 正确形态」，供修复回路精准自愈；`eval`/`eval_raw`/`eval_sequence` 三条入口统一生效
+5. **语法预检层**：`commandValidate.ts`（**执行前**纯文本静态检查：括号配对、逗号误写成句点、Sequence 参数契约、参数个数、运算符结尾、**属性命令专项**——3D 模式禁令 / SetColor 值域 0~255 与色名形态 / 透明度 0~1）——把引擎那句无语义的「执行失败」换成「具体错在哪 + 正确形态」，供修复回路精准自愈；`eval`/`eval_raw` 两条入口统一生效
 6. **纠正层**：`commandCorrect`（Levenshtein 模糊纠正 + 臆造映射 + 参数校验）
 7. **执行层**：`ggbBridge`（animate/trace/style 目标存在预检、vector Point+Point 自动重写、style opacity 双路可观测）+ 修复回路
 
@@ -128,14 +128,15 @@ Schema 校验失败 → `chatWithFormatRetry`（≤2 次格式重试，raw + det
 
 | 文件 | 职责 |
 |---|---|
-| `agentLoop.ts` | ReAct 循环主控：`runAgentLoop()` 最多 30 次迭代，`executeSafeTools`/`handleDangerousTools` 分发，`truncateHistory` 截断 + 修复消息配对 |
-| `toolExecutor.ts` | 工具分发：~18 个 case（create_point/slider/vector/circle/polygon/segment/function/parametric/text/trace/set_style/animation/view/delete/eval_raw/eval_sequence/physics_constants/set_unit_axes/clear）；Zod 校验 + 安全拦截 + RAG 纠正 |
+| `agentLoop.ts` | ReAct 循环主控：`runAgentLoop()` 最多 30 次迭代，`executeSafeTools`/`handleDangerousTools` 分发（eval_raw 赋值形态经 `isEvalAutoSafe` 自动降档免确认），`truncateHistory` 截断 + 修复消息配对。**轮次耗尽 = `incomplete` 可续作暂停**（画布保留不回滚、成功命令照常入 constructionLog，结束文案引导用户发后续指令）；下一轮经 `deps.resumeMessages` 注入暂停轮完整对话缓存（换新 system prompt、原始请求保持 index 1、进入循环前立即压缩一次），消息数组追加式扩展 + 动态内容后置以对齐 DeepSeek KV Cache 的前缀命中规则；`deps.trapPrompt`（pipeline 注入 buildTrapPrompt 产物）追加到 system prompt 尾部，agent 回路接入陷阱闭环 |
+| `toolExecutor.ts` | 工具分发：26 个 case（create_points/segment/circle/polygon/sliders/vector/text/function/parametric/transform_object + physics_constants/trace + get_canvas_info/fit_view_to/get_object_info/list_objects + set_style/animation/view + delete/clear + eval_raw + **attach_vector/create_readout/create_spring/create_fractal**）；Zod 校验 + 安全拦截 + RAG 纠正 + preflight 语义预检 + `isEvalAutoSafe` 自动降档判定。物理演示层：attach_vector 矢量随动（视窗 15% 自动归一化缩放，助手对象 Mag*/Tip* 大写开头避开小写 Vector 推断陷阱）、create_readout 动态读数条（round 小写）、create_spring 真弹簧（PolyLine 锯齿端点随动）、create_fractal 分形（L-system + 海龟 TS 数值生成，kind=koch/snowflake/sierpinski/dragon，段数护栏 4500，深度固定不支持滑块——自托管 GGB 的 evalCommand 不支持 Zip/Flatten/El/大写 Round，列表函数方案不可行）。★ 已下线薄包装工具（create_point/slider、create_line/midpoint/intersect/locus、set_unit_axes、eval_sequence）由批量版/免确认 eval_raw 承接，重放映射保留兼容历史轨迹 |
 | `tools.ts` | 工具定义：`TOOL_DEFINITIONS`（OpenAI tool schemas）+ `TOOL_SCHEMAS`（Zod）+ `getToolSafety()` |
 
 ### 工具安全分级
 
-- **safe**：create_*/set_*/list_*/get_* — 无需确认直接执行
-- **dangerous**：`eval_raw`、`eval_sequence`、`delete_object`、`clear_canvas` — 需用户确认（或信任会话后自动通过）
+- **safe**：create_*/set_*/list_*/get_*（含 transform_object、get_canvas_info/fit_view_to）— 无需确认直接执行；单命令薄包装（Line/Midpoint/Intersect/Locus/Point/Tangent/Angle）走免确认 eval_raw + ggbKB 惯用法
+- **dangerous**：`eval_raw`、`delete_object`、`clear_canvas` — 需用户确认（或信任会话后自动通过）
+- **★ eval 自动降档**：赋值形态（`name = ...`）+ 通过黑名单/XSS 拦截 + 通过静态预检 + 不含 Delete 的 `eval_raw` 调用自动并入 safe 免确认（`isEvalAutoSafe`）——3D 构造（Cube/Sphere/Surface 均为赋值形态）确认次数趋零；Delete / 非赋值 scripting（SetColor/ZoomIn）/ 任一拦截失败仍走确认
 
 ### Agent 模式 vs 流水线模式
 

@@ -259,10 +259,15 @@ export function Toolbar({ onOpenSettings, onOpenGallery, onOpenSessions }: Props
         {/* ── token 统计 ── */}
         <div
           className="token-stat"
-          title={`会话累计 token 用量\n输入（prompt）: ${fmtTokens(tokenUsage.prompt)}\n输出（completion）: ${fmtTokens(tokenUsage.completion)}`}
+          title={`会话累计 token 用量\n输入（prompt）: ${fmtTokens(tokenUsage.prompt)}\n输出（completion）: ${fmtTokens(tokenUsage.completion)}\n缓存命中（KV Cache）: ${fmtTokens(tokenUsage.cacheHit ?? 0)}`}
         >
           <span className="token-stat-total">{fmtTokens(totalTokens)}</span>
           <span className="token-stat-label">tok</span>
+          {(tokenUsage.cacheHit ?? 0) > 0 && (
+            <span className="token-stat-label" title="命中服务端前缀缓存的输入 token（KV Cache，计费更低）">
+              ⚡{fmtTokens(tokenUsage.cacheHit!)}
+            </span>
+          )}
         </div>
       </div>
     </header>
