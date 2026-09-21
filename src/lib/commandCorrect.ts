@@ -84,8 +84,9 @@ function extractCommandName(cmd: string): string | null {
   const assignM = assignRe.exec(trimmed);
   if (assignM) {
     const name = assignM[1];
-    // 排除数学函数（sin/cos 等）和常见不匹配项
-    if (/^(sin|cos|tan|abs|sqrt|exp|ln|log|floor|ceil|round|random|pi|e|true|false)$/i.test(name)) {
+    // 排除数学函数（sin/cos 等）和常见不匹配项。
+    // round 仅小写豁免：大写 Round 在自托管 bundle（5.4.927）不存在，须交给臆造映射纠正为小写函数 round（HALLUCINATION_MAP）
+    if (/^(sin|cos|tan|abs|sqrt|exp|ln|log|floor|ceil|random|pi|e|true|false)$/i.test(name) || /^round$/.test(name)) {
       return null;
     }
     return name;
@@ -95,7 +96,7 @@ function extractCommandName(cmd: string): string | null {
   const directRe = /^(\w[\w]*)\s*[([]/.exec(trimmed);
   if (directRe) {
     const name = directRe[1];
-    if (/^(sin|cos|tan|abs|sqrt|exp|ln|log|floor|ceil|round|random|pi|e|true|false)$/i.test(name)) {
+    if (/^(sin|cos|tan|abs|sqrt|exp|ln|log|floor|ceil|random|pi|e|true|false)$/i.test(name) || /^round$/.test(name)) {
       return null;
     }
     return name;

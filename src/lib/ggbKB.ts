@@ -888,6 +888,8 @@ export const HALLUCINATION_MAP: HallucinationEntry[] = [
   { hallucination: "Variable",        correct: "直接赋值",        reason: "GeoGebra 无 Variable 命令——直接 x = 3 即可定义变量" },
   { hallucination: "Parameter",       correct: "Slider(min, max, ...)", reason: "GeoGebra 无 Parameter 命令——用 Slider 创建可调参数" },
   { hallucination: "SetOpaque",       correct: "SetLineOpacity", reason: "GeoGebra 无 SetOpaque——透明度用 SetLineOpacity" },
+  { hallucination: "El",              correct: "Element",        reason: "GeoGebra 无 El——列表取元素用 Element(list, n)（5.4.927 实测可用）" },
+  { hallucination: "Round",           correct: "round",          reason: "自托管 bundle（5.4.927）无大写 Round 命令——取整用小写函数 round(x, n)（小写实测可用）" },
 ];
 
 // ── 辅助函数 ──

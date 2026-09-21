@@ -165,7 +165,11 @@ function buildSpringCommands(
   ];
 }
 
-// ──── 分形：L-system + 海龟图形（TS 侧数值生成，规避 GGB 列表函数/Zip 不可用） ────
+// ──── 分形：L-system + 海龟图形（TS 侧数值生成）。注：Zip/Flatten/Element/KeepIf 在自托管
+//      bundle（5.4.927）实测可用（含 Zip 内嵌 If、变长展开+Flatten），列表代数做分形不可行
+//      的真实原因是：每一代重写须静态展开（无循环）、乌龟状态折叠依赖 O(n²) 前缀和技巧、
+//      深度无法滑块驱动——TS 数值生成更可靠。真正不可用的命令：El（从无此命令，正确名
+//      Element）、大写 Round（仅小写函数 round）、小写 mod（仅大写命令 Mod）、CumulativeSum ────
 
 /** PolyLine 单命令段数护栏（4096 段实测 ~540ms 可接受，取 4500 留余量） */
 const FRACTAL_MAX_SEGMENTS = 4500;

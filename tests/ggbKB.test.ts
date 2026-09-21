@@ -8,7 +8,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildCommandReference } from "../src/lib/ggbKB";
+import { buildCommandReference, findHallucination } from "../src/lib/ggbKB";
+import { correctCommand } from "../src/lib/commandCorrect";
 import { buildTrajectoryRecord } from "../src/lib/trajectoryStore";
 import { TOOL_CATEGORIES, TOOL_SCHEMAS, buildToolCategoryOverview } from "../src/lib/tools";
 import type { AgentMessage } from "../src/lib/aiClient";
@@ -29,6 +30,28 @@ test("3D 模式速查表含通用命令（Circle/Center 同时适用）", () => 
   const ref3d = buildCommandReference("3d", "general");
   assert.ok(ref3d.includes("圆心→Center"), "Center 是 2d/3d 通用，3D 模式也应出现");
   assert.ok(ref3d.includes("画圆→Circle"), "Circle 是 2d/3d 通用");
+});
+
+// ── 列表函数大小写结论（自托管 bundle 5.4.927 实测，docs/列表函数实测/）──
+
+test("HALLUCINATION_MAP 收录 El→Element / Round→round", () => {
+  assert.equal(findHallucination("El")?.correct, "Element", "El 从无此命令，应映射 Element");
+  assert.equal(findHallucination("Round")?.correct, "round", "大写 Round 在 5.4.927 不存在，应映射小写函数 round");
+});
+
+test("correctCommand 自动纠正 El 与大写 Round，小写 round 豁免不受影响", () => {
+  const el = correctCommand("E2 = El(L0, 2)");
+  assert.ok(el.changed, "El 应被自动替换");
+  assert.ok(el.corrected.includes("Element(L0, 2)"), `实际: ${el.corrected}`);
+
+  const rd = correctCommand("R1 = Round(2.5)");
+  assert.ok(rd.changed, "大写 Round 应被自动替换");
+  assert.ok(rd.corrected.includes("round(2.5)"), `实际: ${rd.corrected}`);
+
+  // 小写 round 是有效函数形态：提取器大小写敏感豁免，不做任何纠正
+  const lower = correctCommand('T1 = Text("v=" + (round(2.345, 2)))');
+  assert.equal(lower.changed, false, "小写 round 不应被纠正");
+  assert.ok(!el.corrected.includes("El("), "纠正后不应残留 El(");
 });
 
 // ── 改造四：工具分类元数据 ──
