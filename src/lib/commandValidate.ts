@@ -431,7 +431,7 @@ const STYLE_ARG_COUNT_EXEMPT = new Set(["setcoords"]);
  * 属性命令专项检查（第 7 项）。
  * 只对 ggbKB 已收录的 Set*、Show*、Rename 命令生效，检查：
  *   - 3D 模式禁令（mode 传入且命令 KB 标注仅 2D）
- *   - SetColor 值域（r/g/b 0~255 整数；字符串色名形态）
+ *   - SetColor 值域（r/g/b 0~1 浮点，引擎按 ×255 解析；字符串色名形态）
  *   - SetLineOpacity / SetFilling 透明度值域 0~1
  * 仅检查数字/字符串字面量，表达式（如 `255*v`）交由引擎与修复回路。
  */
@@ -461,29 +461,18 @@ function validateSetProperty(
   // ② SetColor 值域 / 色名形态
   if (def?.name.toLowerCase() === "setcolor") {
     if (args.length === 4) {
-      // SetColor(obj, r, g, b)：r/g/b 必须是 0~255 整数（0~1 浮点是最常见误用）
+      // SetColor(obj, r, g, b)：r/g/b 是 0~1 浮点（引擎按 ×255 解析，官方手册同）。
+      // 5.4.927 实测：(0.9,0.2,0.2)→rgb(229,51,51) 正确；(230,50,50)→rgb(255,255,255) 全白。
       for (const [i, arg] of args.slice(1).entries()) {
         if (!isNumberArg(arg)) continue;
         const n = Number(unquote(arg));
-        if (Number.isInteger(n)) {
-          if (n < 0 || n > 255) {
-            issues.push({
-              kind: "value-range",
-              message: `SetColor 第 ${i + 2} 个参数（r/g/b）超出 0~255：${arg}。必须是 0~255 的整数。`,
-            });
-          }
-        } else if (n > 0 && n < 1) {
+        if (n < 0 || n > 1) {
           issues.push({
             kind: "value-range",
             message:
-              `SetColor 第 ${i + 2} 个参数（r/g/b）是 0~1 浮点 ${arg} —— 这是常见误用。` +
-              `r/g/b 必须是 **0~255 整数**：${arg} 应改为 ${Math.round(n * 255)}。` +
-              `例如 (0.9, 0.2, 0.2) → (230, 51, 51)。`,
-          });
-        } else {
-          issues.push({
-            kind: "value-range",
-            message: `SetColor 第 ${i + 2} 个参数（r/g/b）必须是 0~255 的整数，收到 ${arg}。`,
+              `SetColor 第 ${i + 2} 个参数（r/g/b）超出 0~1：${arg}。` +
+              `r/g/b 是 **0~1 浮点**（引擎按 ×255 解析），${arg} 应改为 ${(n / 255).toFixed(3)}。` +
+              `例如 (230, 50, 50) → (0.902, 0.196, 0.196)；写 0~255 整数会被钳成白色。`,
           });
         }
       }
@@ -496,14 +485,14 @@ function validateSetProperty(
           kind: "value-range",
           message:
             `SetColor(${args.join(", ")}) 是「颜色名」形态 —— 第二个参数必须是颜色名字符串。` +
-            `要设置 RGB 应写 **4 个参数**：SetColor(obj, r, g, b)（r/g/b 是 0~255 整数）。`,
+            `要设置 RGB 应写 **4 个参数**：SetColor(obj, r, g, b)（r/g/b 是 0~1 浮点）。`,
         });
       } else if (quoted && /\P{ASCII}/u.test(unquote(arg))) {
         issues.push({
           kind: "color-name",
           message:
             `SetColor 的颜色名必须是**英文**（如 "red"），收到中文 ${arg} —— GGB 不识别中文色名。` +
-            `改用英文色名字符串，或 SetColor(obj, r, g, b)（0~255 整数）。`,
+            `改用英文色名字符串，或 SetColor(obj, r, g, b)（0~1 浮点）。`,
         });
       } else if (!quoted && !isNumberArg(arg) && /^[A-Za-z_]\w*$/.test(arg.trim())) {
         issues.push({
@@ -511,7 +500,7 @@ function validateSetProperty(
           message:
             `SetColor 的颜色参数 ${arg} 未加引号 —— 裸标识符会被 GGB 当作对象引用而失败。` +
             `颜色名需写成字符串 ${JSON.stringify(`"${arg.trim().toLowerCase()}"`)}，` +
-            `或改用 SetColor(obj, r, g, b)（0~255 整数）。`,
+            `或改用 SetColor(obj, r, g, b)（0~1 浮点）。`,
         });
       }
     }
@@ -527,7 +516,7 @@ function validateSetProperty(
         issues.push({
           kind: "value-range",
           message: `${def.name} 的透明度必须是 0~1 之间的小数，收到 ${arg}。` +
-            `（注意与 SetColor 的 0~255 区分：透明度用 0~1）`,
+            `（SetColor 的 r/g/b 与透明度同为 0~1 浮点）`,
         });
       }
     }

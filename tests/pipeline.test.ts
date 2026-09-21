@@ -321,7 +321,7 @@ test("评估 unsatisfied → 追加 error + 触发修复", async () => {
     raw: JSON.stringify({ spec: "绘制红色虚线圆 c，圆心 O(0,0)，半径 3，开启轨迹。" }),
     scripts: [
       evalResp(["O = (0,0)", "c = Circle(O, 3)"]),                           // Phase 2 初版
-      evalResp(["SetLineStyle(c, 1)", "SetColor(c, 255, 0, 0)", "SetTrace(c, true)"]) // 修复
+      evalResp(["SetLineStyle(c, 1)", "SetColor(c, 1, 0, 0)", "SetTrace(c, true)"]) // 修复
     ]
   });
   h.deps.lightModel = "flash-m";

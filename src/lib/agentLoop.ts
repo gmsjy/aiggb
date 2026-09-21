@@ -238,7 +238,7 @@ ${canvasGuide}
 - 大写 A~Z = Point 类型，禁止用作数值。u/v/w = Vector 类型，禁止用作标量。
 - 分母含距离平方必须 +0.001 防除零。
 - 3D 禁止：SetViewDirection/SetFilling/SetPointSize/SetAxesRatio/SetCaption/ZoomIn。
-- SetColor r/g/b 必须 0~255 整数。
+- SetColor r/g/b 用 0~1 浮点（引擎按 ×255 解析；0~255 整数会渲染成白色）。
 - Min(a,b)/Max(a,b) 双参数形式执行失败 → 用 If(c, a, b)。
 - 命令名大小写敏感：If（不是 IF）、Curve、Segment。
 - ★ 坐标字面量赋给小写名会被 GGB 隐式推断为 Vector（实测 contact/c2 等），后续 Segment(C, xxx) 引用即失败——坐标点一律用大写开头名字（A、B、Contact）。

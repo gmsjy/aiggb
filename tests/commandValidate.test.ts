@@ -208,24 +208,24 @@ test("splitTopLevelArgs 尊重嵌套", () => {
 
 // ── 9. 属性命令专项：值域 / 色名 / 3D 禁令 / 参数个数 ──
 
-test("SetColor 0~1 浮点误用被拦截并给出 ×255 换算", () => {
-  const r = validateGGBCommand("SetColor(c, 0.9, 0.2, 0.2)");
-  assert.equal(r.ok, false, "0~1 浮点必须被拦截");
-  assert.match(r.message, /0~255/);
-  assert.match(r.message, /230/, "应给出 0.9→230 的换算提示");
+test("SetColor 0~255 整数误用被拦截并给出 ÷255 换算", () => {
+  const r = validateGGBCommand("SetColor(c, 230, 50, 50)");
+  assert.equal(r.ok, false, "0~255 整数必须被拦截（引擎 ×255 钳成白色）");
+  assert.match(r.message, /0~1/);
+  assert.match(r.message, /0\.902/, "应给出 230→0.902 的换算提示");
 });
 
-test("SetColor 0~255 整数合法通过（不误杀）", () => {
-  for (const cmd of ["SetColor(c, 230, 51, 51)", "SetColor(c, 0, 0, 0)", "SetColor(c, 255, 255, 255)"]) {
+test("SetColor 0~1 浮点合法通过（不误杀）", () => {
+  for (const cmd of ["SetColor(c, 0.9, 0.2, 0.2)", "SetColor(c, 0, 0, 0)", "SetColor(c, 1, 1, 1)", "SetColor(c, 0.5, 0.5, 0.5)"]) {
     const r = validateGGBCommand(cmd);
     assert.equal(r.ok, true, `应通过：${cmd}，实际：${r.message}`);
   }
 });
 
-test("SetColor 超出 0~255 被拦截", () => {
-  const r = validateGGBCommand("SetColor(c, 300, 51, 51)");
+test("SetColor 负值被拦截", () => {
+  const r = validateGGBCommand("SetColor(c, -0.1, 0.5, 0.5)");
   assert.equal(r.ok, false);
-  assert.match(r.message, /0~255/);
+  assert.match(r.message, /0~1/);
 });
 
 test("SetColor 表达式参数不误杀（非字面量交给引擎）", () => {
@@ -302,12 +302,12 @@ test("mode 缺省时不触发 3D 禁令（向后兼容）", () => {
 });
 
 test("3D 模式：SetColor（2d+3d 双模式命令）不被禁令误杀", () => {
-  const r = validateGGBCommand("SetColor(ball, 230, 51, 51)", "3d");
+  const r = validateGGBCommand("SetColor(ball, 0.9, 0.2, 0.2)", "3d");
   assert.equal(r.ok, true, `实际：${r.message}`);
 });
 
 test("SetColor 2 参形态收到数字被拦截（提示 4 参 RGB 形态）", () => {
-  const r = validateGGBCommand("SetColor(c, 230)");
+  const r = validateGGBCommand("SetColor(c, 0.9)");
   assert.equal(r.ok, false);
   assert.match(r.message, /4 个参数/);
 });

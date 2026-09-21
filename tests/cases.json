@@ -984,7 +984,7 @@
     {
       "id": "H-regr-setcolor-int",
       "category": "highschool",
-      "description": "3D回归：SetColor RGB 必须是 0-255 整数",
+      "description": "3D回归：SetColor RGB 是 0~1 浮点（引擎按 ×255 解析，0~255 整数渲染成白色）",
       "input": "画一个红色球体",
       "domain": "highschool",
       "expected": {
@@ -992,7 +992,7 @@
           "Sphere"
         ],
         "mustNotPatterns": [
-          "SetColor\\([^)]*\\b\\d\\.\\d+\\b"
+          "SetColor\\([^)]*,\\s*(?!0?\\.)(?!\\.)\\d{2,}\\b"
         ],
         "executeSuccessRate": 1
       }

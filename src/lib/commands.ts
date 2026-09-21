@@ -27,7 +27,7 @@ export const GGB_5STAGE_FLOW = `
 ②★ 正方体优先用 Cube(A,B) 两点形式：A、B 为底面一条棱的相邻顶点，第三个顶点自动生成，正方体可绕 AB 边旋转。避免 Cube(A,B,C)——三点必须精确构成正方形否则只画点不出体。需要固定朝向时才用 Cube(A,B,C) 并确保三点构成正方形。
 ③IntersectPath(plane,poly) 得截面
 ④SetViewDirection 在纯 3D applet 中不可用，禁止生成
-⑤SetColor obj,r,g,b 中 r/g/b 必须是 0-255 整数（如 SetColor(c, 230, 50, 50)），禁止 0~1 浮点数
+⑤SetColor obj,r,g,b 中 r/g/b 是 0~1 浮点（如 SetColor(c, 0.9, 0.2, 0.2)）；写 0~255 整数会被引擎 ×255 钳成白色（5.4.927 实测 + 官方手册）
 ⑥SetFilling 在 3D 中对 Sphere/Cube 等立体无效——用 style op 的 opacity 字段替代
 ⑦SetAxesRatio 在 3D 中不可靠——如需等比例坐标轴用 view op 替代（见 3D 模式规则）
 `;
