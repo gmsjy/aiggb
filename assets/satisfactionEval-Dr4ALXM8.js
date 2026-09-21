@@ -1,4 +1,4 @@
-import{a as e,i as t,n,o as r,r as i,t as a}from"./index-CloeG4DE.js";var o=e({satisfied:t(),issues:i(r().max(120)).max(5),summary:r().max(200)}),s=`你是 GeoGebra 图形逻辑审查员。对照【精炼绘图规格】检查【当前画布快照】，判断是否满足要求。
+import{a as e,i as t,n,o as r,r as i,t as a}from"./index-B_7pirY-.js";var o=e({satisfied:t(),issues:i(r().max(120)).max(5),summary:r().max(200)}),s=`你是 GeoGebra 图形逻辑审查员。对照【精炼绘图规格】检查【当前画布快照】，判断是否满足要求。
 
 规则：
 1. 规格明确要求的对象是否都存在？
@@ -36,4 +36,4 @@ ${t.map((e,t)=>`${t+1}. ${e}`).join(`
 
 输出 JSON：
 {"satisfied":true/false,"issues":["问题描述"],"summary":"一句话总结"}`;async function f(e,t,r,i,s,c,l){if(!r.trim())return{satisfied:!0,issues:[],summary:`无截图，跳过视觉核对`};let u=c??a,f={...e,reasoningEffort:void 0},p=[{role:`system`,content:d},{role:`user`,content:[{type:`text`,text:`【题目要求】\n${t}`},{type:`image_url`,image_url:{url:r}}]}];try{let t=await u(f,p,i,s??e.model,4096,!1,l);if(t.trim()||(console.warn(`[satisfactionEval] ${n()} 视觉审查空响应，重试 1 次`),t=await u(f,p,i,s??e.model,4096,!1,l)),!t.trim())return{satisfied:!0,issues:[],summary:`视觉审查空响应，跳过`};let r=t.trim().replace(/^```json?\s*/,``).replace(/\s*```$/,``).replace(/^\uFEFF/,``),a;try{a=JSON.parse(r)}catch{let e=r.match(/\{[\s\S]*\}/);if(!e)throw Error(`视觉审查输出非 JSON`);a=JSON.parse(e[0])}typeof a.satisfied==`string`&&(a.satisfied=a.satisfied.toLowerCase()===`true`);let c=o.safeParse(a);return c.success?c.data:{satisfied:!!a.satisfied,issues:Array.isArray(a.issues)?a.issues.slice(0,5):[],summary:typeof a.summary==`string`?a.summary.slice(0,200):`视觉审查解析异常`}}catch(e){if(e instanceof DOMException&&e.name===`AbortError`)throw e;return console.warn(`[satisfactionEval] ${n()} 视觉审查调用失败，跳过`,e),{satisfied:!0,issues:[],summary:`视觉审查失败：${e instanceof Error?e.message.slice(0,100):`未知`}`}}}export{u as buildSatisfactionRepairPrompt,l as evaluateSatisfaction,f as evaluateVisual};
-//# sourceMappingURL=satisfactionEval-By5phvM2.js.map
+//# sourceMappingURL=satisfactionEval-Dr4ALXM8.js.map
