@@ -322,3 +322,21 @@ test("SetAnimating（KB 补录条目）参数合法通过", () => {
   const r = validateGGBCommand("SetAnimating(t, false)");
   assert.equal(r.ok, true, `实际：${r.message}`);
 });
+
+// ── 10. scripting 语句嵌套（Set*/Show* 嵌进 Sequence/Zip 表达式位置）──
+
+test("scripting 语句嵌进 Sequence 被拦截（用户实例：批量显隐）", () => {
+  const r = validateGGBCommand(
+    "Sequence(SetVisibleInView(Element({a,b,c,d,e,f,f_1,g,g_1,h,h_1,i,i_1,j,j_1,k,l,m,n,p,q,r,s,t},u),1,false),u,1,24)"
+  );
+  assert.equal(r.ok, false, "Set* 嵌 Sequence 必须被拦截");
+  assert.match(r.message, /语句/);
+  assert.match(r.message, /逐条|换行/, "应给出批量替代方案");
+});
+
+test("scripting 语句嵌 Zip 被拦截；头部语句与表达式命令不受影响", () => {
+  assert.equal(validateGGBCommand("Zip(SetVisibleInView(k, 1, false), k, {a, b})").ok, false);
+  assert.equal(validateGGBCommand("SetVisibleInView(c, 1, false)").ok, true, "头部语句应放行");
+  assert.equal(validateGGBCommand("L1 = Sequence(Circle((u, 5), 0.3), u, 1, 4)").ok, true, "表达式命令应放行");
+  assert.equal(validateGGBCommand('T1 = Text("SetColor 不该被误伤")').ok, true, "字符串字面量不触发");
+});

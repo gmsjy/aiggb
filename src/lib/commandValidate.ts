@@ -18,7 +18,9 @@
  *   5. 命令参数个数（对照 ggbKB 的 paramCount）
  *   6. 表达式以运算符结尾
  *   7. 属性命令专项（SetColor/SetFilling/SetLineOpacity…）：
- *      3D 模式禁令（传入 mode 时）、RGB 值域 0~255、透明度 0~1、颜色名形态
+ *      3D 模式禁令（传入 mode 时）、RGB 值域 0~1、透明度 0~1、颜色名形态
+ *   8. scripting 语句嵌套：Set＊、Show＊、ZoomIn 等语句不产出值，只能作整条命令头部，
+ *      嵌进 Sequence/Zip/If 等表达式位置引擎必拒（5.4.927 实测）
  */
 
 import { findCommand } from "./ggbKB";
@@ -36,7 +38,8 @@ export type CommandIssueKind =
   | "trailing-operator"
   | "mode-forbidden"
   | "value-range"
-  | "color-name";
+  | "color-name"
+  | "scripting-nest";
 
 export interface CommandIssue {
   kind: CommandIssueKind;
@@ -523,6 +526,32 @@ function validateSetProperty(
   }
 }
 
+// ── scripting 语句嵌套检查 ──
+
+/** scripting 命令调用形态（与 ggbBridge.isScriptingCommand 同语义：Set＊ / Show＊ 前缀 + 动画/视窗语句）。
+ *  要求前缀后跟大写字母，避免误伤 Setting 等普通标识符。 */
+const SCRIPTING_CALL_RE =
+  /\b(Set[A-Z]\w*|Show[A-Z]\w*|ZoomIn|ZoomOut|CenterView|Pan|StartAnimation|StopAnimation)\s*\(/;
+
+/** scripting 语句（Set＊、Show＊ 等）不产出值，GGB 只允许其作整条命令头部；
+ *  嵌进 Sequence/Zip/If 等表达式位置引擎必拒（5.4.927 实测，含用户实例：
+ *  Sequence(SetVisibleInView(Element({…},u),1,false),u,1,24)）。 */
+function scriptingNestIssue(cmd: string): CommandIssue | null {
+  // 字符串字面量内容清空，避免 "SetColor" 之类文本误触发
+  const body = stripStrings(cmd).replace(/^\s*[A-Za-z_]\w*(?:\([^)]*\))?\s*=\s*/, "");
+  const headM = /^([A-Za-z_]\w*)\s*\(/.exec(body);
+  if (headM && SCRIPTING_CALL_RE.test(`${headM[1]}(`)) return null; // 头部语句本身合法
+  const m = SCRIPTING_CALL_RE.exec(body);
+  if (!m) return null;
+  return {
+    kind: "scripting-nest",
+    message:
+      `检测到 scripting 语句 ${m[1]}(...) 嵌套在表达式中 —— Set*/Show* 等**只产生副作用、不返回值**，` +
+      `GGB 只允许它们作整条命令的头部，嵌进 Sequence/Zip/If 等表达式位置必失败（5.4.927 实测）。` +
+      `批量操作请**逐条输出命令**（每条一个 eval），或用 eval_raw 以换行符分隔多条命令（实测可行；分号分隔无效）。`,
+  };
+}
+
 // ── 主校验入口 ──
 
 /** 命令参数个数表（与 ggbKB 的 paramCount 保持一致的最小集合，避免循环依赖）
@@ -621,6 +650,10 @@ export function validateGGBCommand(cmd: string, mode?: "2d" | "3d"): ValidationR
   if (cmdName && args) {
     validateSetProperty(cmdName, args, mode, issues);
   }
+
+  // ⑦ scripting 语句嵌套（Set*/Show* 嵌进 Sequence/Zip 等表达式位置）
+  const scriptingNest = scriptingNestIssue(raw);
+  if (scriptingNest) issues.push(scriptingNest);
 
   return { ok: issues.length === 0, issues, message: formatIssues(raw, issues) };
 }

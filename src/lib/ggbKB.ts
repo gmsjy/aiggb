@@ -552,6 +552,18 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     note: "r/g/b 是 0~1 浮点（引擎按 ×255 解析）；写 0~255 整数会被钳成白色",
   },
   {
+    name: "SetVisibleInView", signature: "SetVisibleInView(obj, 1, true/false)", paramCount: [3, 3],
+    modes: ["2d", "3d"], category: "style",
+    examples: ["SetVisibleInView(c, 1, false)"],
+    note: "对象显隐唯一命令形态（第二参是视图号 1/2）；GGB 无 SetVisible 命令；Set* 是语句，不能嵌套进 Sequence/Zip（批量逐条发命令或 eval_raw 换行分隔）",
+  },
+  {
+    name: "SetConditionToShowObject", signature: "SetConditionToShowObject(obj, condition)", paramCount: [2, 2],
+    modes: ["2d", "3d"], category: "style",
+    examples: ["SetConditionToShowObject(c, n > 2)"],
+    note: "按条件显隐（如与滑块联动）；查询显隐状态无命令形态，用 get_object_info 工具",
+  },
+  {
     name: "SetLineStyle", signature: "SetLineStyle(obj, n)", paramCount: [2, 2],
     modes: ["2d", "3d"], category: "style",
     examples: ["SetLineStyle(c, 1)"],
@@ -890,6 +902,9 @@ export const HALLUCINATION_MAP: HallucinationEntry[] = [
   { hallucination: "SetOpaque",       correct: "SetLineOpacity", reason: "GeoGebra 无 SetOpaque——透明度用 SetLineOpacity" },
   { hallucination: "El",              correct: "Element",        reason: "GeoGebra 无 El——列表取元素用 Element(list, n)（5.4.927 实测可用）" },
   { hallucination: "Round",           correct: "round",          reason: "自托管 bundle（5.4.927）无大写 Round 命令——取整用小写函数 round(x, n)（小写实测可用）" },
+  { hallucination: "SetVisible",      correct: "SetVisibleInView(obj, 1, true/false)", reason: "GGB 无 SetVisible 命令（5.4.927 实测静默 no-op）——显隐补视图号：SetVisibleInView(obj, 1, false)" },
+  { hallucination: "GetVisibleInView", correct: "无命令替代（get_object_info 工具）", reason: "GGB 无 GetVisibleInView 查询命令——显隐状态用 get_object_info 工具读取" },
+  { hallucination: "IsVisibleInView", correct: "无命令替代（get_object_info 工具）", reason: "GGB 无 IsVisibleInView 查询命令——显隐状态用 get_object_info 工具读取" },
 ];
 
 // ── 辅助函数 ──

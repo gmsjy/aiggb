@@ -439,6 +439,7 @@ test("create_spring：默认圈数 + 重合拦截 + 映射分段数", () => {
   assert.equal(cmds.length, 3, "长度助手 + PolyLine + 隐藏");
   assert.match(cmds[1], /PolyLine\(Sequence\(/);
   assert.match(cmds[1], /k \/ 12/, "coils=6 → 2×6=12 分段");
+  assert.match(cmds[2], /SetVisibleInView\(sp3Len, 1, false\)/, "隐藏助手用 SetVisibleInView（SetVisible 在 5.4.927 静默 no-op）");
 });
 
 test("create_fractal：四种 kind 生成 PolyLine + 深度护栏", () => {

@@ -161,7 +161,7 @@ function buildSpringCommands(
   return [
     `${lenName} = Distance(${from}, ${to}) + 0.001`,
     `${name} = PolyLine(Sequence(${pts}, k, 0, ${2 * coils}))`,
-    `SetVisible(${lenName}, false)`,
+    `SetVisibleInView(${lenName}, 1, false)`,
   ];
 }
 
@@ -582,7 +582,16 @@ function dispatch(
       const type = api.getObjectType(n);
       const cmd = api.getCommandString(n);
       const value = api.getValueString?.(n) ?? "";
-      return `${n}：类型=${type}，定义=${cmd}${value ? "，值=" + value : ""}`;
+      // 可见性：getVisible 只读主标志位；SetVisibleInView 的视图掩码记在 <show ... ev="...">。
+      // 实测（5.4.927）：命令隐藏 → object="true" + ev 出现；JS setVisible(false) → object="false"。
+      let visible = api.getVisible(n);
+      const showM = /<show\b[^>]*\/>/.exec(String(api.getXML?.(n) ?? ""));
+      if (showM) {
+        const objM = /object="(true|false)"/.exec(showM[0]);
+        if (objM) visible = objM[1] === "true";
+        if (/ ev="/.test(showM[0])) visible = false;
+      }
+      return `${n}：类型=${type}，定义=${cmd}${value ? "，值=" + value : ""}，可见=${visible ? "是" : "否"}`;
     }
 
     case "list_objects": {
@@ -1052,8 +1061,8 @@ export function toolCallToEvalCommands(name: string, argsJson: string): string[]
         `Mag${n} = sqrt((${exprX})^2 + (${exprY})^2)`,
         `Tip${n} = ${anchor} + (${exprX} * ${s}, ${exprY} * ${s})`,
         `${n} = Vector(${anchor}, Tip${n})`,
-        `SetVisible(Mag${n}, false)`,
-        `SetVisible(Tip${n}, false)`,
+        `SetVisibleInView(Mag${n}, 1, false)`,
+        `SetVisibleInView(Tip${n}, 1, false)`,
       ];
     }
     case "create_readout": {

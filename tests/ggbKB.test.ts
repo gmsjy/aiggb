@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildCommandReference, findHallucination } from "../src/lib/ggbKB";
+import { buildCommandReference, findCommand, findHallucination } from "../src/lib/ggbKB";
 import { correctCommand } from "../src/lib/commandCorrect";
 import { buildTrajectoryRecord } from "../src/lib/trajectoryStore";
 import { TOOL_CATEGORIES, TOOL_SCHEMAS, buildToolCategoryOverview } from "../src/lib/tools";
@@ -37,6 +37,17 @@ test("3D 模式速查表含通用命令（Circle/Center 同时适用）", () => 
 test("HALLUCINATION_MAP 收录 El→Element / Round→round", () => {
   assert.equal(findHallucination("El")?.correct, "Element", "El 从无此命令，应映射 Element");
   assert.equal(findHallucination("Round")?.correct, "round", "大写 Round 在 5.4.927 不存在，应映射小写函数 round");
+});
+
+test("显隐命令家族：SetVisible 臆造映射 + 查询命令无替代 + KB 收录（5.4.927 实测）", () => {
+  // SetVisible 不存在（静默 no-op），映射到补视图号的 SetVisibleInView；
+  // correct 非单一词 → 只给建议不自动替换（避免 2 参→3 参的参数错位）
+  const sv = findHallucination("SetVisible");
+  assert.ok(sv?.correct.includes("SetVisibleInView"), "SetVisible 应映射 SetVisibleInView 指引");
+  assert.equal(findHallucination("GetVisibleInView")?.correct.includes("get_object_info"), true, "查询命令应指向 get_object_info");
+  assert.equal(findHallucination("IsVisibleInView")?.correct.includes("get_object_info"), true, "查询命令应指向 get_object_info");
+  assert.ok(findCommand("SetVisibleInView"), "KB 应收录 SetVisibleInView");
+  assert.ok(findCommand("SetConditionToShowObject"), "KB 应收录 SetConditionToShowObject");
 });
 
 test("correctCommand 自动纠正 El 与大写 Round，小写 round 豁免不受影响", () => {
