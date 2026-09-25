@@ -159,16 +159,6 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     examples: ["r = Ray(A, B)"],
   },
   {
-    name: "PerpendicularLine", signature: "PerpendicularLine(P, l)", paramCount: [2, 2],
-    modes: ["2d", "3d"], category: "line",
-    examples: ["pl = PerpendicularLine(P, l)"],
-  },
-  {
-    name: "ParallelLine", signature: "ParallelLine(P, l)", paramCount: [2, 2],
-    modes: ["2d", "3d"], category: "line",
-    examples: ["pl = ParallelLine(P, l)"],
-  },
-  {
     name: "AngleBisector", signature: "AngleBisector(A, O, B)", paramCount: [3, 3],
     modes: ["2d", "3d"], category: "line",
     examples: ["b = AngleBisector(A, O, B)"],
@@ -220,6 +210,7 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     name: "Ellipse", signature: "Ellipse(F1, F2, a)", paramCount: [3, 3],
     modes: ["2d"], category: "circle",
     examples: ["e = Ellipse(F1, F2, 3)"],
+    note: "a 是半长轴，必须大于 |F1F2|/2——a 偏小不会报错而是**静默退化成双曲线**（实测）",
   },
   {
     name: "Hyperbola", signature: "Hyperbola(F1, F2, a)", paramCount: [3, 3],

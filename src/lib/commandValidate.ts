@@ -21,6 +21,9 @@
  *      3D 模式禁令（传入 mode 时）、RGB 值域 0~1、透明度 0~1、颜色名形态
  *   8. scripting 语句嵌套：Set＊、Show＊、ZoomIn 等语句不产出值，只能作整条命令头部，
  *      嵌进 Sequence/Zip/If 等表达式位置引擎必拒（5.4.927 实测）
+ *   9. 函数名大小写：Sin/Cos/Tan/Sqrt 等大写形式在本 bundle 一律失败，只存在小写函数
+ *  10. 保留对象名：If / xAxis / yAxis / zAxis / x / y / z / e 不能用作赋值名
+ *      （实测 If(x)=… 样式无法引用、xAxis=Line(…) 恒失败、e 赋值破坏科学计数法字面量）
  */
 
 import { findCommand } from "./ggbKB";
@@ -39,7 +42,9 @@ export type CommandIssueKind =
   | "mode-forbidden"
   | "value-range"
   | "color-name"
-  | "scripting-nest";
+  | "scripting-nest"
+  | "func-case"
+  | "reserved-name";
 
 export interface CommandIssue {
   kind: CommandIssueKind;
@@ -535,21 +540,93 @@ const SCRIPTING_CALL_RE =
 
 /** scripting 语句（Set＊、Show＊ 等）不产出值，GGB 只允许其作整条命令头部；
  *  嵌进 Sequence/Zip/If 等表达式位置引擎必拒（5.4.927 实测，含用户实例：
- *  Sequence(SetVisibleInView(Element({…},u),1,false),u,1,24)）。 */
+ *  Sequence(SetVisibleInView(Element({…},u),1,false),u,1,24)）。
+ *  ★ 按**行**检查：eval_raw 合法形态是换行分隔的多条语句（表达式行与语句行混排），
+ *  整串扫描会把「语句行在表达式行之后」误判为嵌套。 */
 function scriptingNestIssue(cmd: string): CommandIssue | null {
-  // 字符串字面量内容清空，避免 "SetColor" 之类文本误触发
-  const body = stripStrings(cmd).replace(/^\s*[A-Za-z_]\w*(?:\([^)]*\))?\s*=\s*/, "");
-  const headM = /^([A-Za-z_]\w*)\s*\(/.exec(body);
-  if (headM && SCRIPTING_CALL_RE.test(`${headM[1]}(`)) return null; // 头部语句本身合法
-  const m = SCRIPTING_CALL_RE.exec(body);
-  if (!m) return null;
-  return {
-    kind: "scripting-nest",
-    message:
-      `检测到 scripting 语句 ${m[1]}(...) 嵌套在表达式中 —— Set*/Show* 等**只产生副作用、不返回值**，` +
-      `GGB 只允许它们作整条命令的头部，嵌进 Sequence/Zip/If 等表达式位置必失败（5.4.927 实测）。` +
-      `批量操作请**逐条输出命令**（每条一个 eval），或用 eval_raw 以换行符分隔多条命令（实测可行；分号分隔无效）。`,
-  };
+  const body = stripStrings(cmd); // 字符串字面量内容清空，避免 "SetColor" 之类文本误触发
+  for (const line of body.split("\n")) {
+    const t = line.replace(/^\s*[A-Za-z_]\w*(?:\([^)]*\))?\s*=\s*/, "").trim();
+    if (!t) continue;
+    const headM = /^([A-Za-z_]\w*)\s*\(/.exec(t);
+    if (headM && SCRIPTING_CALL_RE.test(`${headM[1]}(`)) continue; // 本行是合法语句头部
+    const m = SCRIPTING_CALL_RE.exec(t);
+    if (!m) continue;
+    return {
+      kind: "scripting-nest",
+      message:
+        `检测到 scripting 语句 ${m[1]}(...) 嵌套在表达式中 —— Set*/Show* 等**只产生副作用、不返回值**，` +
+        `GGB 只允许它们作整条命令的头部，嵌进 Sequence/Zip/If 等表达式位置必失败（5.4.927 实测）。` +
+        `批量操作请**逐条输出命令**（每条一个 eval），或用 eval_raw 以换行符分隔多条命令（实测可行；分号分隔无效）。`,
+    };
+  }
+  return null;
+}
+
+// ── 函数名大小写检查 ──
+
+/** 只存在小写形式的数学函数（5.4.927 实测：大写 Sin/Cos/Tan/Sqrt/Abs/Exp/Log/Ln/Floor/Ceil/Round 一律失败）。
+ *  ⚠ 不含 Min/Max/Mod——它们是**大写命令**（Min({列表}) 合法），不在函数大小写检查范围。 */
+const LOWERCASE_FUNCS =
+  "sin|cos|tan|asin|acos|atan|atan2|sinh|cosh|tanh|sqrt|abs|exp|log|ln|floor|ceil|round";
+
+/** 大写函数调用检测：fsin(x) = Sin(x/2)*3+6、Curve(Cos(t)…)、Sequence((k, Sin(k))…) 均静默失败 */
+function funcCaseIssue(cmd: string): CommandIssue | null {
+  const body = stripStrings(cmd); // 字符串字面量清空，避免 "Sin" 文本误触发
+  const re = new RegExp(`\\b(${LOWERCASE_FUNCS})\\s*\\(`, "gi");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    const hit = m[1];
+    if (hit !== hit.toLowerCase()) {
+      return {
+        kind: "func-case",
+        message:
+          `检测到大写函数 ${hit}(...) —— 函数名**大小写敏感且只有小写形式**（实测 Sin/Cos/Tan/Sqrt/Abs/Exp/Log/Ln/Floor/Ceil/Round 大写一律执行失败）。` +
+          `请改为小写 ${hit.toLowerCase()}(...)。注意 Min/Max/Mod 是大写命令，不受此限。`,
+      };
+    }
+  }
+  return null;
+}
+
+// ── 保留对象名检查 ──
+
+/** GGB 保留对象名：赋值给这些名字必然与内置语义冲突（整机实测 + 官方语义）。
+ *  - If：内置条件命令（实测 `If(x)=A*sin(x)` 创建出的函数无法被 style/引用正常工作，
+ *    修复回路多轮都修不好——2026-09 整机测试发现，模板场景 4 轮修复失败全源于此）
+ *  - xAxis/yAxis/zAxis：画布自带坐标轴的保留名（实测 `xAxis=Line((0,0),(1,0))` 恒返回 false）；
+ *    画布本来就有坐标轴，**根本不需要创建**
+ *  - x/y/z：坐标变量符号（赋值后坐标字面量语义被遮蔽）
+ *  - e：欧拉数（赋值后 `3e8` 会被拆成 3×e×8，破坏一切科学计数法字面量——见 AGENTS.md 实测条目） */
+const RESERVED_OBJECT_NAMES = new Set(["If", "xAxis", "yAxis", "zAxis", "x", "y", "z", "e"]);
+
+/** 赋值对象名与保留名/内置命令名冲突检测（按行，eval_raw 换行分隔合法）。
+ *  只查赋值左侧名字；`c1=Circle(O,r)` 这类「调用命令并把结果赋给普通名」是正常形态不受影响。 */
+function reservedNameIssue(cmd: string): CommandIssue | null {
+  const body = stripStrings(cmd); // 字符串字面量清空，避免 caption 文本误触发
+  for (const line of body.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    const m = /^([A-Za-z_]\w*)(?:\([^)]*\))?\s*=(?!=)/.exec(t);
+    if (!m) continue;
+    const name = m[1];
+    if (!RESERVED_OBJECT_NAMES.has(name)) continue;
+    const why =
+      name === "If"
+        ? "If 是内置条件命令（If(条件, 则, 否则)），实测赋值创建的函数无法被样式命令与几何引用正常工作"
+        : name === "xAxis" || name === "yAxis" || name === "zAxis"
+          ? `${name} 是画布自带坐标轴的保留名，无需也无法创建（实测 evalCommand 恒返回 false）`
+          : name === "e"
+            ? "e 是欧拉数，赋值后 3e8 这类科学计数法字面量会被引擎拆成 3×e×8（实测）"
+            : `${name} 是坐标变量符号，赋值会遮蔽坐标语义`;
+    return {
+      kind: "reserved-name",
+      message:
+        `检测到对象赋值名 ${name} 与 GGB 保留名冲突 —— ${why}。` +
+        `请换用不冲突的名字（函数建议 f/g/h 或语义名如 traj/poly；坐标轴不需要创建，画布自带）。`,
+    };
+  }
+  return null;
 }
 
 // ── 主校验入口 ──
@@ -654,6 +731,14 @@ export function validateGGBCommand(cmd: string, mode?: "2d" | "3d"): ValidationR
   // ⑦ scripting 语句嵌套（Set*/Show* 嵌进 Sequence/Zip 等表达式位置）
   const scriptingNest = scriptingNestIssue(raw);
   if (scriptingNest) issues.push(scriptingNest);
+
+  // ⑧ 函数名大小写（大写 Sin/Cos 等必失败）
+  const funcCase = funcCaseIssue(raw);
+  if (funcCase) issues.push(funcCase);
+
+  // ⑨ 保留对象名（If / xAxis / yAxis / x/y/z / e 赋值必冲突）
+  const reserved = reservedNameIssue(raw);
+  if (reserved) issues.push(reserved);
 
   return { ok: issues.length === 0, issues, message: formatIssues(raw, issues) };
 }

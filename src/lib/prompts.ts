@@ -202,6 +202,7 @@ function buildPromptBase(appMode: "2d" | "3d", domain: Domain, phase: "full" | "
     "★ 大写 A~Z 单字母 = Point 类型。禁止用作数值变量。",
     "★ 小写 u/v/w = Vector 类型。速度取值用 speed/vMag/vel 禁止用 v。",
     "★ 小写 f/g/h = Function 类型。其他小写可自由作数值。",
+    "★ 对象名禁用 GGB 保留名：If 是内置条件命令（If(x)=… 必失败）；xAxis/yAxis 是画布自带坐标轴（不需要创建，创建必失败）；x/y/z 是坐标变量；e 是欧拉数。函数命名用 f/g/h 或语义名（traj/poly）。",
     "★ 位移/速度矢量用 vector 或 forceDiagram op（它们内部已处理 Point+Vector 安全转换）。",
     "★ 分母含 (x-x0)^2+y^2 必须 +0.001 防除零。",
     "",

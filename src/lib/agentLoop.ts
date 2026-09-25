@@ -242,6 +242,8 @@ ${canvasGuide}
 - 对象显隐：SetVisibleInView(obj, 1, true/false)（无 SetVisible 命令）；条件显隐 SetConditionToShowObject(obj, 条件)；查询显隐状态无命令形态，用 get_object_info 工具。Set* 是语句，不能嵌套进 Sequence/Zip——批量显隐逐条发命令或 eval_raw 换行分隔（分号无效）。
 - Min(a,b)/Max(a,b) 双参数形式执行失败 → 用 If(c, a, b)。
 - 命令名大小写敏感：If（不是 IF）、Curve、Segment。
+- ★ 对象名禁用 GGB 保留名（实测必失败）：If 是内置条件命令（If(x)=… 创建的函数无法被样式命令引用）；xAxis/yAxis/zAxis 是画布自带坐标轴，**不需要创建**（xAxis=Line(…) 恒返回 false）；x/y/z 是坐标变量；e 是欧拉数。函数命名用 f/g/h 或语义名（traj/poly）。
+- ★ 数学函数只有小写形式：sin/cos/tan/sqrt/abs/exp/log/ln/floor/ceil/round——大写 Sin/Cos/Sqrt 等一律执行失败（实测）；Min({列表})/Max({列表})/Mod(x,y) 才是大写命令。
 - ★ 坐标字面量赋给小写名会被 GGB 隐式推断为 Vector（实测 contact/c2 等），后续 Segment(C, xxx) 引用即失败——坐标点一律用大写开头名字（A、B、Contact）。
 - ★ Angle(P1, 顶点, P2) 三参必须全部是已声明的大写 Point：先建底角顶点与两边端点再取角；滑块 t 的大写 T 是不存在的名字。斜面倾角：ang = Angle(Hx, O, Ps)（Hx 水平参考点、O 底角、Ps 斜面上点）。
 - 角度标注直接 a1 = Angle(A, O, B)（自带弧线与度数显示，无需自造 Arc）。

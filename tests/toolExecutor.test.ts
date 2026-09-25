@@ -16,7 +16,8 @@ import {
   executeToolCall,
   executeToolCalls,
   toolCallToEvalCommands,
-  isEvalAutoSafe
+  isEvalAutoSafe,
+  buildFractalPolyLine,
 } from "../src/lib/toolExecutor";
 import { MockGGB } from "./mockGGB";
 import type { GGBAppletApi } from "../src/types/ggb";
@@ -439,6 +440,8 @@ test("create_spring：默认圈数 + 重合拦截 + 映射分段数", () => {
   assert.equal(cmds.length, 3, "长度助手 + PolyLine + 隐藏");
   assert.match(cmds[1], /PolyLine\(Sequence\(/);
   assert.match(cmds[1], /k \/ 12/, "coils=6 → 2×6=12 分段");
+  assert.match(cmds[1], /If\(Mod\(k, 2\) == 0, 0,/, "弹簧波形应为三角波（锯齿）");
+  assert.doesNotMatch(cmds[1], /sin\(/i, "不得残留正弦波（视觉审查发现平滑 S 形不像弹簧）");
   assert.match(cmds[2], /SetVisibleInView\(sp3Len, 1, false\)/, "隐藏助手用 SetVisibleInView（SetVisible 在 5.4.927 静默 no-op）");
 });
 
@@ -461,4 +464,46 @@ test("create_fractal：四种 kind 生成 PolyLine + 深度护栏", () => {
   const big = toolCallToEvalCommands("create_fractal", JSON.stringify({ name: "k2", kind: "koch", depth: 99 }));
   const segs = ((big[0].match(/\), \(/g) || []).length) + 1;
   assert.ok(segs <= 4501, `超限深度应被护栏截断（实际 ${segs} 段）`);
+});
+
+test("create_spring/分形：坐标归一化（深度 3 不得爆炸到 27 单位宽）", () => {
+  const r = buildFractalPolyLine("koch", 3);
+  assert.equal(r.segments, 64, "koch depth3 = 4^3 段");
+  // 解析所有坐标，最大边应 ≤ 1.001
+  const pairs = [...r.coords.matchAll(/\(([-\d.]+), ([-\d.]+)\)/g)].map(m => [Number(m[1]), Number(m[2])]);
+  const w = Math.max(...pairs.map(p => p[0]));
+  const h = Math.max(...pairs.map(p => p[1]));
+  assert.ok(w <= 1.001 && h <= 1.001, `归一化后外接框应 ≤1，实际宽=${w} 高=${h}`);
+});
+
+test("create_points：小写点名被 preflight 拦截（防 Vector 隐式推断）", () => {
+  const mock = new MockGGB();
+  const r = run(mock, "create_points", { points: [{ name: "ptA", x: 0, y: 0 }] });
+  assert.equal(r.success, false, "小写点名应被拦截");
+  assert.match(r.error ?? "", /Vector/);
+  assert.match(r.error ?? "", /PtA/, "应给出大写建议名");
+  const ok = run(mock, "create_points", { points: [{ name: "PtA", x: 0, y: 0 }] });
+  assert.equal(ok.success, true);
+  assert.ok(mock.exists("PtA") && mock.getObjectType("PtA") === "Point");
+});
+
+test("映射：physics_constants 科学计数法常量同样格式化（与 dispatch 一致）", () => {
+  const cmds = toolCallToEvalCommands("physics_constants", JSON.stringify({ names: ["Grav"] }));
+  assert.match(cmds[0], /^Grav = 6\.6743 \* 10\^\(-11\)$/, `实际：${cmds[0]}`);
+  assert.doesNotMatch(cmds[0], /e-11/i);
+});
+
+test("映射：attach_vector 自动归一化改为单位方向 × 1.5（对齐 dispatch 回退语义）", () => {
+  const cmds = toolCallToEvalCommands(
+    "attach_vector",
+    JSON.stringify({ name: "v1", anchor: "P0", exprX: "cos(omega)", exprY: "sin(omega)" })
+  );
+  assert.match(cmds[1], /Tipv1 = P0 \+ \(\(cos\(omega\)\) \/ Magv1 \* 1\.5, \(sin\(omega\)\) \/ Magv1 \* 1\.5\)/, `实际：${cmds[1]}`);
+  assert.doesNotMatch(cmds.join("\n"), /0\.2/, "不得残留旧的 0.2 硬编码回退");
+  // 显式 scale 时保持数值缩放形式（与 dispatch 一致）
+  const explicit = toolCallToEvalCommands(
+    "attach_vector",
+    JSON.stringify({ name: "v2", anchor: "P0", exprX: "2", exprY: "1", scale: 0.8 })
+  );
+  assert.match(explicit[1], /Tipv2 = P0 \+ \(2 \* 0\.8, 1 \* 0\.8\)/, `实际：${explicit[1]}`);
 });

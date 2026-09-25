@@ -13,7 +13,7 @@ import type { Command } from "./schema";
 import { shouldBatch, markRepaintBusy, REPAINT_GRACE_MS } from "./repaintGate";
 import { validateGGBCommand } from "./commandValidate";
 import type { GGBAppletApi } from "../types/ggb";
-import { PHYSICS_CONSTANTS } from "./physics";
+import { PHYSICS_CONSTANTS, formatGGBNumber } from "./physics";
 
 /** 全局自增临时对象 id：避免 vector/forceDiagram 的辅助矢量名跨命令复用导致动态污染 */
 let _tmpSeq = 0;
@@ -371,33 +371,37 @@ function executeOne(api: GGBAppletApi, cmd: Command, appMode?: "2d" | "3d"): Exe
         if (cmd.opacity !== undefined) {
           // ★ SetLineOpacity 无原生 API，只能走 evalCommand——但它是 scripting 命令，
           //    成功也返回 false，且失败（如 3D 立体不支持）同样返回 false，返回值完全不可信。
-          //    生效判定分环境：真实 GGB（有 getXML）以 XML 实读 lineStyle opacity 为准
-          //    （未生效才回退 SetFilling，同样实读验证——否则 2D 圆会被无谓双重填充，历史灰盘根因）；
-          //    测试 mock（无 getXML）无从实读，退回信任返回值语义
+          //    生效判定分环境：真实 GGB（有 getXML）以 XML 实读为准（否则 2D 圆会被无谓双重填充，历史灰盘根因）。
+          //    ★ 封闭可填充对象（圆/椭圆/多边形等 conic 类）的 opacity 意图是**填充**：
+          //    SetLineOpacity 只淡边线且对圆恒“生效”，内部永远空（实测视觉审查发现）——此类直接走 SetFilling。
           const targetOpacity = cmd.opacity;
-          const opacityCmd = `SetLineOpacity(${cmd.target}, ${targetOpacity})`;
-          expanded.push(opacityCmd);
-          const lineOk = api.evalCommand(opacityCmd);
+          const targetType = String((api as unknown as { getObjectType?: (n: string) => string }).getObjectType?.(cmd.target) ?? "").toLowerCase();
+          const fillFirst = /conic|circle|ellipse|parabola|hyperbola|polygon/.test(targetType);
+          const primaryCmd = fillFirst ? `SetFilling(${cmd.target}, ${targetOpacity})` : `SetLineOpacity(${cmd.target}, ${targetOpacity})`;
+          const secondaryCmd = fillFirst ? `SetLineOpacity(${cmd.target}, ${targetOpacity})` : `SetFilling(${cmd.target}, ${targetOpacity})`;
+          expanded.push(primaryCmd);
+          const primOk = api.evalCommand(primaryCmd);
           const canVerify = typeof (api as unknown as { getXML?: unknown }).getXML === "function";
-          let lineApplied: boolean;
+          const primField = fillFirst ? "fillOpacity" : "lineOpacity";
+          let primApplied: boolean;
           if (canVerify) {
-            const lo = readOpacity(api, cmd.target).lineOpacity;
-            lineApplied = lo !== undefined ? Math.abs(lo - targetOpacity) <= 0.02 : targetOpacity >= 0.99;
+            const po = readOpacity(api, cmd.target)[primField];
+            primApplied = po !== undefined ? Math.abs(po - targetOpacity) <= 0.02 : targetOpacity >= 0.99;
           } else {
-            lineApplied = lineOk;
+            primApplied = primOk;
           }
-          if (!lineApplied) {
-            const fallbackCmd = `SetFilling(${cmd.target}, ${targetOpacity})`;
-            expanded.push(fallbackCmd);
-            const fillOk = api.evalCommand(fallbackCmd);
-            let fillApplied: boolean;
+          if (!primApplied) {
+            expanded.push(secondaryCmd);
+            const secOk = api.evalCommand(secondaryCmd);
+            const secField = fillFirst ? "lineOpacity" : "fillOpacity";
+            let secApplied: boolean;
             if (canVerify) {
-              const fo = readOpacity(api, cmd.target).fillOpacity;
-              fillApplied = fo !== undefined && Math.abs(fo - targetOpacity) <= 0.02;
+              const so = readOpacity(api, cmd.target)[secField];
+              secApplied = so !== undefined && Math.abs(so - targetOpacity) <= 0.02;
             } else {
-              fillApplied = fillOk;
+              secApplied = secOk;
             }
-            if (!fillApplied) {
+            if (!secApplied) {
               return {
                 ok: false,
                 command: cmd,
@@ -596,7 +600,7 @@ function executeOne(api: GGBAppletApi, cmd: Command, appMode?: "2d" | "3d"): Exe
           const def = PHYSICS_CONSTANTS[name];
           if (!def) continue;
           if (api.exists(name)) continue; // 已存在不重复
-          const c = `${name} = ${def.value}`;
+          const c = `${name} = ${formatGGBNumber(def.value)}`;
           expanded.push(c);
           api.evalCommand(c);
           api.setVisible(name, false); // 常量不显示在画布

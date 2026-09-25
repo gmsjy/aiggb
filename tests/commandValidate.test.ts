@@ -340,3 +340,60 @@ test("scripting 语句嵌 Zip 被拦截；头部语句与表达式命令不受�
   assert.equal(validateGGBCommand("L1 = Sequence(Circle((u, 5), 0.3), u, 1, 4)").ok, true, "表达式命令应放行");
   assert.equal(validateGGBCommand('T1 = Text("SetColor 不该被误伤")').ok, true, "字符串字面量不触发");
 });
+
+// ── 11. 函数名大小写（5.4.927 实测：大写 Sin/Cos 等一律失败）──
+
+test("大写 Sin 函数定义被拦截并提示小写", () => {
+  const r = validateGGBCommand("fsin(x) = Sin(x / 2) * 3 + 6");
+  assert.equal(r.ok, false, "大写 Sin 必须被拦截");
+  assert.match(r.message, /小写/);
+  assert.match(r.message, /sin\(/, "应给出小写替换形式");
+});
+
+test("表达式/Sequence/Curve 中的大写函数被拦截；Min 列表命令不受影响", () => {
+  assert.equal(validateGGBCommand("cur1 = Curve(Cos(t), Sin(t), t, 0, 6.28)").ok, false);
+  assert.equal(validateGGBCommand("sA = Sequence((k, Sin(k)), k, 1, 3)").ok, false);
+  assert.equal(validateGGBCommand("vA = Sqrt(2)").ok, false);
+  assert.equal(validateGGBCommand("fsin(x) = sin(x / 2) * 3 + 6").ok, true, "小写合法");
+  assert.equal(validateGGBCommand("Tm1 = Min({1, 2, 3})").ok, true, "Min 列表命令是大写，不得误伤");
+  assert.equal(validateGGBCommand('T2 = Text("Sin 不该被误伤")').ok, true, "字符串字面量不触发");
+});
+
+test("eval_raw 多行脚本（表达式行 + 语句行混排）合法通过", () => {
+  // 换行分隔是 scripting-nest 提示中推荐的合法形态，整串扫描不得误拦
+  const r = validateGGBCommand(
+    "L1 = Sequence(Circle((u, 1), 0.2), u, 1, 3)\nSetVisibleInView(a, 1, false)"
+  );
+  assert.equal(r.ok, true, `实际：${r.message}`);
+  // 单行内嵌套仍拦截
+  assert.equal(validateGGBCommand("Sequence(SetVisibleInView(a, 1, false))").ok, false);
+});
+
+// ── 12. 保留对象名（整机实测：If(x)=… 样式无法引用；xAxis=Line(…) 恒失败）──
+
+test("If 作函数名被拦截（内置条件命令冲突）", () => {
+  // 整机实测案例：正弦函数模板 Phase 2 生成 If(x)=A*sin(kw*x+phi)，
+  // 引擎行为异常、后续 4 轮修复全部失败（style target f 不存在）
+  const r = validateGGBCommand("If(x)=A*sin(kw*x+phi)");
+  assert.equal(r.ok, false, "If 作函数名必须被拦截");
+  assert.match(r.message, /保留名/);
+  assert.match(r.message, /条件命令/, "应说明 If 是内置命令");
+});
+
+test("xAxis/yAxis 保留名赋值被拦截（画布自带坐标轴，无需创建）", () => {
+  // 整机实测案例：满足度评估误报缺坐标轴 → 修复 AI 创建 xAxis=Line(...) 恒 false
+  const r1 = validateGGBCommand("xAxis=Line((0,0),(1,0))");
+  assert.equal(r1.ok, false, "xAxis 赋值必须被拦截");
+  assert.match(r1.message, /坐标轴/);
+  const r2 = validateGGBCommand("yAxis = Line((0,0),(0,1))");
+  assert.equal(r2.ok, false, "yAxis 赋值必须被拦截");
+});
+
+test("e / x / y / z 赋值被拦截；普通名调用命令不受影响", () => {
+  assert.equal(validateGGBCommand("e = 2.718").ok, false, "e 是欧拉数，赋值破坏科学计数法字面量");
+  assert.equal(validateGGBCommand("x = 5").ok, false, "x 是坐标变量");
+  assert.equal(validateGGBCommand("q = 1.6e-19").ok, true, "普通名 q 合法（e 在字面量内部不触发）");
+  assert.equal(validateGGBCommand("c1 = Circle(O, r)").ok, true, "调用命令并把结果赋给普通名是正常形态");
+  assert.equal(validateGGBCommand("f(x) = sin(x) + 0.001").ok, true, "f/g/h 函数名合法");
+  assert.equal(validateGGBCommand("existX = 5").ok, true, "含 e/x 字母的完整名不误伤");
+});

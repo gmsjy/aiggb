@@ -15,7 +15,7 @@ import { hexToRgb, fitViewToAspect, isScriptingCommand } from "./ggbBridge";
 import { correctCommand } from "./commandCorrect";
 import { validateGGBCommand } from "./commandValidate";
 import { shouldBatch, markRepaintBusy } from "./repaintGate";
-import { PHYSICS_CONSTANTS } from "./physics";
+import { PHYSICS_CONSTANTS, formatGGBNumber } from "./physics";
 
 // ──── 结果类型 ────
 
@@ -152,12 +152,15 @@ function buildReadoutCommand(
   return `${name} = Text("${segs.join('" + " | " + "')}", ${at})`;
 }
 
-/** 组装 create_spring 的命令列表（助手长度 + 锯齿 PolyLine + 隐藏助手；dispatch 与重放映射共用） */
+/** 组装 create_spring 的命令列表（助手长度 + 锯齿 PolyLine + 隐藏助手；dispatch 与重放映射共用）。
+ *  ★ 波形用三角波：If(Mod(k,2)==0) 时在轴上，奇数位按 Mod(k,4) 交替 ±amp——
+ *  旧实现 sin(kπ/n) 是平滑正弦波，视觉上不是弹簧（实测视觉审查发现）。 */
 function buildSpringCommands(
   name: string, from: string, to: string, coils: number, amp: number
 ): string[] {
   const lenName = `${name}Len`;
-  const pts = `(x(${from}) + (x(${to}) - x(${from})) * k / ${2 * coils} - (y(${to}) - y(${from})) * ${amp} / ${lenName} * sin(k * pi / ${coils}), y(${from}) + (y(${to}) - y(${from})) * k / ${2 * coils} + (x(${to}) - x(${from})) * ${amp} / ${lenName} * sin(k * pi / ${coils}))`;
+  const zig = `If(Mod(k, 2) == 0, 0, If(Mod(k, 4) == 1, 1, -1)) * ${amp}`;
+  const pts = `(x(${from}) + (x(${to}) - x(${from})) * k / ${2 * coils} - (y(${to}) - y(${from})) * ${zig} / ${lenName}, y(${from}) + (y(${to}) - y(${from})) * k / ${2 * coils} + (x(${to}) - x(${from})) * ${zig} / ${lenName})`;
   return [
     `${lenName} = Distance(${from}, ${to}) + 0.001`,
     `${name} = PolyLine(Sequence(${pts}, k, 0, ${2 * coils}))`,
@@ -181,7 +184,9 @@ const FRACTAL_SPECS: Record<string, { axiom: string; rules: Record<string, strin
   dragon: { axiom: "F", rules: { F: "F+G", G: "F-G" }, angleDeg: 90, growth: 2 },
 };
 
-/** 生成分形 PolyLine 的坐标串。深度超段数护栏时自动截断到允许的最大深度 */
+/** 生成分形 PolyLine 的坐标串。深度超段数护栏时自动截断到允许的最大深度。
+ *  ★ 坐标按外接框归一化到最大边 1（不归一化时曲线总宽随 3^depth 指数增长，深度 3 就达 27 单位，
+ *  深度 4 出视窗）——调用方按需 Dilate 缩放。 */
 export function buildFractalPolyLine(
   kind: "koch" | "snowflake" | "sierpinski" | "dragon",
   depth: number
@@ -198,19 +203,28 @@ export function buildFractalPolyLine(
     s = next;
   }
   const rad = (spec.angleDeg * Math.PI) / 180;
-  const pts: string[] = [];
+  const pts: Array<[number, number]> = [];
   let x = 0, y = 0, head = 0;
-  pts.push(`(${x.toFixed(4)}, ${y.toFixed(4)})`);
+  pts.push([0, 0]);
   for (const ch of s) {
     if (ch === "F" || ch === "A" || ch === "B") {
       x += Math.cos(head);
       y += Math.sin(head);
-      pts.push(`(${x.toFixed(4)}, ${y.toFixed(4)})`);
+      pts.push([x, y]);
     } else if (ch === "+") head += rad;
     else if (ch === "-") head -= rad;
   }
   if (kind === "snowflake") pts.push(pts[0]); // 闭合
-  return { coords: pts.join(", "), segments: pts.length - 1, depth: d };
+  // 外接框归一化：最大边缩放到 1，保持起点在原点附近
+  let maxX = 0, maxY = 0, minX = 0, minY = 0;
+  for (const [px, py] of pts) {
+    maxX = Math.max(maxX, px); minX = Math.min(minX, px);
+    maxY = Math.max(maxY, py); minY = Math.min(minY, py);
+  }
+  const scale = 1 / Math.max(maxX - minX, maxY - minY, 1e-9);
+  const fmt = (px: number, py: number) => `(${((px - minX) * scale).toFixed(4)}, ${((py - minY) * scale).toFixed(4)})`;
+  const coords = pts.map(([px, py]) => fmt(px, py)).join(", ");
+  return { coords, segments: pts.length - 1, depth: d };
 }
 
 /** 创建单个滑块的内部 helper，供 create_slider 和 create_sliders 共用 */
@@ -394,8 +408,23 @@ function dispatch(
       let effScale = typeof scale === "number" && Number.isFinite(scale) && scale > 0 ? scale : null;
       let scaleNote = "显式";
       if (effScale === null) {
-        const xmin = api.getXmin?.(), xmax = api.getXmax?.();
-        const viewW = xmin !== undefined && xmax !== undefined && xmax > xmin ? xmax - xmin : 10;
+        // 视窗宽度：getXmin/getXmax 在自托管 bundle（5.4.927）不存在（实测 undefined），
+        // 用 Corner(1)/Corner(3) 临时对象读取，读后即删
+        let viewW = 10;
+        let tmpL: string | null = null;
+        let tmpR: string | null = null;
+        try {
+          // 只清理自建对象：若用户恰好有同名对象，读取后不得删除
+          if (!api.exists("tmpVwL")) { api.evalCommand("tmpVwL = Corner(1)"); tmpL = "tmpVwL"; }
+          if (!api.exists("tmpVwR")) { api.evalCommand("tmpVwR = Corner(3)"); tmpR = "tmpVwR"; }
+          const x1 = Number(String(api.getValueString("tmpVwL")).split("=").pop()?.replace(/[()]/g, "").split(",")[0]);
+          const x2 = Number(String(api.getValueString("tmpVwR")).split("=").pop()?.replace(/[()]/g, "").split(",")[0]);
+          if (Number.isFinite(x1) && Number.isFinite(x2) && x2 > x1) viewW = x2 - x1;
+        } catch { /* 保持回退值 */ } finally {
+          // 读取失败也要清理，避免视窗角落残留可见临时点
+          if (tmpL) api.evalCommand(`Delete(${tmpL})`);
+          if (tmpR) api.evalCommand(`Delete(${tmpR})`);
+        }
         const targetLen = viewW * 0.15;
         const mag = api.getValue(magName);
         effScale = mag > 1e-9 ? Math.round(targetLen / mag * 1000) / 1000 : 0.2;
@@ -414,6 +443,7 @@ function dispatch(
       if (color) { const [r, g, b] = hexToRgb(color); api.setColor(n, r, g, b); }
       api.setLineThickness(n, 4);
       if (label) { api.setCaption(n, label); api.setLabelStyle(n, 3); }
+      else api.setLabelVisible?.(n, false); // 未要求标签时隐藏矢量名，避免画布杂讯
       return `矢量 ${n} 已锚定 ${anchor}（缩放 ×${effScale}，${scaleNote}；端点随 ${anchor} 实时跟随）`;
     }
 
@@ -467,7 +497,7 @@ function dispatch(
         const def = PHYSICS_CONSTANTS[name];
         if (!def) { failed.push(name); continue; }
         if (api.exists(name)) continue;
-        api.evalCommand(`${name} = ${def.value}`);
+        api.evalCommand(`${name} = ${formatGGBNumber(def.value)}`);
         api.setVisible(name, false);
       }
       const ok = names.filter(n => !failed.includes(n));
@@ -811,6 +841,18 @@ function preFlightCheck(
       break;
     }
 
+    case "create_points": {
+      // ★ 小写名守卫：「小写名 = 坐标字面量」会被 GGB 隐式推断为 Vector（实测），
+      //   create_points 的语义是 Point——名字必须大写开头
+      const pts = (args.points as Array<{ name: string }>) ?? [];
+      for (const p of pts) {
+        if (/^[a-z_]/.test(p.name)) {
+          return `点名 ${p.name} 以小写开头——GGB 会把「小写名 = 坐标字面量」隐式推断为 Vector（实测）而非 Point；请用大写开头的名字（如 ${p.name.charAt(0).toUpperCase()}${p.name.slice(1)}）`;
+        }
+      }
+      break;
+    }
+
     case "create_vector": {
       // to 坐标表达式中检测除零风险（静态字面量分母为 0）
       const to = String(args.to ?? "");
@@ -1049,17 +1091,30 @@ export function toolCallToEvalCommands(name: string, argsJson: string): string[]
       const { names } = args as { names: string[] };
       return (names ?? []).map(n => {
         const def = PHYSICS_CONSTANTS[n];
-        return def ? `${n} = ${def.value}` : `# unknown constant: ${n}`;
+        return def ? `${n} = ${formatGGBNumber(def.value)}` : `# unknown constant: ${n}`;
       });
     }
     case "attach_vector": {
       const { name: n, anchor, exprX, exprY, scale } = args as {
         name: string; anchor: string; exprX: string; exprY: string; scale?: number | string;
       };
-      const s = typeof scale === "number" && Number.isFinite(scale) && scale > 0 ? scale : 0.2;
+      const s = typeof scale === "number" && Number.isFinite(scale) && scale > 0 ? scale : null;
+      if (s !== null) {
+        // 显式 scale：与 dispatch 完全一致
+        return [
+          `Mag${n} = sqrt((${exprX})^2 + (${exprY})^2)`,
+          `Tip${n} = ${anchor} + (${exprX} * ${s}, ${exprY} * ${s})`,
+          `${n} = Vector(${anchor}, Tip${n})`,
+          `SetVisibleInView(Mag${n}, 1, false)`,
+          `SetVisibleInView(Tip${n}, 1, false)`,
+        ];
+      }
+      // 自动归一化：dispatch 按**创建时刻视窗宽度** 15% 缩放（Corner 实时读取），重放时无法还原
+      // 当时视窗——退而求其次用单位方向 × 1.5（= dispatch 视窗不可知时的回退语义 viewW=10 × 15%），
+      // 方向随表达式实时正确，长度固定为回放视窗下合理的弹簧/矢量观感量级
       return [
         `Mag${n} = sqrt((${exprX})^2 + (${exprY})^2)`,
-        `Tip${n} = ${anchor} + (${exprX} * ${s}, ${exprY} * ${s})`,
+        `Tip${n} = ${anchor} + ((${exprX}) / Mag${n} * 1.5, (${exprY}) / Mag${n} * 1.5)`,
         `${n} = Vector(${anchor}, Tip${n})`,
         `SetVisibleInView(Mag${n}, 1, false)`,
         `SetVisibleInView(Tip${n}, 1, false)`,

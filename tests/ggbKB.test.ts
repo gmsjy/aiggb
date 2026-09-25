@@ -65,6 +65,25 @@ test("correctCommand 自动纠正 El 与大写 Round，小写 round 豁免不受
   assert.ok(!el.corrected.includes("El("), "纠正后不应残留 El(");
 });
 
+test("函数定义形态不参与命令名纠正（回归：f(x)=x^2 曾被误改成 If(x)=x^2）", () => {
+  // 整机实测根因：f 与 If 编辑距离 1，模糊纠正把 AI 正确生成的 f(x)=A*sin(kw*x+phi)
+  // 改写为 If(x)=…，引擎行为异常、样式命令连环失败、4 轮修复无法收敛
+  const fn = correctCommand("f(x) = x^2");
+  assert.equal(fn.changed, false, "函数定义不得被纠正");
+  assert.ok(fn.corrected.startsWith("f(x)"), `实际: ${fn.corrected}`);
+  assert.ok(!fn.corrected.includes("If"), "不得残留 If");
+
+  const fnIf = correctCommand("f(x) = If(x > 0, x^2, 0)");
+  assert.equal(fnIf.changed, false, "函数定义内嵌 If 是合法形态，不得改动");
+
+  const g = correctCommand("g(t) = Curve(cos(t), sin(t), t, 0, 6.28)");
+  assert.equal(g.changed, false, "g(t) 函数定义同样放行");
+
+  // 赋值形态的命令纠正不受影响（Circl→Circle 编辑距离 1，自动纠正）
+  const assign = correctCommand("c1 = Circl(O, r)");
+  assert.ok(assign.corrected.includes("Circle"), "赋值形态命令笔误仍应纠正");
+});
+
 // ── 改造四：工具分类元数据 ──
 
 test("TOOL_CATEGORIES 覆盖所有已注册工具（防新增工具漏分类）", () => {

@@ -13,6 +13,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { executeCommands, orderCommands, collectFailures } from "../src/lib/ggbBridge";
+import { formatGGBNumber } from "../src/lib/physics";
 import { MockGGB } from "./mockGGB";
 import type { Command } from "../src/lib/schema";
 
@@ -266,4 +267,68 @@ test("style op 自带诊断不被 diagnose 泛化文案覆盖（保留行为）"
   ], "2d");
   const styleFailures = collectFailures(styleResults);
   assert.match(styleFailures[0].error, /不存在，无法设置样式/);
+});
+
+// ── constants op：科学计数法改写（5.4.927 实测 evalCommand 不认 3e8，被解析成 3×e×8 欧拉数）──
+
+test("constants op：e 计数法常量改写为 10^ 幂形式注入", () => {
+  const mock = new MockGGB();
+  const rs = executeCommands(mock, [
+    { op: "constants", names: ["g", "Grav", "h"] } as Command,
+  ], "2d");
+  assert.equal(rs.every(r => r.ok), true);
+  const gravCmd = rs[0].expanded.find(s => s.startsWith("Grav ="));
+  assert.match(gravCmd ?? "", /6\.6743 \* 10\^\(-11\)/, `实际：${gravCmd}`);
+  assert.doesNotMatch(gravCmd ?? "", /e-11/i, "不得残留 e 计数法（会被解析成 6.6743×e×(-11)）");
+  const hCmd = rs[0].expanded.find(s => s.startsWith("h ="));
+  assert.match(hCmd ?? "", /6\.626 \* 10\^\(-34\)/);
+  assert.match(rs[0].expanded.find(s => s.startsWith("g =")) ?? "", /^g = 9\.8$/, "无 e 的数值保持原样");
+  assert.ok(mock.exists("Grav") && mock.exists("h") && mock.exists("g"));
+});
+
+test("formatGGBNumber：科学计数法改写为 10^ 幂形式，普通数值原样", () => {
+  assert.equal(formatGGBNumber(9.8), "9.8");
+  assert.equal(formatGGBNumber(42), "42");
+  assert.equal(formatGGBNumber(3e8), "300000000", "JS String 对 |v|<1e21 本就不带 e");
+  assert.equal(formatGGBNumber(1.6e-19), "1.6 * 10^(-19)");
+  assert.equal(formatGGBNumber(6.6743e-11), "6.6743 * 10^(-11)");
+  assert.equal(formatGGBNumber(6.626e-34), "6.626 * 10^(-34)");
+});
+
+test("style op：conic 类 opacity 直接走 SetFilling 填充（圆内部不再永远空）", () => {
+  const calls: string[] = [];
+  const api = {
+    exists: () => true,
+    getObjectType: () => "conic",
+    setColor: () => {},
+    setRepaintingActive: () => {},
+    evalCommand: (cmd: string) => { calls.push(cmd); return false; },
+    setLineThickness: () => {},
+    getXML: () => '<element><fillOpacity="35"/></element>', // fillOpacity 为 0~100 刻度
+  } as unknown as Parameters<typeof executeCommands>[0];
+  const results = executeCommands(api, [
+    { op: "style", target: "circ1", color: "#8e44ad", opacity: 0.35 } as Command,
+  ], "2d");
+  assert.equal(results[0].ok, true, `实际错误：${results[0].error}`);
+  assert.ok(calls.some(c => c.startsWith("SetFilling(circ1, 0.35)")), "conic 应首选 SetFilling 填充");
+  assert.ok(!calls.some(c => c.startsWith("SetLineOpacity")), "conic 不应先走 SetLineOpacity（只淡边线、内部永远空）");
+});
+
+test("style op：普通线条 opacity 仍走 SetLineOpacity（行为不变）", () => {
+  const calls: string[] = [];
+  const api = {
+    exists: () => true,
+    getObjectType: () => "segment",
+    setColor: () => {},
+    setRepaintingActive: () => {},
+    evalCommand: (cmd: string) => { calls.push(cmd); return false; },
+    setLineThickness: () => {},
+    getXML: () => '<element><lineStyle thickness="3" opacity="127"/></element>',
+  } as unknown as Parameters<typeof executeCommands>[0];
+  const results = executeCommands(api, [
+    { op: "style", target: "seg1", color: "#e74c3c", opacity: 0.5 } as Command,
+  ], "2d");
+  assert.equal(results[0].ok, true, `实际错误：${results[0].error}`);
+  assert.ok(calls.some(c => c.startsWith("SetLineOpacity(seg1, 0.5)")));
+  assert.ok(!calls.some(c => c.startsWith("SetFilling")), "线对象不应被填充");
 });

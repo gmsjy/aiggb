@@ -75,31 +75,35 @@ function levenshtein(a: string, b: string): number {
 
 // ── 命令名提取 ──
 
-/** 从 eval cmd 字符串提取首命令名。支持 Func(...)、obj=Func(...)、Func[obj,...]、func(var)=... 等形式。 */
+/** 数学函数/关键字豁免：这些名字即使出现在调用位也不是 GGB 命令。
+ *  round 仅小写豁免：大写 Round 在自托管 bundle（5.4.927）不存在，须交给臆造映射纠正为小写函数 round（HALLUCINATION_MAP） */
+const NON_COMMAND_NAMES = /^(sin|cos|tan|abs|sqrt|exp|ln|log|floor|ceil|random|pi|e|true|false)$/i;
+
+function isExemptNonCommand(name: string): boolean {
+  return NON_COMMAND_NAMES.test(name) || /^round$/.test(name);
+}
+
+/** 从 eval cmd 字符串提取首命令名。支持 obj=Func(...)、Func(...)、Func[...] 等形式。
+ *  ★ 函数定义形态 f(x) = ... 左侧是**自定义函数名**而非命令调用，返回 null 不参与纠正
+ *  （实测：旧逻辑把 f(x)=x^2 的 f 当命令名，模糊匹配编辑距离 1 误纠正成 If(x)=x^2，
+ *   导致引擎行为异常、后续样式命令全部失败——2026-09 整机测试根因）。 */
 function extractCommandName(cmd: string): string | null {
   const trimmed = cmd.trim();
+  if (!trimmed) return null;
 
-  // 匹配赋值形式：标识符 = 命令(...) 或 标识符 = 命令[...] 或 f(var) = 命令(..)
-  const assignRe = /^(?:\w+\s*=\s*)?(\w[\w]*)\s*[([]/;
-  const assignM = assignRe.exec(trimmed);
+  // 函数定义：name(params) = ...（左名带参数列表且等号在后）——不是命令调用
+  if (/^[A-Za-z_]\w*\s*\([^)]*\)\s*=(?!=)/.test(trimmed)) return null;
+
+  // 赋值形态：obj = Command(...) / obj = Command[...]——命令名在等号右侧
+  const assignM = /^[A-Za-z_]\w*\s*=\s*([A-Za-z_]\w*)\s*[([]/.exec(trimmed);
   if (assignM) {
-    const name = assignM[1];
-    // 排除数学函数（sin/cos 等）和常见不匹配项。
-    // round 仅小写豁免：大写 Round 在自托管 bundle（5.4.927）不存在，须交给臆造映射纠正为小写函数 round（HALLUCINATION_MAP）
-    if (/^(sin|cos|tan|abs|sqrt|exp|ln|log|floor|ceil|random|pi|e|true|false)$/i.test(name) || /^round$/.test(name)) {
-      return null;
-    }
-    return name;
+    return isExemptNonCommand(assignM[1]) ? null : assignM[1];
   }
 
-  // 匹配非赋值形式：命令(...)
-  const directRe = /^(\w[\w]*)\s*[([]/.exec(trimmed);
-  if (directRe) {
-    const name = directRe[1];
-    if (/^(sin|cos|tan|abs|sqrt|exp|ln|log|floor|ceil|random|pi|e|true|false)$/i.test(name) || /^round$/.test(name)) {
-      return null;
-    }
-    return name;
+  // 直接调用形态：Command(...)
+  const directM = /^([A-Za-z_]\w*)\s*[([]/.exec(trimmed);
+  if (directM) {
+    return isExemptNonCommand(directM[1]) ? null : directM[1];
   }
 
   return null;
@@ -155,7 +159,8 @@ export function correctCommand(cmd: string): CorrectionResult {
 
   const cmdName = extractCommandName(cmd);
   if (!cmdName) {
-    return { original: cmd, corrected, suggestions: ["未识别命令名"], changed: false, matchedDef: undefined };
+    // 函数定义（f(x)=…）/数学函数调用等非命令形态：静默放行，不产生纠正噪音
+    return { original: cmd, corrected, suggestions: [], changed: false, matchedDef: undefined };
   }
 
   // Step 1: 精确匹配

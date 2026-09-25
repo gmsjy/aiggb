@@ -36,6 +36,7 @@ const EVAL_SYSTEM_PROMPT = `你是 GeoGebra 图形逻辑审查员。对照【精
 3. 动画/轨迹是否正确启动？
 4. 数学依赖关系是否正确（如对象 P 所依赖的滑块 t 是否存在）？
 5. 只报告实际缺失或错误，不要吹毛求疵。
+6. 坐标轴、网格是 GGB 画布自带元素：快照中没有 xAxis/yAxis 对象是正常的，**不要报告"缺少坐标轴"**，更不要建议创建它们（xAxis/yAxis 是保留名，创建必失败）。
 
 输出 JSON：
 {"satisfied":true/false,"issues":["问题描述"],"summary":"一句话总结"}`;
