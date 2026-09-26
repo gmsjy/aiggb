@@ -147,3 +147,28 @@ test("withCallTimeout：外部 signal 已中止时直接返回已中止信号", 
   assert.equal(t.signal.aborted, true, "已中止的外部 signal 应立即同步中止");
   t.done();
 });
+
+// ── config.timeoutMs（评估链路短超时，2026-09 二轮整机实测）──
+
+test("chatRaw：config.timeoutMs 收紧兜底超时（挂起 fetch 按信号 reason 中断）", async () => {
+  const { chatRaw } = await import("../src/lib/aiClient");
+  const realFetch = globalThis.fetch;
+  let aborted = false;
+  // 永不 resolve 的挂起连接；abort 时以 signal.reason 拒绝（对齐真实 fetch 行为）
+  globalThis.fetch = ((_url: unknown, init?: { signal?: AbortSignal }) =>
+    new Promise<never>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        aborted = true;
+        reject(init.signal?.reason ?? new DOMException("aborted", "AbortError"));
+      });
+    })) as typeof fetch;
+  try {
+    await assert.rejects(
+      chatRaw(cfg({ timeoutMs: 40 }), [{ role: "user", content: "hi" }]),
+      (err: Error) => err.name === "TimeoutError" || /超时/.test(err.message)
+    );
+    assert.equal(aborted, true, "挂起连接应在 timeoutMs 后被中止");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

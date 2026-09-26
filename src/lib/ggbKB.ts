@@ -223,9 +223,16 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     examples: ["p = Parabola(F, d)"],
   },
   {
-    name: "Conic", signature: "Conic(A,B,C,D,E)", paramCount: [5, 5],
+    name: "Conic", signature: "Conic(A,B,C,D,E) | Conic(ax²,by²,c,dxy,ex,fy)", paramCount: [5, 6],
     modes: ["2d"], category: "circle",
-    examples: ["c = Conic(A, B, C, D, E)"],
+    // ★ 6 系数顺序为 2026-09 二轮整机实测（dev 画布 evalCommand 存证，与官方手册标注不符！）：
+    //   Conic(a, b, c, d, e, f) → a·x² + b·y² + c·<常数> + d·xy + e·x + f·y = 0
+    //   即【常数项在第 3 位、xy 在第 4 位】。手册标注的 (ax²,by²,cxy,dx,ey,f) 顺序在本 bundle
+    //   (5.4.927) 会产生平移/旋转的错误圆锥曲线（实测 Conic(1/9,1/4,0,0,0,-1) → 中心 (0,2)）。
+    //   椭圆 x²/9+y²/4=1 的正确形态：Conic(1/9, 1/4, -1, 0, 0, 0)
+    //   （0.44x² + y² = 4，中心 (0,0)，半轴 3/2，实测通过）。
+    //   实测 7 个系数引擎返回 true 却产出 emptyset，是"看似成功实则失败"的陷阱（预检 [5,6] 拦截）。
+    examples: ["c = Conic(A, B, C, D, E)", "ell = Conic(1/9, 1/4, -1, 0, 0, 0)"],
   },
   {
     name: "Incircle", signature: "Incircle(A, B, C)", paramCount: [3, 3],

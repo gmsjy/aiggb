@@ -138,6 +138,9 @@ export function GGBCanvas() {
             if (!active) return; // 已切换模式，忽略过期 applet 的回调
             resetTmpIds(); // 新画布：临时对象名从头开始
             setGGBApi(api);
+            // ★ E2E 诊断句柄：deployggb 的 window.ggbApplet 在 applet 重建后会指向
+            //   陈旧实例（2026-09 二轮整机实测 getObjectNumber 恒 0），测试统一改用此句柄
+            (globalThis as { __aiggbApi?: GGBAppletApi }).__aiggbApi = api;
             // ★ 刚注入/重建：canvas 尚在建立，心跳不应在此期间判定"画布消失"
             markRepaintBusy();
             // ★ 画布就绪时应用领域级配置
@@ -164,12 +167,17 @@ export function GGBCanvas() {
             } catch { /* 测量失败忽略 */ }
 
             // ★ 会话恢复：消费 pendingCanvasSnapshot（initSessionFromStorage /
-            //   switchToSession 在模式重建时缓存的画布快照）
+            //   switchToSession 在模式重建时缓存的画布快照）。
+            //   ★ 模式门控：applet 注入模式必须与快照目标模式一致才允许 setBase64——
+            //     2026-09 二轮整机实测：刷新时 classic applet 抢先把 3D 快照灌进自身，
+            //     引擎虽按文件透视渲染，但 store 停留 classic → 状态不一致/画布空
             const pending = useAppStore.getState().pendingCanvasSnapshot;
-            if (pending) {
-              console.log("[AiGGB] 恢复会话画布快照（" + pending.length + " 字符）");
+            const pendingMode = useAppStore.getState().pendingCanvasSnapshotMode;
+            const thisMode = mode === "3d" ? "3d" : "classic";
+            if (pending && (!pendingMode || pendingMode === thisMode)) {
+              console.log("[AiGGB] 恢复会话画布快照（" + pending.length + " 字符, mode=" + thisMode + "）");
               void restoreSnapshot(api, pending).then(ok => {
-                if (ok) useAppStore.setState({ pendingCanvasSnapshot: null });
+                if (ok) useAppStore.setState({ pendingCanvasSnapshot: null, pendingCanvasSnapshotMode: null });
                 else console.warn("[AiGGB] 会话画布快照恢复失败（回退到画布空状态）");
               });
             }

@@ -37,6 +37,12 @@ export interface AIConfig {
    *   调用都会为空（finish_reason="length"）→ 复杂 3D 任务建议 32768。
    */
   maxOutputTokens?: number;
+  /**
+   * 单次非流式调用的兜底超时（毫秒）。缺省 = AI_CALL_TIMEOUT_MS（180s）。
+   * 轻量场景（满足度评估/视觉审查）可按次收紧为 90s，避免评估链长时间"AI 思考中"无反馈。
+   * 流式 agentChat SSE 不经过此路径，不受影响。
+   */
+  timeoutMs?: number;
 }
 
 // ──── 输出预算（max_tokens）────
@@ -359,8 +365,10 @@ async function callAPI(
   body: Record<string, unknown>,
   signal?: AbortSignal
 ): Promise<ChatCompletionResponse> {
-  // ★ 非流式调用兜底超时：挂起连接曾把评估修复链整体拖住（见 withCallTimeout 注释）
-  const t = withCallTimeout(signal, AI_CALL_TIMEOUT_MS);
+  // ★ 非流式调用兜底超时：挂起连接曾把评估修复链整体拖住（见 withCallTimeout 注释）。
+  //   config.timeoutMs 允许调用方按场景收紧（如满足度评估 90s——轻模型小输出，
+  //   实测空响应重试 × 180s 最坏会挂 6 分钟且用户无感知）。
+  const t = withCallTimeout(signal, config.timeoutMs ?? AI_CALL_TIMEOUT_MS);
   try {
     const resp = await fetchCompletion(config, body, t.signal);
     try {

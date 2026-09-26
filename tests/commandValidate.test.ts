@@ -397,3 +397,39 @@ test("e / x / y / z 赋值被拦截；普通名调用命令不受影响", () => 
   assert.equal(validateGGBCommand("f(x) = sin(x) + 0.001").ok, true, "f/g/h 函数名合法");
   assert.equal(validateGGBCommand("existX = 5").ok, true, "含 e/x 字母的完整名不误伤");
 });
+
+// ── ⑩ 赋值形态双等号（2026-09 二轮整机实测：椭圆场景首发命令）──
+
+test("双等号赋值被拦截：ell = x^2/9 + y^2/4 = 1（提示冒号命名形态）", () => {
+  // 实测引擎对 "name = 表达式 = 值" 直接报「创建函数/表达式 失败」
+  const r = validateGGBCommand("ell = x^2/9 + y^2/4 = 1");
+  assert.equal(r.ok, false, "双等号赋值必须在进引擎前拦截");
+  assert.ok(r.issues.some(i => i.kind === "double-equals"), JSON.stringify(r.issues));
+  assert.match(r.message, /冒号/);
+});
+
+test("双等号：合法形态不误伤（裸等式/冒号命名/普通赋值/函数定义/字符串内等号）", () => {
+  const cases = [
+    "x^2/9 + y^2/4 = 1",               // 裸等式（创建圆锥曲线的官方形态）
+    "ell: x^2/9 + y^2/4 = 1",          // 冒号命名
+    "a = 3",                            // 滑块赋值
+    "f(x) = A*sin(kw*x+phi)",          // 函数定义
+    'capt = Text("x = 1", (1, 2))',    // 等号在字符串字面量内
+    "SetValue(n, If(a == b, 1, 2))",   // == 与括号内等号
+  ];
+  for (const cmd of cases) {
+    const r = validateGGBCommand(cmd);
+    assert.ok(!r.issues.some(i => i.kind === "double-equals"), `${cmd} 不应触发 double-equals → ${r.message}`);
+  }
+});
+
+test("Conic 参数个数：7 系数被拦截；5 点 / 6 系数合法（6 系数=官方重载，此前 KB 缺失）", () => {
+  // 实测：Conic 7 系数引擎返回 true 却产出 emptyset，导致 Agent 30 轮空转
+  const bad = validateGGBCommand("ell = Conic(1/9, 0, 1/4, 0, 0, 0, -1)");
+  assert.equal(bad.ok, false, "7 参数必须在预检拦截");
+  assert.ok(bad.issues.some(i => i.kind === "arg-count"), JSON.stringify(bad.issues));
+  const ok6 = validateGGBCommand("ell = Conic(1/9, 1/4, 0, 0, 0, -1)");
+  assert.ok(!ok6.issues.some(i => i.kind === "arg-count"), ok6.message);
+  const ok5 = validateGGBCommand("c = Conic(A, B, C, D, E)");
+  assert.ok(!ok5.issues.some(i => i.kind === "arg-count"), ok5.message);
+});

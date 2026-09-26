@@ -26,6 +26,9 @@ export const SatisfactionResult = z.object({
 
 export type SatisfactionResult = z.infer<typeof SatisfactionResult>;
 
+/** 评估/视觉审查单次调用超时（满足度评估与视觉审查都是轻模型小输出，90s 足够宽裕） */
+const EVAL_CALL_TIMEOUT_MS = 90_000;
+
 // ──── 评估 Prompt（~300 tokens） ────
 
 const EVAL_SYSTEM_PROMPT = `你是 GeoGebra 图形逻辑审查员。对照【精炼绘图规格】检查【当前画布快照】，判断是否满足要求。
@@ -69,6 +72,10 @@ export async function evaluateSatisfaction(
 
   const chatRawFn = chatRawImpl ?? defaultChatRaw;
 
+  // ★ 评估链路显式短超时（90s/次）：轻模型小输出本应秒级返回；2026-09 二轮整机实测
+  //   默认 180s × 空响应重试 1 次最坏挂 ~6 分钟，期间用户只看到"AI 思考中"无任何反馈。
+  const evalConfig: AIConfig = { ...config, timeoutMs: EVAL_CALL_TIMEOUT_MS };
+
   const messages: ChatMessage[] = [
     { role: "system", content: EVAL_SYSTEM_PROMPT },
     { role: "user", content: buildEvalUserMsg(refinedSpec, snapshot) }
@@ -77,10 +84,10 @@ export async function evaluateSatisfaction(
   try {
     // ★ V4 json_object 模式有概率返回空 content → 重试 1 次
     //    否则空响应被 JSON.parse("") 当异常吞掉，错误图形被静默标记为 satisfied
-    let raw = await chatRawFn(config, messages, signal, lightModel ?? config.model, undefined, true, onUsage);
+    let raw = await chatRawFn(evalConfig, messages, signal, lightModel ?? config.model, undefined, true, onUsage);
     if (!raw.trim()) {
       console.warn(`[satisfactionEval] ${getTraceId()} 空响应，重试 1 次`);
-      raw = await chatRawFn(config, messages, signal, lightModel ?? config.model, undefined, true, onUsage);
+      raw = await chatRawFn(evalConfig, messages, signal, lightModel ?? config.model, undefined, true, onUsage);
     }
     const cleaned = raw.trim()
       .replace(/^```json?\s*/, "").replace(/\s*```$/, "")
@@ -184,7 +191,7 @@ export async function evaluateVisual(
   const chatRawFn = chatRawImpl ?? defaultChatRaw;
   // ★ 视觉审查同为感知任务：跳过 thinking（防 reasoning 挤占输出预算）+ 显式输出上限
   //   （同 extractProblem 的截断教训：多数视觉模型不支持 json_object，输出上限需显式给）
-  const vConfig: AIConfig = { ...config, reasoningEffort: undefined };
+  const vConfig: AIConfig = { ...config, reasoningEffort: undefined, timeoutMs: EVAL_CALL_TIMEOUT_MS };
   const messages: ChatMessage[] = [
     { role: "system", content: VISUAL_REVIEW_SYSTEM_PROMPT },
     {

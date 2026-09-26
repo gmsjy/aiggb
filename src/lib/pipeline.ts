@@ -970,10 +970,10 @@ async function runAgentRound(
   // ★ 构建 agent 结果摘要消息
   //    ⚠ 回滚提示只在「真的执行过工具」时给出：0 次工具调用说明画布从未被改动，
   //      此时提示"已回滚"会误导用户（配合 buildAgentSummary 的轮数/次数区分）
+  //    ⚠ incomplete 轮不再附加暂停提示：agentLoop 的 finalText 已含全部三要素
+  //      （已达上限/画布保留对象数/发后续指令可续作），再附加会出现同气泡双份暂停文案
   const summary = rollbackHappened && countToolCalls(result.messages) > 0
     ? `${buildAgentSummary(result)}\n\n⚠ 本轮构造失败，画布已回滚到开始前状态。`
-    : result.incomplete
-    ? `${buildAgentSummary(result)}\n\n⏸ 已达单轮最大轮次，画布已保留当前进度——发送后续指令（如「继续完成剩余部分」）即可继续调整。`
     : buildAgentSummary(result);
 
   // ★ 从工具调用历史提取可重放的 eval 命令（供 undo 回放 + constructionLog 兜底）

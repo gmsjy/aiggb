@@ -163,6 +163,10 @@ interface AppState extends PersistedState {
   sessionIndex: SessionMeta[];
   /** 跨模式切换时待恢复的画布快照（GGBCanvas appletOnLoad 时消费） */
   pendingCanvasSnapshot: string | null;
+  /** 待恢复快照的目标画布模式（消费方必须模式匹配才允许 setBase64，
+   *  防止 3D 快照被灌进 classic applet——2026-09 二轮整机实测：刷新后模式不恢复，
+   *  classic applet 消费 3D 快照导致状态不一致/画布空） */
+  pendingCanvasSnapshotMode: "classic" | "3d" | null;
 
   // setters
   setConfig: (c: AIConfig | null) => void;
@@ -238,6 +242,7 @@ export const useAppStore = create<AppState>()(
       sessionCreatedAt: 0,
       sessionIndex: [],
       pendingCanvasSnapshot: null,
+      pendingCanvasSnapshotMode: null,
 
       setConfig: c => set({ config: c }),
       clearKey: () => set({ config: null, privacyAcknowledged: false }),
@@ -289,6 +294,11 @@ export const useAppStore = create<AppState>()(
         if (currentId) {
           const loaded = await loadSession(currentId);
           if (loaded) {
+            // ★ 恢复画布模式：会话保存的 ggbAppName 必须回填（2026-09 二轮整机实测：
+            //   3D 会话刷新后模式回落 classic，快照经 setBase64 把 3D 透视带进 classic
+            //   applet → 顶栏/store 与画布真实模式不一致，再点模式切换会清空画布）
+            const needMode: "classic" | "3d" = loaded.ggbAppName === "3d" ? "3d" : "classic";
+            const modeChanged = get().ggbAppName !== needMode;
             set({
               currentSessionId: loaded.id,
               sessionTitle: loaded.title,
@@ -297,9 +307,11 @@ export const useAppStore = create<AppState>()(
               constructionLog: loaded.constructionLog,
               domain: loaded.domain,
               agentMode: loaded.agentMode,
-              // 画布快照由 GGBCanvas appletOnLoad 恢复
+              // 画布快照由 GGBCanvas appletOnLoad 恢复（模式门控：消费方 applet 模式必须一致）
               pendingCanvasSnapshot: loaded.canvasSnapshot ?? null,
+              pendingCanvasSnapshotMode: loaded.canvasSnapshot ? needMode : null,
             });
+            if (modeChanged) set({ ggbAppName: needMode }); // 触发 GGBCanvas 重建消费快照
           }
         }
         if (!get().currentSessionId) {
@@ -311,17 +323,23 @@ export const useAppStore = create<AppState>()(
             domain: get().domain, agentMode: get().agentMode, ggbAppName: get().ggbAppName,
             messages: [], constructionLog: [], canvasSnapshot: null,
           });
-          set({ currentSessionId: id, sessionTitle: "新会话", sessionCreatedAt: now, pendingCanvasSnapshot: null });
+          set({ currentSessionId: id, sessionTitle: "新会话", sessionCreatedAt: now, pendingCanvasSnapshot: null, pendingCanvasSnapshotMode: null });
         }
         const metas = await listSessions();
         set({ sessionIndex: metas });
         writeSessionIndexState({ currentId: get().currentSessionId, index: metas });
-        // 若 applet 已就绪则立即恢复画布快照；否则由 GGBCanvas appletOnLoad 消费
+        // 若 applet 已就绪且模式一致则立即恢复画布快照；否则由 GGBCanvas appletOnLoad 消费。
+        // ★ 本轮刚改过模式时必须跳过：此时 ggbApi 仍指向旧模式 applet，
+        //   把 3D 快照灌进 classic applet 正是本次要修的状态不一致根因
         const api = get().ggbApi;
         const snap = get().pendingCanvasSnapshot;
-        if (api && snap) {
+        const snapMode = get().pendingCanvasSnapshotMode;
+        const modeChanged = snapMode !== null && snapMode !== get().ggbAppName;
+        if (api && snap && snapMode === get().ggbAppName) {
           await restoreSnapshot(api, snap);
-          set({ pendingCanvasSnapshot: null });
+          set({ pendingCanvasSnapshot: null, pendingCanvasSnapshotMode: null });
+        } else if (api && snap && modeChanged) {
+          console.log("[AiGGB] 会话快照等待模式重建后消费（" + snapMode + "）");
         }
       },
 
@@ -380,6 +398,7 @@ export const useAppStore = create<AppState>()(
         await st.persistCurrentSession();
         const loaded = await loadSession(id);
         if (!loaded) return;
+        const targetMode: "classic" | "3d" = loaded.ggbAppName === "3d" ? "3d" : "classic";
         set({
           currentSessionId: loaded.id,
           sessionTitle: loaded.title,
@@ -389,6 +408,7 @@ export const useAppStore = create<AppState>()(
           domain: loaded.domain,
           agentMode: loaded.agentMode,
           pendingCanvasSnapshot: loaded.canvasSnapshot ?? null,
+          pendingCanvasSnapshotMode: loaded.canvasSnapshot ? targetMode : null,
           tokenUsage: { prompt: 0, completion: 0 },
         });
         // 画布模式：目标会话模式与当前不同 → 触发 applet 重建（appletOnLoad 恢复快照）
@@ -396,11 +416,12 @@ export const useAppStore = create<AppState>()(
           get().setAppName(loaded.ggbAppName);
         } else {
           const api = get().ggbApi;
+          // 同模式：清空 + 立即恢复（消费待恢复快照）
           if (api) {
-            // 同模式：清空 + 立即恢复
             api.newConstruction();
             if (loaded.canvasSnapshot) {
               await restoreSnapshot(api, loaded.canvasSnapshot);
+              set({ pendingCanvasSnapshot: null, pendingCanvasSnapshotMode: null });
             } else {
               replayConstructionLog(api, loaded.constructionLog);
             }

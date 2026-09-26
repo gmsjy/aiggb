@@ -44,7 +44,8 @@ export type CommandIssueKind =
   | "color-name"
   | "scripting-nest"
   | "func-case"
-  | "reserved-name";
+  | "reserved-name"
+  | "double-equals";
 
 export interface CommandIssue {
   kind: CommandIssueKind;
@@ -645,6 +646,7 @@ const ARG_COUNT_HINTS: Record<string, [number, number]> = {
   Vector: [2, 2],
   Sphere: [2, 2],
   Circle: [2, 3],
+  Conic: [5, 6], // Conic(5 点) | Conic(ax²,by²,cxy,dx,ey,f 6 系数)；实测 7 系数引擎返回 true 却产出 emptyset（空转型陷阱）
 };
 
 /**
@@ -740,7 +742,53 @@ export function validateGGBCommand(cmd: string, mode?: "2d" | "3d"): ValidationR
   const reserved = reservedNameIssue(raw);
   if (reserved) issues.push(reserved);
 
+  // ⑩ 赋值形态双等号：`name = expr = value` —— 引擎必拒绝（实测 5.4.927：椭圆场景首发命令
+  //   `ell = x^2/9 + y^2/4 = 1` 报「创建函数/表达式 失败」）。GGB 命名等式/圆锥曲线用冒号。
+  issues.push(...assignDoubleEqualsIssues(raw));
+
   return { ok: issues.length === 0, issues, message: formatIssues(raw, issues) };
+}
+
+/**
+ * 赋值形态双等号检查（⑩）：赋值等号右侧的顶层再出现裸 `=` 即为非法形态。
+ * 引擎无法解析 `name = A = B`；正确形态是冒号命名 `name: A = B` 或省略赋值直接写 `A = B`。
+ * 逐行扫描（eval_raw 允许换行分隔多条命令）；字符串字面量与括号内（如 If(a=b,…)）不算。
+ */
+function assignDoubleEqualsIssues(raw: string): CommandIssue[] {
+  const issues: CommandIssue[] = [];
+  for (const line of raw.split("\n")) {
+    const s = stripStrings(line);
+    let depth = 0;
+    let seenAssignEq = false;
+    let extraEqPos = -1;
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (ch === "(" || ch === "[" || ch === "{") { depth++; continue; }
+      if (ch === ")" || ch === "]" || ch === "}") { depth--; continue; }
+      if (ch === "=" && depth === 0) {
+        // 跳过 <= >= != == 等复合比较符
+        const prev = s[i - 1];
+        const next = s[i + 1];
+        if (prev === "<" || prev === ">" || prev === "!" || prev === "=" || next === "=" || next === ">") continue;
+        if (!seenAssignEq) {
+          seenAssignEq = true;
+        } else {
+          extraEqPos = i;
+          break;
+        }
+      }
+    }
+    if (seenAssignEq && extraEqPos >= 0) {
+      issues.push({
+        kind: "double-equals",
+        message:
+          `赋值形态出现第二个顶层等号：${JSON.stringify(line.trim().slice(0, 60))} —— 引擎无法解析 ` +
+          `"name = 表达式 = 值" 形态。命名等式/圆锥曲线请用**冒号**：ell: x^2/9 + y^2/4 = 1 ` +
+          `（或省略名字直接写 x^2/9 + y^2/4 = 1）`,
+      });
+    }
+  }
+  return issues;
 }
 
 function capitalize(s: string): string {

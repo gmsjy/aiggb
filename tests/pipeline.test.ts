@@ -492,8 +492,9 @@ test("agent 轮次耗尽 → 不回滚、成功命令入 constructionLog、摘�
   assert.equal(setBase64Calls.length, 0, "incomplete 轮不应恢复快照（画布保留）");
   let lastAssistant = [...h.messages].reverse().find(m => m.role === "assistant");
   assert.ok(lastAssistant, "应追加 assistant 摘要消息");
-  assert.match(lastAssistant!.payload.explanation, /已达单轮最大轮次/);
-  assert.match(lastAssistant!.payload.explanation, /后续指令/);
+  assert.match(lastAssistant!.payload.explanation, /已达到单轮最大迭代次数/);
+  assert.doesNotMatch(lastAssistant!.payload.explanation, /已达单轮最大轮次/, "暂停文案不应重复出现两次（finalText 已含全部信息）");
+  assert.match(lastAssistant!.payload.explanation, /共 30 轮/, "摘要应保留轮次统计");
   assert.ok(
     lastAssistant!.payload.commands.some(c => c.op === "eval" && c.cmd.includes("A = (0, 0)")),
     "成功命令应写入消息/constructionLog（undo 回放与画布一致）"
