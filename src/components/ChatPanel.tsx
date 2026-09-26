@@ -113,6 +113,22 @@ export function ChatPanel() {
     };
   }, []);
 
+  // ★ 会话落盘兜底：轮间用户手动的画布改动（拖滑块、手动微调）不在任何保存路径上，
+  //   页面刷新/隐藏/关闭后会话恢复用的是轮结束时的旧快照，手动改动即丢失（实测复现）。
+  //   这里在页面隐藏/卸载时尽力保存一次（fire-and-forget，pagehide 下 IndexedDB 尽力而为）。
+  useEffect(() => {
+    const persist = () => void useAppStore.getState().persistCurrentSession();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") persist();
+    };
+    window.addEventListener("pagehide", persist);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", persist);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
   // ★ 取消/组件卸载时清理 confirmDialog，避免 Promise 悬挂
   useEffect(() => {
     const unsub = onRunCancelled(() => {

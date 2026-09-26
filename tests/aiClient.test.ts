@@ -104,3 +104,46 @@ test("resolveMaxOutputTokens：非法/零值回退默认", () => {
   assert.equal(resolveMaxOutputTokens(cfg({ maxOutputTokens: 0 }), false), DEFAULT_OUTPUT_TOKENS);
   assert.equal(resolveMaxOutputTokens(cfg({ maxOutputTokens: -5 }), true), THINKING_OUTPUT_TOKENS);
 });
+
+// ── withCallTimeout（非流式调用兜底超时）──
+
+test("withCallTimeout：超时触发 abort，reason 为 TimeoutError", async () => {
+  const { withCallTimeout } = await import("../src/lib/aiClient");
+  const t = withCallTimeout(undefined, 30);
+  const result = await new Promise<{ name: string }>(resolve => {
+    t.signal.addEventListener("abort", () => resolve({ name: (t.signal.reason as Error).name }));
+  });
+  t.done();
+  assert.equal(result.name, "TimeoutError", "超时应以 TimeoutError 中止");
+});
+
+test("withCallTimeout：外部 signal 中止立即透传，done() 清理不误触发", async () => {
+  const { withCallTimeout } = await import("../src/lib/aiClient");
+  const outer = new AbortController();
+  const t = withCallTimeout(outer.signal, 60_000);
+  const result = await new Promise<{ aborted: boolean }>(resolve => {
+    t.signal.addEventListener("abort", () => resolve({ aborted: true }));
+    outer.abort(new Error("用户取消"));
+  });
+  t.done();
+  assert.equal(result.aborted, true, "外部中止应立即透传");
+  assert.equal(t.signal.aborted, true);
+  // done() 之后定时器已清理：无法再等 60s 验证，这里仅确保调用不抛错
+});
+
+test("withCallTimeout：done() 后超时不再触发（信号保持未中止）", async () => {
+  const { withCallTimeout } = await import("../src/lib/aiClient");
+  const t = withCallTimeout(undefined, 20);
+  t.done();
+  await new Promise(r => setTimeout(r, 60));
+  assert.equal(t.signal.aborted, false, "done() 清理定时器后不应再中止");
+});
+
+test("withCallTimeout：外部 signal 已中止时直接返回已中止信号", async () => {
+  const { withCallTimeout } = await import("../src/lib/aiClient");
+  const outer = new AbortController();
+  outer.abort();
+  const t = withCallTimeout(outer.signal, 60_000);
+  assert.equal(t.signal.aborted, true, "已中止的外部 signal 应立即同步中止");
+  t.done();
+});

@@ -35,6 +35,14 @@ interface Props {
   onOpenSessions: () => void;
 }
 
+/** 可注入确认钩子：默认走原生 confirm；E2E 测试注入 `window.__aiggbConfirm = () => true`
+ *  即可全自动覆盖「清空」「切 2D↔3D」路径（原生 confirm 同步阻塞渲染主线程，
+ *  自动化协议在对话框关闭前无法完成点击应答，且嵌入式 webview 的对话框不可探测）。 */
+export function appConfirm(msg: string): boolean {
+  const hook = (globalThis as { __aiggbConfirm?: (m: string) => boolean }).__aiggbConfirm;
+  return hook ? hook(msg) : globalThis.confirm(msg);
+}
+
 export function Toolbar({ onOpenSettings, onOpenGallery, onOpenSessions }: Props) {
   const ggbApi = useAppStore(s => s.ggbApi);
   const ggbAppName = useAppStore(s => s.ggbAppName);
@@ -71,7 +79,7 @@ export function Toolbar({ onOpenSettings, onOpenGallery, onOpenSessions }: Props
     // ★ 取消进行中的请求，避免切模式后旧响应再写入已清空的消息
     abortCurrentRun();
     const next: "classic" | "3d" = ggbAppName === "3d" ? "classic" : "3d";
-    if (confirm(next === "3d"
+    if (appConfirm(next === "3d"
       ? "切换到 3D 画布？当前画布和图元将被清空。"
       : "切换回 2D 平面画布？当前 3D 对象将被清空。")) {
       setAppName(next);
@@ -92,7 +100,7 @@ export function Toolbar({ onOpenSettings, onOpenGallery, onOpenSessions }: Props
 
   const onClear = () => {
     if (!ggbApi) return;
-    if (confirm("清空画布与聊天历史？")) {
+    if (appConfirm("清空画布与聊天历史？")) {
       // ★ 取消进行中的请求，防止旧响应追加到已清空的消息/画布
       abortCurrentRun();
       // ★ 先 newConstruction 保底清空当前画布（2D 模式下 setAppName 同值不会触发重建）

@@ -417,8 +417,9 @@ async function evaluateAndRepair(finalSpec: string, deps: PipelineDeps): Promise
       { role: "user", content: repairMsg }
     ]);
 
-    // 执行修正命令（不做递归评估，避免无限循环；captureTraining=false 避免增量污染训练库）
-    await executeAndRepair(repairResponse, finalSpec, deps, false);
+    // 执行修正命令（不做递归评估，避免无限循环；captureTraining=false 避免增量污染训练库；
+    // 内层修复上界收紧为 1，控制一轮的最坏调用次数）
+    await executeAndRepair(repairResponse, finalSpec, deps, false, 1);
   } catch (err) {
     if (deps.signal.aborted) throw err;
     deps.appendMessage({
@@ -450,7 +451,10 @@ async function executeAndRepair(
   originalRequest: string,
   deps: PipelineDeps,
   /** 是否捕获训练样本（主执行 true；满足度修复回路 false，避免增量命令污染训练库） */
-  captureTraining = true
+  captureTraining = true,
+  /** 命令修复轮数上界：主执行 MAX_REPAIR=2；满足度修复回路传 1——评估修复自身已消耗
+   *  1+2 次调用，内层再放 2 轮会把一轮的最坏 LLM 调用数乘法放大到 ≈19 次（实测 5 分钟） */
+  maxRepairs: number = MAX_REPAIR
 ): Promise<void> {
   // [ASK] 反问：不执行命令
   if (response.ask) {
@@ -476,7 +480,7 @@ async function executeAndRepair(
   deps.appendAIResponse(response, results);
 
   let attempts = 0;
-  while (attempts < MAX_REPAIR) {
+  while (attempts < maxRepairs) {
     const failures = collectFailures(results);
     console.log(`[AiGGB:DIAG] ${getTraceId()} executeAndRepair: 第${attempts}次执行 — ${results.length - failures.length}成功 / ${failures.length}失败`);
     if (failures.length === 0) break;

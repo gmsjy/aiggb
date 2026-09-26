@@ -289,6 +289,37 @@ interface ChatCompletionResponse {
   };
 }
 
+/** 非流式 AI 调用兜底超时（毫秒）：正常生成 5~60s，慢供应商/thinking 最长 ~2 分钟；
+ *  超过视为连接挂起，主动中断——实测一轮评估修复链最坏 ≈19 次顺序调用，单次挂起会把整轮无限拖住。
+ *  仅用于 callAPI/ping 非流式路径；流式 agentChat 的 SSE 长流不适用。 */
+export const AI_CALL_TIMEOUT_MS = 180_000;
+
+/** 给外部 signal 叠加一层超时：返回的 signal 在「外部中止」或「超时」时任一触发；
+ *  调用方必须在结束后调用 done() 清理定时器与监听（否则定时器泄漏 keep-alive）。 */
+export function withCallTimeout(
+  signal: AbortSignal | undefined,
+  ms: number
+): { signal: AbortSignal; done: () => void } {
+  const ctrl = new AbortController();
+  if (signal?.aborted) {
+    ctrl.abort(signal.reason);
+    return { signal: ctrl.signal, done: () => {} };
+  }
+  const onOuterAbort = () => ctrl.abort(signal?.reason);
+  if (signal) signal.addEventListener("abort", onOuterAbort, { once: true });
+  const timer = setTimeout(
+    () => ctrl.abort(new DOMException(`AI 调用超时（${Math.round(ms / 1000)}s 无响应，已中断）`, "TimeoutError")),
+    ms
+  );
+  return {
+    signal: ctrl.signal,
+    done: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onOuterAbort);
+    },
+  };
+}
+
 /** 发起 chat/completions POST 请求，统一处理网络 / HTTP 错误，返回 Response（兼容流式） */
 async function fetchCompletion(
   config: AIConfig,
@@ -328,11 +359,17 @@ async function callAPI(
   body: Record<string, unknown>,
   signal?: AbortSignal
 ): Promise<ChatCompletionResponse> {
-  const resp = await fetchCompletion(config, body, signal);
+  // ★ 非流式调用兜底超时：挂起连接曾把评估修复链整体拖住（见 withCallTimeout 注释）
+  const t = withCallTimeout(signal, AI_CALL_TIMEOUT_MS);
   try {
-    return (await resp.json()) as ChatCompletionResponse;
-  } catch (err) {
-    throw new AIError("响应不是合法 JSON", err);
+    const resp = await fetchCompletion(config, body, t.signal);
+    try {
+      return (await resp.json()) as ChatCompletionResponse;
+    } catch (err) {
+      throw new AIError("响应不是合法 JSON", err);
+    }
+  } finally {
+    t.done();
   }
 }
 
@@ -771,27 +808,33 @@ export async function chatRaw(
  */
 export async function ping(config: AIConfig, signal?: AbortSignal, modelOverride?: string): Promise<void> {
   const baseURL = config.baseURL.replace(/\/+$/, "");
-  const resp = await fetch(`${baseURL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`
-    },
-    body: JSON.stringify({
-      model: modelOverride ?? config.model,
-      messages: [
-        { role: "system", content: "Reply with the JSON {\"ok\":true} only." },
-        { role: "user", content: "ping" }
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0,
-      max_tokens: 20
-    }),
-    signal
-  });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new AIError(`HTTP ${resp.status} ${text.slice(0, 200)}`);
+  // ★ 连接测试同样兜底超时（设置面板「测试连接」不应无限转圈）
+  const t = withCallTimeout(signal, AI_CALL_TIMEOUT_MS);
+  try {
+    const resp = await fetch(`${baseURL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.apiKey}`
+      },
+      body: JSON.stringify({
+        model: modelOverride ?? config.model,
+        messages: [
+          { role: "system", content: "Reply with the JSON {\"ok\":true} only." },
+          { role: "user", content: "ping" }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0,
+        max_tokens: 20
+      }),
+      signal: t.signal
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new AIError(`HTTP ${resp.status} ${text.slice(0, 200)}`);
+    }
+  } finally {
+    t.done();
   }
 }
 
