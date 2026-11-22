@@ -94,6 +94,8 @@
 └──────────────────────────────────────────────────────┘
 ```
 
+> **v2.0 主链路**：`pipeline.ts`（统一 Agent 流水线）→ `agentLoop.ts`（ReAct 工具循环）→ `toolExecutor.ts`（工具分发 + 预检）→ `ggbBridge.ts`（op → GGB API）。两阶段"精炼→确认→编译"管线已整体移除，纯文字与带图统一走 Agent 模式。
+
 ### 3.2 技术栈
 
 | 层 | 选型 | 版本 | 理由 |
@@ -146,7 +148,7 @@ e:\Project\AiGGB\
     ├── lib\
     │   ├── aiClient.ts      ← OpenAI 兼容适配器 + 4-role 模型解析 + ContentPart 多模态消息 + AIError/AISchemaError + ping
     │   ├── ggbBridge.ts     ← op→GGB API 执行器 + 容错 + 诊断 + 2D/3D batch 统一启用 + 3D 检测/切换/导出
-    │   ├── pipeline.ts      ← 两阶段流水线 + 多模态视觉管线状态机（纯 TS，可 node 单测）
+    │   ├── pipeline.ts      ← Agent 统一流水线（runAgentPipeline / runVisionPipeline）+ 多模态视觉管线（纯 TS，可 node 单测）
     │   ├── schema.ts        ← Zod discriminatedUnion + NumLike/BoolLike/IntLike + ask
     │   ├── prompts.ts       ← System Prompt（通用+物理域+3D 规则+白/黑名单+5阶段）
     │   ├── commands.ts      ← GGB 命令白名单（含 3D）+ 黑名单 + 5阶段流程
@@ -156,9 +158,6 @@ e:\Project\AiGGB\
     │   ├── toolExecutor.ts  ← Agent 工具→GGB API 分发（含 3D DockGlassPane 防护 + RAG 纠正）
     │   ├── tools.ts         ← 工具 Function Calling 定义（18 工具 + safe/dangerous 分级）
     │   ├── satisfactionEval.ts ← 满足度评估（画布快照 vs 精炼规格逻辑审查）
-    │   ├── specCache.ts     ← 意图→规格缓存（LRU + TTL + 画布指纹键）
-    │   ├── specSchema.ts    ← Phase 1 输出校验
-    │   ├── refinePrompt.ts  ← Phase 1 精炼 prompt
     │   ├── problemSchema.ts ← 题目识别输出校验（ProblemAnalysis + 确定性序列化）
     │   ├── visionPrompt.ts  ← 视觉模型题目识别 prompt
     │   ├── imageInput.ts    ← 图片输入预处理（校验 + 缩放编码）
@@ -492,6 +491,8 @@ export const AIResponse = z.object({
 
 ### 4.4 System Prompt 要点
 
+> **v2.0 注**：`prompts.ts` 的 full/compile 模式已随两阶段下线（无调用方，保留兼容）；本节条目内容仍是 Agent system prompt（`agentLoop.ts`）的行为要点，但 **Agent 走 Function Calling tool_calls 而非单次 JSON 输出**。`Set*` 脚本命令在 Agent 侧经 `set_style` 等工具或免确认 eval_raw 执行。
+
 详见 `src/lib/prompts.ts`。基础约束：
 
 1. **强制 JSON 输出**：使用 `response_format: { type: "json_object" }`，并在 prompt 里再次声明
@@ -519,7 +520,7 @@ System Prompt 在运行时根据当前 **domain**（用户在工具栏切换：`
 7. **Point/Vector 类型铁律**：`(x,y)` 赋给变量是 **Point** 而非 Vector；`Point+Point` 未定义会执行失败，`Point+Vector` 才合法。力 / 速度 / 场矢量必须用 `forceDiagram` 或 `vector` op，禁止 `eval` 出中间 Point 变量再做加法。
 8. **变量命名受 GGB 首字母类型推断约束**：`u/v/w` → Vector、`A~Z` 单大写 → Point、`f/g/h` → Function；标量须改用 `speed/disp/r` 等避开冲突名。
 9. **3D 场景规则**（用户描述含立体 / 正方体 / 圆柱 / 球 / 空间向量 / 螺旋等时附加）：正方体优先 `Cube(A,B)` 两点形式；建体后 `ZoomIn(0.5)` 适配视窗；截面用 `IntersectPath(Plane(...), poly)`；纯 3D applet 禁用 `SetViewDirection/SetFilling/SetPointSize/SetAxesRatio`，透明度改用 `style` 的 `opacity`，标记点用 `Sphere(p, 0.1)`。
-10. **已知坑**：`NSolveODE` 不能画 2D 向量场；`Sequence` 有 5 种官方重载（`Sequence(n)` / `Sequence(k,n)` / `Sequence(k,n,inc)` 整数表；`Sequence(expr,k,a,b[,step])` 迭代），迭代形态的循环变量必须是**单个 ASCII 字母**、`start/end/step` 必须是三个独立参数、括号须逐层闭合、参数之间禁用句点（`Sequence(var, list)` 与区间压缩写法均不可靠）；距离平方分母必须 `+0.001` 防除零；`SetColor(obj,r,g,b)` 的 r/g/b 必须是 0~255 整数；偶极子 Ex/Ey 分量符号有硬编码模板。
+10. **已知坑**：`NSolveODE` 不能画 2D 向量场；`Sequence` 有 5 种官方重载（`Sequence(n)` / `Sequence(k,n)` / `Sequence(k,n,inc)` 整数表；`Sequence(expr,k,a,b[,step])` 迭代），迭代形态的循环变量必须是**单个 ASCII 字母**、`start/end/step` 必须是三个独立参数、括号须逐层闭合、参数之间禁用句点（`Sequence(var, list)` 与区间压缩写法均不可靠）；距离平方分母必须 `+0.001` 防除零；`SetColor(obj,r,g,b)` 的 r/g/b 必须是 **0~1 浮点**（GGB 脚本路径，写 0~255 会被钳成白色）；偶极子 Ex/Ey 分量符号有硬编码模板。
 
 ---
 
@@ -787,7 +788,7 @@ setInterval(2s):
 
 ## 4C. Agent 模式（ReAct 工具调用）
 
-除两阶段流水线（Phase 1→确认→Phase 2→执行）外，系统还支持 **Agent 模式**：AI 通过 OpenAI Function Calling 逐步调用工具，每步观察执行结果再决定下一步，形成 observe→plan→act 循环。
+v2.0 起**唯一的执行架构**：AI 通过 OpenAI Function Calling 逐步调用工具，每步观察执行结果再决定下一步，形成 observe→plan→act 循环。
 
 ### 4C.1 架构
 
@@ -808,7 +809,7 @@ setInterval(2s):
 | `src/lib/toolExecutor.ts` | 工具→GGB API 分发：`executeToolCall()` / `executeToolCalls()` |
 | `src/lib/tools.ts` | 工具定义：OpenAI JSON Schema + Zod 校验 + 安全分级 |
 
-### 4C.2 工具列表（18 个）
+### 4C.2 工具列表（v2.0：26 个工具 case，完整清单见 `toolExecutor.ts`）
 
 | 工具 | 安全等级 | 说明 |
 |---|---|---|
@@ -821,7 +822,9 @@ setInterval(2s):
 | `set_style` / `set_animation` / `set_view` | safe | 样式/动画/视窗 |
 | `get_object_info` / `list_objects` | safe | 画布查询（供 AI 了解当前状态） |
 | `delete_object` / `clear_canvas` | **dangerous** | 删除对象/清空画布 |
-| `eval_raw` / `eval_sequence` | **dangerous** | 执行任意 GGB 命令/批量序列 |
+| `eval_raw` / `eval_sequence` | **dangerous** | 执行任意 GGB 命令/批量序列（赋值形态经 `isEvalAutoSafe` 自动降档免确认） |
+
+> 注：`create_point/slider`、`create_line/midpoint/intersect/locus`、`set_unit_axes`、`eval_sequence` 等薄包装工具已下线，由批量版/免确认 `eval_raw` 承接（重放映射保留兼容历史轨迹）；新增 `attach_vector`/`create_readout`/`create_spring`/`create_fractal` 等物理演示工具。
 
 ### 4C.3 安全确认机制
 
@@ -868,7 +871,9 @@ DeepSeek V4 原生内嵌 thinking（流式返回 `reasoning_content`）。系统
 
 ## 4D. 多模态题目识别（已实施 · Agent 基底 + 画布状态核对）
 
-通过多模态大模型读取高中数学 / 物理**题目图片**，自动完成题目解读，随后**以 Agent 模式（ReAct 工具调用循环）为构造基底**生成动图，并以 **GeoGebra 画布状态作为状态核对反馈**：AI 宣称构造完成时，系统用画布结构化快照与确认后的题目解读逐项核对，发现偏差即回喂循环内继续修正。文字绘制行为不变：纯文字输入仍走现有流水线（跟随工具栏 代理/两阶段 开关）。
+> **v2.0 注**：本章为 v1.9 实施期规格，行文中的「代理/两阶段开关」「`runPipeline`」「specCache」等上下文已随 v2.0（两阶段下线、纯文字/带图统一走 Agent）消失；技术方案（识别→确认→Agent 构造→双路状态核对）本身仍为现态。
+
+通过多模态大模型读取高中数学 / 物理**题目图片**，自动完成题目解读，随后**以 Agent 模式（ReAct 工具调用循环）为构造基底**生成动图，并以 **GeoGebra 画布状态作为状态核对反馈**：AI 宣称构造完成时，系统用画布结构化快照与确认后的题目解读逐项核对，发现偏差即回喂循环内继续修正。纯文字输入同样走 Agent 流水线（v2.0 统一）。
 
 > 本节于 2026-08-29 基于代码核对完成需求细化并实施（基线：master@4c66137 → 多模态 M-A~M-E 全里程碑完成，139 单测 / 63 回放全绿）。§4D.0 列出核对确认的代码现状；§4D.11 记录实施后发现并修复的运行时问题。
 
@@ -1536,10 +1541,11 @@ AI: {
 ### 8.2 自修复回路
 
 ```
-执行命令 → 失败 →
-  把 { failedCmd, ggbError, originalRequest } 加入对话历史 →
-  再次调用 AI → 得到新 commands → 重新执行
-重试上限：2 次
+Agent 循环：工具执行 → 失败 →
+  结构化失败详情（kind: args/preflight/engine… + 可读诊断）作为 Observation 喂回 →
+  AI 自行调整下一步（参数/预检类失败不计入熔断，给自我修正机会）
+连续 3 轮失败 → 熔断中止
+全部失败 → 快照回滚 + 重放构造日志
 ```
 
 ### 8.3 用户可见反馈
@@ -1601,12 +1607,14 @@ MVP 须通过以下 12 个场景：
 
 ### 10A.2 防漂移七层体系总览
 
-系统构建了 **提示层 → 自检层 → 清洗层 → 校验层 → 语法预检层 → 纠正层 → 执行层** 的递进防御闭环，每一层都针对特定漂移类型进行拦截和修复。
+系统构建了 **提示层 → 清洗层 → 校验层 → 语法预检层 → 纠正层 → 执行层 → 核对层** 的递进防御闭环，每一层都针对特定漂移类型进行拦截和修复。（v2.0：原「自检层」随两阶段 compile prompt 下线，由 Agent 提示层纪律 + **核对层** StateCheck 双路取代。）
 
 ```
-用户输入 → [提示层] → AI 调用 → [清洗层] → [校验层] → [语法预检层] → [纠正层] → [执行层] → 成功
+用户输入 → [提示层] → AI 调用（Agent 工具循环）→ [清洗层] → [校验层] → [语法预检层] → [纠正层] → [执行层] → 成功
                                                           ↓ 失败（带具体诊断）
-                                                  [修正层] → 重新调用 AI
+                                                  [修正层] → AI 观察 error 自行调整
+                                                          ↓ AI 总结
+                                                  [核对层] → 结构快照 + 截图视觉双路 → 偏差回喂修正
 ```
 
 > **语法预检层（v1.9）**：`commandValidate.ts` 在把命令交给 GeoGebra 之前做纯文本静态检查。
