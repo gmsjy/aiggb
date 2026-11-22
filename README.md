@@ -47,7 +47,7 @@ npm run dev        # → http://localhost:5173
 |---|---|
 | Provider | DeepSeek |
 | 模型（主力） | `deepseek-flash`（V4.1-Flash-1017，原生多模态，推荐） |
-| 轻量模型（精炼/评估，可选） | 留空跟随主力 |
+| 轻量模型（评估/核对，可选） | 留空跟随主力 |
 | Agent 模型（对话代理，可选） | 留空跟随主力（⚠ 带图场景请勿选 `deepseek-v4-pro`——不支持图片输入） |
 | 视觉模型（题目识别，可选） | 留空跟随主力（原生多模态；主力为 `deepseek-v4-pro` 时必须单独配置） |
 | API Key | `sk-...`（从 [platform.deepseek.com](https://platform.deepseek.com/api_keys) 获取） |
@@ -62,24 +62,18 @@ npm run dev        # → http://localhost:5173
 
 ## 运行模式
 
-AiGGB 提供两种执行模式，可在设置面板切换：
-
-### 两阶段管线（默认）
+v2.0 起采用**统一 Agent 架构**：纯文字与带图输入都由 Agent 工具循环构造。两阶段"精炼→确认→编译"管线已于 v2.0 移除——Agent 循环 + 工具预检 + 状态核对覆盖同样的质量目标，链路更短、交互更直接。
 
 ```
-用户输入 → Phase 1 精炼 (flash) → 规格确认气泡 → Phase 2 编译 (pro) → 执行 + 自修复
+用户输入（纯文字 / 拍题图片）
+  → 视觉模型识别题目（仅带图轮）→ 题目确认气泡
+  → Agent 工具循环（ReAct）：创建点/滑块/矢量/函数/执行命令…每步拿执行反馈即时调整
+  → 画布状态核对（双路：结构快照 + 截图视觉）→ 偏差自动回喂修正
+  → 完成（附满足度报告）
 ```
-
-1. **Phase 1**：flash 模型将用户意图展开为详细分节绘图规格
-2. **规格确认**：气泡展示规格，可编辑 / 重新生成 / 确认绘制
-3. **Phase 2**：主力模型将精炼规格编译为 GGB 命令 JSON（含自检）
-
-### Agent 模式（工具调用代理）
-
-AI 逐步调用工具（创建点/滑块/矢量/执行命令/查询对象…），每步获得执行反馈后即时调整。适合复杂构造场景。
 
 关键机制：
-- **23 个工具**，分 safe / dangerous 两级（`eval_raw`/`delete`/`clear` 需用户确认，可信任会话后自动通过）
+- **26 个工具**，分 safe / dangerous 两级（`eval_raw`/`delete`/`clear` 需用户确认，可信任会话后自动通过）
 - **参数归一化**：Zod 校验 → 安全拦截 → **preFlight 语义预检**（负半径、min≥max、除零、依赖对象缺失在调用 GGB 前拦截，可读错误喂回 AI 自行修正）
 - **未知工具过滤**：AI 臆造的工具名直接返回错误，不执行
 - **连续失败熔断**：3 轮执行失败自动中止（参数类错误不计入，给模型自我修正机会）
@@ -136,7 +130,7 @@ AI 逐步调用工具（创建点/滑块/矢量/执行命令/查询对象…）�
 - 识别失败但消息里有文字 → 提示后**直接按文字构造**（仍带原图，模型能看图就还有机会画对）
 - 纯图片识别失败 → **反问引导**：换更清晰的图，或直接用文字描述题目
 - 题意存疑（图片不清）→ 以普通反问气泡呈现，回复后继续
-- 带图轮固定走 Agent 构造，与「代理/两阶段」开关无关；3D 题目请先手动切到 3D 模式
+- 带图轮固定走 Agent 构造；3D 题目请先手动切到 3D 模式
 - 多张图（≤3）会逐张标注 `[图1] [图2]` 分别解读，避免模型把多张图混淆成一张
 - 历史会话中的图片随消息保存（IndexedDB），刷新后可回看
 
@@ -290,7 +284,7 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o` / `gpt-4.1` |
 | Ollama 本地 | `http://localhost:11434/v1` | `qwen2.5:7b` 等 |
 
-> 日常推荐 `deepseek-flash`（V4.1-Flash-1017，2026-10-17：原生多模态、1M 上下文、`max_tokens` 上限 384K）。`deepseek-v4-pro` 仍在服务但价格约为 flash 的 4 倍且**不支持图片输入**；旧模型名 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 已下线，服务端暂时路由到 V4.1-Flash-1017。轻量模型用于 Phase 1 精炼和满足度评估，可留空跟随主力。
+> 日常推荐 `deepseek-flash`（V4.1-Flash-1017，2026-10-17：原生多模态、1M 上下文、`max_tokens` 上限 384K）。`deepseek-v4-pro` 仍在服务但价格约为 flash 的 4 倍且**不支持图片输入**；旧模型名 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 已下线，服务端暂时路由到 V4.1-Flash-1017。轻量模型用于满足度评估与画布状态核对（可留空跟随主力）。
 
 > 💡 **四类角色模型**（设置 → 高级，均可留空跟随主力）：轻量模型（精炼/评估）、Agent 模型（工具调用代理）、**视觉模型（题目图片识别，需支持图片输入）**。各 provider 视觉候选见「多模态题目识别」章节。
 
@@ -340,20 +334,17 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
 
 ## 运行流程
 
-### 两阶段管线
+### 统一 Agent 流水线（纯文字）
 
 ```
 用户输入
-  → Phase 1 精炼 (flash)：意图→详细分节绘图规格
-  → 规格确认气泡（可编辑/重新生成/确认）
-  → Phase 2 编译 (pro)：规格→GGB 命令 JSON（含自检）
-  → RAG 命令纠正（Levenshtein 模糊匹配 + 臆造命令查表）
-  → GGB 桥接逐条执行（op→evalCommand/setTrace/setColor…）
-  → 满足度评估 (flash)：画布快照 vs 精炼规格逻辑审查
-    → 满足 ✓ → 完成
-    → 不满足 ✗ → 追加 issues → 1 次修复
-  → 执行失败 ✗ → Checker 角色分析错误 → 重试（最多 2 次）
-    → 全部失败 → 快照回滚 + 重放构造日志
+  → Agent 工具循环（ReAct，≤30 次迭代）：
+      observe（画布状态）→ plan → act（执行工具，单步反馈）
+      ├─ 单步失败 → 错误详情喂回 AI 自行调整（参数/预检类不计熔断）
+      ├─ 连续 3 轮失败 → 熔断中止（画布保留）
+      └─ 轮次耗尽 → incomplete 可续作（下轮对话接力）
+  → AI 输出总结文本 → 完成
+  → 全部失败 → 快照回滚 + 重放构造日志
 ```
 
 ### 带图输入（多模态）
@@ -372,14 +363,15 @@ AiGGB 默认在**二维平面**作图。工具栏提供手动切换按钮：
 
 识别失败但有文字 → 降级为普通 Agent 轮；纯图片失败 → 提示配置视觉模型。视觉核对与识别共用视觉模型配置。
 
-### 六层防漂移
+### 七层防漂移（v2.0）
 
-1. **提示层**：RAG 过滤的命令参考 + 臆造警告 + 五阶段流程 + Point/Vector 类型铁律
-2. **自检层**：Phase 2 强制 AI 输出 `self_check` 逐项核对
-3. **清洗层**：BOM 剥离 + Code Fence 清理
-4. **校验层**：Zod discriminatedUnion 校验（硬黑名单 + XSS/注入拦截）
+1. **提示层**：Agent system prompt（RAG 命令参考 + 臆造警告 + 5 阶段流程 + Point/Vector 类型铁律 + Sequence 契约）+ known_traps 陷阱动态注入
+2. **清洗层**：BOM 剥离 + Code Fence 清理
+3. **校验层**：TOOL_SCHEMAS Zod 校验 + SafeCmd 黑名单 + XSS/注入拦截
+4. **预检层**：commandValidate 静态语法预检（括号/Sequence 契约/参数个数/3D 禁令/保留名/双等号）+ preFlight 语义预检（负半径/min≥max/除零/依赖缺失）
 5. **纠正层**：RAG 命令后置纠正（Levenshtein ≤2 + 臆造映射 + 参数个数校验）
-6. **执行层**：Pre-check（animate/trace 目标存在）+ Point+Point 自动重写 + Agent preFlight 语义预检（负半径/min≥max/除零/依赖缺失）+ 修复回路
+6. **执行层**：Pre-check（animate/trace 目标存在）+ Point+Point 自动重写 + 失败详情喂回 AI 自修复
+7. **核对层**：AI 总结时画布状态核对（结构快照 + 截图视觉双路），偏差自动回喂修正
 
 ---
 
@@ -417,7 +409,7 @@ React 19 · Vite 8 · TypeScript 5 · Zustand 5 · Zod 3 · GeoGebra deployggb.j
 
 | 命令 | 说明 |
 |---|---|
-| `npm run test:unit` | **151 单测（0 API）**：pipeline 状态机（含视觉管线 + 视觉核对）/ specCache / ggbBridge / ggbKB / toolExecutor / agentLoop / agentSmoke / satisfactionEval（含视觉审查）/ sessionStore / trainingStore / trajectory-replay / trapStore / runControl / problemSchema / imageInput |
+| `npm run test:unit` | **323 单测（0 API）**：pipeline（含视觉管线）/ ggbBridge / ggbKB / commandValidate / toolExecutor / agentLoop / agentSmoke / satisfactionEval（含视觉审查）/ sessionStore / trainingStore / trajectory-replay / trapStore / runControl / problemSchema / imageInput / providers / schema / aiClient / repaintGate |
 | `npm run test:replay` | 离线回归 63 用例（当前 **63/63, 100%**） |
 | `npm run test:trajectory` | 用当前执行层重放历史失败轨迹，统计"越用越强"修复率（离线） |
 | `npm run test:record` | 在线全量 + 录制 fixtures（需 `.env` 配置 Key） |
@@ -446,24 +438,24 @@ src/
 │   ├── ScriptPanel.tsx         实时脚本展示
 │   ├── SettingsDialog.tsx      API 配置（4-role 模型 + 思考深度 + 用量统计）
 │   ├── SessionDialog.tsx       会话历史弹层（列表/新建/切换/删除/重命名）
+│   ├── TrainingDialog.tsx      训练数据管理（统计/导出/导入）
+│   ├── TokenUsageChart.tsx     Token 用量统计图（SVG 手绘）
 │   └── MessageBubble.tsx / PWAUpdatePrompt.tsx
 ├── lib/
-│   ├── pipeline.ts             两阶段管线 + 视觉管线状态机（Phase 1→确认→Phase 2→修复→评估；识别→题目确认→Agent 构造+状态核对）
+│   ├── pipeline.ts             Agent 统一管线（runAgentPipeline / runVisionPipeline：识别→题目确认→Agent 构造+状态核对；快照回滚）
 │   ├── agentLoop.ts            Agent 模式 ReAct 循环（工具调用 + 熔断 + 未知工具过滤 + 画布状态核对）
 │   ├── toolExecutor.ts         Agent 工具执行（Zod 校验 + 安全拦截 + preFlight 语义预检 + 可重放映射）
 │   ├── tools.ts                Agent 工具定义（Function Calling schema + 安全分级）
 │   ├── aiClient.ts             OpenAI 兼容客户端（chat/chatRaw/agentChat 流式工具调用 + 4-role 模型 + 多模态消息）
 │   ├── ggbBridge.ts            op→GGB API 执行器 + 画布快照 + 批量渲染
 │   ├── schema.ts               Zod 校验 + CoordExpr 注入防护
-│   ├── prompts.ts              System/Compile/Checker Prompt（few-shot 示例驱动）
-│   ├── refinePrompt.ts         Phase 1 精炼 Prompt
+│   ├── prompts.ts              System/Compile/Checker Prompt（v2.0 起无调用方，保留兼容）
 │   ├── satisfactionEval.ts     满足度评估（flash 模型画布审查）
 │   ├── commandCorrect.ts       RAG 命令后置纠正
-│   ├── ggbKB.ts                命令知识库（~170 条 + 臆造映射 + 重载签名表）
+│   ├── ggbKB.ts                命令知识库（~130 条 + 臆造映射 + 重载签名表）
 │   ├── commands.ts             GGB 命令白名单/黑名单
+│   ├── commandValidate.ts      执行前静态语法预检（括号/Sequence/参数个数/3D 禁令/保留名/双等号）
 │   ├── runControl.ts           单轮运行生命周期管理（AbortSignal/取消）
-│   ├── specCache.ts            意图→规格缓存（模板精确匹配 + LRU）
-│   ├── specSchema.ts           Phase 1 输出校验
 │   ├── physics.ts              物理常量
 │   ├── templates.ts            12 条模板（物理 4 + 数学 4 + 3D 4）
 │   ├── providers.ts            AI 预置 provider
@@ -473,6 +465,7 @@ src/
 │   ├── visionPrompt.ts         视觉模型题目识别 Prompt
 │   ├── imageInput.ts           图片输入预处理（校验 + 缩放编码）
 │   ├── sessionStore.ts         会话历史存储（IndexedDB + localStorage 索引分离）
+│   ├── ggbDB.ts                共享 IndexedDB（记忆库 schema 统一建表）
 │   └── trapStore.ts            分层记忆系统（prompt_hash / L2场景 / known_traps / 符号表 / 偏好）
 ├── store/useAppStore.ts        Zustand (persist v4)
 ├── styles/                     CSS Variables + 全局样式
@@ -484,7 +477,7 @@ tests/
 ├── toolExecutor.test.ts        工具层 23 用例
 ├── agentLoop.test.ts           Agent 状态机 13 用例
 ├── agentSmoke.test.ts          Agent 端到端冒烟 4 场景（单摆/电场/3D/负例）
-├── pipeline.test.ts / specCache.test.ts / ggbBridge.test.ts / ggbKB.test.ts / satisfactionEval.test.ts
+├── pipeline.test.ts / ggbBridge.test.ts / ggbKB.test.ts / satisfactionEval.test.ts
 ├── trainingStore.test.ts / trajectory-replay.test.ts / trapStore.test.ts / sessionStore.test.ts
 └── fixtures/                   录制的 AI 响应基线
 ```

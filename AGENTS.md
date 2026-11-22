@@ -2,37 +2,39 @@
 
 > 本文档是给 AI agent 使用的项目梳理，描述了当前代码实现的功能与架构。
 > 详细规格见 [SPEC.md](SPEC.md)，使用说明见 [README.md](README.md)。
->
-> ⚠️ **v2.0 架构迁移中**：两阶段流水线（Phase 1 精炼 → 规格确认 → Phase 2 编译）已整体移除，纯文字与带图统一走 Agent 模式（`runAgentPipeline` / `runVisionPipeline`，见 `pipeline.ts` 头注释）。下文「核心架构：两阶段流水线」等章节描述的是 v1.x 形态，待按 v2.0 重写；模块表中 `prompts.ts` 的 compile/checker 模式已无调用方。
 
 ## 项目一句话
 
 **纯前端** Web 应用：用户用自然语言描述数学/物理/几何场景，AI 生成 GeoGebra 命令，在内嵌 GeoGebra 画布中渲染为可交互动态图像。React 19 + Vite 8 + PWA，零后端。
 
-## 核心架构：两阶段流水线
+## 核心架构：统一 Agent 流水线（v2.0）
 
 ```
-用户输入 → [Phase 1 精炼] → 规格确认气泡 → [Phase 2 编译+自检] → GGB 命令 → 执行
-              (flash)         (用户审阅)         (pro)
+用户输入（纯文字 / 拍题图片）
+  → [仅带图] 视觉模型识别 → 题目确认气泡（编辑 / 重新识别 / 确认并绘制）
+  → Agent 工具循环（ReAct）：observe → plan → act，每步执行反馈即时调整
+  → AI 输出总结文本时触发画布状态核对（双路：结构快照 + 截图视觉）
+      → 偏差 → issues 注入循环继续修正（≤2 轮，共享迭代预算）
+  → 完成
 ```
+
+两阶段流水线（Phase 1 精炼 → 规格确认气泡 → Phase 2 编译）已于 v2.0 整体移除——Agent 循环 + 工具预检 + 状态核对覆盖同样的质量目标，链路更短、交互更直接（`pipeline.ts` 头注释）。`buildSystemPrompt`（full/compile）/`buildCompilePrompt`/`buildCheckerPrompt` 保留在 `prompts.ts` 但已无调用方；`spec-review` 消息类型仅为历史会话兼容渲染。
 
 ### 交互流程（用户视角）
 
-1. 用户输入需求（如"画斜抛运动 v0=20 仰角 45°"）
-2. **Phase 1**：`chatRaw` + `buildRefinePrompt` 调用轻量模型 → 生成详细分节绘图规格（JSON `{"spec":"..."}`）
-3. **规格确认气泡**（`spec-review` 消息类型）：用户可 **编辑** / **重新生成** / **确认绘制**
-4. **Phase 2**：确认后 `chat` + `buildCompilePrompt` 调用主力模型 → 精炼规格编译为 GGB 命令 JSON（含 `self_check` 自检字段）
-5. `batchCorrect`（RAG 纠正器）修正臆造命令 → `executeCommands` 逐条执行 → 失败走修复回路
+1. 输入需求（如"画斜抛运动 v0=20 仰角 45°"）；带图时先由视觉模型识别并弹出题目确认气泡
+2. Agent 工具循环逐步构造：右侧脚本面板实时滚动已执行命令，思考/工具步骤实时展示（`🧠`）
+3. 构造中失败由 AI 观察错误详情自行修正（参数/预检类不计熔断；连续 3 轮失败熔断保护）
+4. 完成时自动画布状态核对（带图轮必做双路核对），发现偏差自动修正
+5. 结束附满足度/核对报告；全部失败时快照回滚 + 重放构造日志
 
 ### 关键控制流
 
-- **编排核心已抽取**：ChatPanel 的两阶段逻辑整体移入 `src/lib/pipeline.ts`（纯 TS 状态机，零 React 依赖，支持依赖注入可 node 单测）。ChatPanel 只负责输入 UI、消息渲染、store 依赖注入、规格确认事件桥接。
-- **并发锁**：`runningRef`（useRef）只在 `runRound` 一处获取/释放。`runPipeline` 返回的 Promise 在整个流程（含确认等待 / 降级 / 重试 / 取消）结束前不 resolve，锁在 finally 统一释放。
-- **取消机制**：`runControl.ts` 的 `beginRun()` 提供本轮 AbortSignal；Toolbar「清空/切 2D↔3D/撤销」调用 `abortCurrentRun()` 取消请求。spec-review 等待气泡订阅 `onRunCancelled`，取消时同步释放锁，避免锁悬挂；catch 里用 `wasAborted()` 静默吞掉 AbortError。
-- **Phase 2 防双击**：`phase2Guard` 标志防止快速双击"确认绘制"触发并发 Phase 2。
-- **Phase 1 降级**：规格为空/解析失败/API 异常 → 回退 `runSinglePhase`（旧的一步到位逻辑保留在 pipeline.ts 中）。
-- **事件通信**：确认/重试通过 `window.dispatchEvent(new CustomEvent("aiggb:spec-confirm" / "aiggb:spec-retry"))` 从气泡传回 ChatPanel，`reviewHandleRef` 路由到当前轮的 `ReviewHandle`。
+- **编排核心已抽取**：ChatPanel 逻辑整体移入 `src/lib/pipeline.ts`（纯 TS 状态机，零 React 依赖，依赖注入可 node 单测）。ChatPanel 只负责输入 UI、消息渲染、store 依赖注入、发送路由（带图 → `runVisionPipeline`；纯文字 → `runAgentPipeline`）。
+- **并发锁**：`runningRef`（useRef）只在 `runRound` 一处获取/释放，整个流程（含确认等待/重试/取消）结束前不 resolve，锁在 finally 统一释放。
+- **取消机制**：`runControl.ts` 的 `beginRun()` 提供本轮 AbortSignal；Toolbar「清空/切 2D↔3D/撤销」调用 `abortCurrentRun()`；确认气泡订阅 `onRunCancelled` 取消时同步释放锁，避免锁悬挂；catch 里用 `wasAborted()` 静默吞掉 AbortError。
 - **失败回滚（全失败时）**：优先恢复执行前 base64 快照（3s 超时兜底）；快照缺失/超时 → `newConstruction` + 重放 `constructionLog`（store 维护的成功命令日志，`resetTmpIds` 复位临时对象计数）。
+- **续作暂停**：Agent 轮次耗尽 → `AgentLoopResult.incomplete`（画布保留不回滚），下轮经 `resumeMessages` 注入接力（TTL 10min + 画布指纹校验兜底）。
 
 ## 目录结构与职责
 
@@ -40,10 +42,10 @@
 
 | 文件 | 职责 | 关键导出 |
 |---|---|---|
-| `aiClient.ts` | OpenAI 兼容调用 | `chat(config, msgs, signal?, modelOverride?)` 返回 schema 校验后的 `AIResponse`；`chatRaw(...)` 返回纯文本（Phase 1 / 视觉识别用）；`agentChat(...)` Agent **流式**工具调用（SSE 增量解析 tool_calls + `onContent` 实时回调 + JSON 兼容回退 + 输出预算 `resolveMaxOutputTokens()`：可配 `AIConfig.maxOutputTokens`，默认 16384 / thinking 32768；第 8 参 `AgentChatOverrides` 支持截断重试扩容+降思考档；`usage.reasoning` 单列思考 token）；`ping(config, signal?, modelOverride?)` 连接测试（设置面板传 visionModel 顺带测视觉模型）；`AIConfig`（**4-role 模型**：`model` 主力 / `lightModel?` 轻量 / `agentModel?` Agent / `visionModel?` 视觉，`flashModel?` 已 deprecated；`reasoningEffort` 含 `"none"` = 关闭思考、`"max"` = 最高档；`maxOutputTokens?` 输出预算）；`getProviderQuirks`（DeepSeek：1M 上下文 / 默认档 high / `thinkingIgnoresTemperature`）；`isDeepSeek`/`isZhipuProvider`；`resolveModel(config, role)` 统一解析回退链（vision → model）；`ChatMessage`（content 支持 `string \| ContentPart[]` 多模态）、`ContentPart`（text/image_url）、`AIError`、`AISchemaError` |
-| `pipeline.ts` | **两阶段流水线状态机**（从 ChatPanel 抽取）+ **多模态视觉管线** | `runPipeline(userText, deps, cb)`（Phase 1→确认→Phase 2→修复→**满足度评估**）、**`runVisionPipeline({text, images}, deps, cb)`**（带图轮入口：识别→题目确认→Agent 构造+状态核对）、`runAgentPipeline`/内部 `runAgentRound(userText, deps, cb, {stateCheck?, evalBasis?})`、`ReviewHandle`/`ProblemHandle`/对应 Decision、`PipelineDeps`（依赖注入接口，含 4-role 模型解析 + `runAgentLoopImpl?` + `updateProblemReview?` + `appMode`）、`PipelineCallbacks`（含 `onProblemReview?`）、`MAX_REPAIR=2`、`MAX_FORMAT_RETRY=2`、`HISTORY_WINDOW=6`、`parseRefinedSpec`、`collectHistory`（user 带 attachments 时追加 `[附件:图片×N]` 占位）；内部 `runSinglePhase`/`runPhase2`/`executeAndRepair`/`applyRagCorrection`/`chatWithFormatRetry`/`extractProblem`/`waitProblemReview`；Phase 2 调用 `executeCommands(api, cmds, deps.appMode)`；`requestAnimationFrame` 用 `typeof` 守卫兼容 Node.js 单测 |
-| `runControl.ts` | 单轮运行生命周期 | `beginRun()`（返回本轮 AbortSignal）、`abortCurrentRun()`（清空/切模式/撤销时取消请求）、`onRunCancelled(cb)`（spec-review 等待气泡订阅取消）、`wasAborted()`、`endRun()` |
-| `prompts.ts` | System Prompt 构建 | `buildSystemPrompt(domain, appMode, phase="full"\|"compile")`、`buildCompilePrompt`、`buildCheckerPrompt`（修复角色）、`buildRepairMessage`、`buildFormatRepairMessage`；compile 模式含 **self_check 自检指令**；`Domain = "general"\|"physics"` |
+| `aiClient.ts` | OpenAI 兼容调用 | `chat(config, msgs, signal?, modelOverride?)` 返回 schema 校验后的 `AIResponse`；`chatRaw(...)` 返回纯文本（视觉识别用）；`agentChat(...)` Agent **流式**工具调用（SSE 增量解析 tool_calls + `onContent` 实时回调 + JSON 兼容回退 + 输出预算 `resolveMaxOutputTokens()`：可配 `AIConfig.maxOutputTokens`，默认 16384 / thinking 32768；第 8 参 `AgentChatOverrides` 支持截断重试扩容+降思考档；`usage.reasoning` 单列思考 token）；`ping(config, signal?, modelOverride?)` 连接测试（设置面板传 visionModel 顺带测视觉模型）；`AIConfig`（**4-role 模型**：`model` 主力 / `lightModel?` 轻量 / `agentModel?` Agent / `visionModel?` 视觉，`flashModel?` 已 deprecated；`reasoningEffort` 含 `"none"` = 关闭思考、`"max"` = 最高档；`maxOutputTokens?` 输出预算）；`getProviderQuirks`（DeepSeek：1M 上下文 / 默认档 high / `thinkingIgnoresTemperature`）；`isDeepSeek`/`isZhipuProvider`；`resolveModel(config, role)` 统一解析回退链（vision → model）；`ChatMessage`（content 支持 `string \| ContentPart[]` 多模态）、`ContentPart`（text/image_url）、`AIError`、`AISchemaError` |
+| `pipeline.ts` | **Agent 统一流水线状态机**（v2.0：两阶段已移除）+ **多模态视觉管线** | `runAgentPipeline(userText, deps, cb)`（纯文字 Agent 轮）、**`runVisionPipeline({text, images}, deps, cb)`**（带图轮：识别→题目确认→Agent 构造+状态核对）、内部 `runAgentRound(..., {stateCheck?, evalBasis?, images?})`、`ReviewHandle`（历史兼容）/`ProblemHandle`/对应 Decision、`PipelineDeps`（依赖注入接口，含 4-role 模型解析 + `runAgentLoopImpl?` + `updateProblemReview?` + `appMode`）、`PipelineCallbacks`（含 `onProblemReview?`）、`HISTORY_WINDOW=6`、`collectHistory`（user 带 attachments 时追加 `[附件:图片×N]` 占位）、`takeSnapshot`/`restoreSnapshot`/`replayConstructionLog`（快照回滚）、`clearAgentResumeCache`；`requestAnimationFrame` 用 `typeof` 守卫兼容 Node.js 单测 |
+| `runControl.ts` | 单轮运行生命周期 | `beginRun()`（返回本轮 AbortSignal）、`abortCurrentRun()`（清空/切模式/撤销时取消请求）、`onRunCancelled(cb)`（确认气泡订阅取消）、`wasAborted()`、`endRun()` |
+| `prompts.ts` | System Prompt 构建（v2.0 起无调用方，保留兼容） | `buildSystemPrompt(domain, appMode, phase="full"\|"compile")`、`buildCompilePrompt`、`buildCheckerPrompt`（修复角色）、`buildRepairMessage`、`buildFormatRepairMessage`；compile 模式含 self_check 自检指令；`Domain = "general"\|"physics"`。Agent 回路的系统提示在 `agentLoop.ts`（EVAL_SYSTEM_PROMPT 为 stateCheck 审查角色） |
 | `schema.ts` | AI 输出 Zod 校验 | `Command`（discriminatedUnion，14 op）、`AIResponse`（含 `ask`、`self_check`）、`NumLike`/`BoolLike`/`IntLike` 容错、`SafeCmd`（臆造命令硬黑名单 + XSS 过滤）、`CoordExpr`（vector/forceDiagram 坐标表达式注入防护）、`withTextSafety`（caption/label/unit 文本安全）；`superRefine` 做 slider/view 语义 + ask 互斥校验 |
 | `ggbKB.ts` | **RAG 命令知识库** | `GGB_COMMAND_DEFS`（~130 条命令：签名/参数/2D3D 适用）、`HALLUCINATION_MAP`（30 条臆造→正确映射，含 El→Element / Round→round / SetVisible→SetVisibleInView）、`buildCommandReference(mode, domain)`、`buildHallucinationWarnings(mode)`、`findCommand`、`findHallucination` |
 | `commandCorrect.ts` | 后置命令纠正器 | `correctCommand(cmd)`（Levenshtein ≤2 模糊纠正 + 臆造查表 + 参数个数校验）、`batchCorrect()`、`correctionsToRepairContext()` |
@@ -56,7 +58,7 @@
 | `agentLoop.ts` | **ReAct Agent 工具调用循环** | `runAgentLoop(userText, deps)` — observe→plan→act 循环，最大 30 次迭代，**每轮刷新 api 句柄**（防 applet 重建失效）、**连续 3 轮工具失败熔断**（`MAX_CONSECUTIVE_FAILURES`，参数/预检类错误不计入，给模型自我修正机会）、全拒绝判定按**本轮**被拒数（避免跨轮累积误触发）、危险工具确认按 `toolCallId` 匹配；**`onThinking` 回调**（分析/规划/执行工具/等待确认 4 个节点 + V4 `reasoning_content` 增量 🧠 实时展示）经 pipeline 透传 UI 减少等待焦虑；`reasoning_content` 回传受 `mustRoundtripReasoning` quirk 门控；空响应重试的截断判定**直接信任 `finish_reason="length"`**（不再依赖 `streamsFinishReason` 门控）；**`StateCheckSpec` 终止核对钩子**：AI 输出纯文本视为完成时用 `getRichSnapshot` 快照调 `check()`，未通过把 issues 反馈注入循环继续修正（`MAX_STATE_CHECK_ROUNDS=2`，共享 30 迭代预算；核对异常按通过结束——失败不阻断）；`buildStateCheckFeedback` 组装反馈消息；`convertHistory` 对 user turn attachments 折叠 `[附件:图片×N]` 占位；`registerConfirmationHandler`/`unregisterConfirmationHandler` 危险工具确认注入；**轮次耗尽 → `AgentLoopResult.incomplete`**（画布保留不回滚、对话入 pipeline 续作缓存 `agentResumeCache`，下轮 `resumeMessages` 注入接力，TTL 10min + 画布指纹校验兜底）；`AgentLoopDeps`（含 `agentModel` + `stateCheck?` + `resumeMessages?`）、`AgentLoopResult` |
 | `toolExecutor.ts` | Agent 工具 → GGB API 分发 | `executeToolCall(api, call)`/`executeToolCalls(api, calls, appMode?)` — 批处理走 `repaintGate.shouldBatch`（任何非空批次）+ 恢复后静默期；运行时**不再切透视**（v1.8：classic 下 `setPerspective` 会触发 DockGlassPane → 画布消失 → 硬重建）；~20 个工具 case（create_point/slider/vector/style/animation…）|
 | `tools.ts` | 工具 Function Calling 定义 | `TOOL_DEFINITIONS`（OpenAI tool schemas）、`TOOL_SCHEMAS`（Zod 校验）、`getToolSafety(name)` → `"safe"\|"dangerous"`；dangerous 工具（eval_raw/delete/clear）需用户确认 |
-| `satisfactionEval.ts` | Phase 3.1 满足度评估 | `evaluateSatisfaction(config, spec, snapshot, signal?, modelOverride?)` — 轻量模型对比画布快照与精炼规格，输出 `SatisfactionResult{satisfied, issues[], summary}`；失败不阻断流程；**`evaluateVisual(config, basis, imageDataUrl, signal?, visionModel?, ...)`** — 画布截图（exportPNG）+ 视觉模型审查渲染效果（出框/遮挡/样式/可读性），跳过 thinking + 显式 4096、解析容错、失败不阻断；带图轮 stateCheck 双路合并（视觉 issues 带 `[视觉]` 前缀） |
+| `satisfactionEval.ts` | 满足度评估 / 状态核对文本路 | `evaluateSatisfaction(config, basis, snapshot, signal?, modelOverride?)` — 轻量模型对比画布快照与基准（题目解读/需求），输出 `SatisfactionResult{satisfied, issues[], summary}`；失败不阻断流程；**`evaluateVisual(config, basis, imageDataUrl, signal?, visionModel?, ...)`** — 画布截图（exportPNG）+ 视觉模型审查渲染效果（出框/遮挡/样式/可读性），跳过 thinking + 显式 4096、解析容错、失败不阻断；带图轮 stateCheck 双路合并（视觉 issues 带 `[视觉]` 前缀）；**第 8 参 `sourceImages`** 支持原题图片交叉验证 |
 | `problemSchema.ts` | 题目识别输出校验 | `ProblemAnalysis` 接口 + Zod 容错 + `parseProblemAnalysis` + `serializeProblem`（确定性序列化） |
 | `visionPrompt.ts` | 视觉模型系统提示 | `buildVisionExtractPrompt(domain)` — 指示输出 ProblemAnalysis JSON |
 | `imageInput.ts` | 图片输入预处理 | `validateImageFile`（纯校验）+ `fileToDataUrl`（浏览器缩放+白底+JPEG）；`MAX_IMAGES=3`、`MAX_FILE_MB=10` |
@@ -68,7 +70,7 @@
 | 文件 | 职责 |
 |---|---|
 | `ChatPanel.tsx` | 编排已提取至 pipeline.ts，本组件只负责：输入 UI（含**图片输入**：📎 上传 + textarea 粘贴 + 输入区拖拽，`MAX_IMAGES=3`，预览条增删）、消息渲染、**store 依赖注入成 `PipelineDeps`**（注入 `visionModel` + `updateProblemReview`）、spec / problem 确认事件桥接（`reviewHandleRef` + `problemHandleRef`）、**发送路由**（带图 → `runVisionPipeline`；纯文字按 agentMode 分流）、**Agent 思考步骤实时显示**（`agentStep` state + `onAgentStep` → thinking 区域）、**思考就近开关**（借鉴 DeepSeek chat-demo：输入框旁 `aria-pressed` 按钮循环切 `reasoningEffort` 档位，与设置面板同源）、**思考可折叠展开**（`.thinking-text.expanded`）|
-| `MessageBubble.tsx` | 消息气泡：user（含 attachments 缩略图 + **Lightbox 灯箱**，Esc 关闭）/assistant/error/ask/**spec-review**（规格确认 UI：编辑/重新生成/确认绘制）/**problem-review**（题目确认 UI：编辑题干/重新识别/确认并绘制，复用 spec-review 样式）+ **assistant 渲染 self_check 报告** |
+| `MessageBubble.tsx` | 消息气泡：user（含 attachments 缩略图 + **Lightbox 灯箱**，Esc 关闭）/assistant/error/ask/**spec-review**（历史会话兼容渲染；v2.0 不再产出）/**problem-review**（题目确认 UI：编辑题干/重新识别/确认并绘制，复用 spec-review 样式）+ **assistant 渲染 self_check 报告** |
 | `GGBCanvas.tsx` | GeoGebra applet 注入，监听 `ggbAppName` 重建（2D↔3D）；**心跳监控**（2s 间隔 canvas 计数 + DockGlassPane 检测）+ **自动恢复**（保存 base64 快照 → `inject(force=true)` 强制重建 → 恢复快照）；MutationObserver DOM 监控 + WebGL context loss 监听；诊断日志前缀 `[AiGGB:DIAG]` |
 | `Toolbar.tsx` | 顶栏：domain 切换/模板/撤销/清空/导出/截图/复制/安装；清空/切模式/撤销时调用 `abortCurrentRun()` |
 | `SettingsDialog.tsx` | API 配置（Provider/Key/**4-role 模型**：主力/轻量/Agent/视觉 + 思考深度（含「关闭」= `reasoning_effort:"none"`、`low/medium/high/max` 档位）/输出预算 max_tokens/温度/测试连接——测试时顺带 `ping(cfg, undefined, visionModel)` 验证视觉模型可用性）|
@@ -83,7 +85,7 @@
 - 迁移 v2→v3：`flashModel` → `lightModel`；v3→v4：no-op（`visionModel` 可选）
 - 运行期：`ggbApi`、`ggbAppName`（"classic"\|"3d"）、`messages`、**`constructionLog`**（成功命令日志，供回滚兜底重建）、`isThinking`
 - **token 用量统计**：`tokenUsage`（会话累计，顶栏显示）、`roundTokenUsage`（本轮累计）、`tokenHistory`（每轮一条，持久化 localStorage `aiggb_token_usage`，最多 100 轮）；`addTokenUsage`/`startRound`/`finishRound`/`loadTokenHistory`，轮次边界由 ChatPanel `runRound` 驱动；多模态视觉调用 usage 经同一链路自动计入
-- `ChatTurn` 六类：`user`（含 `attachments?`）/ `assistant`（含 `self_check?`）/ `ask` / `error` / `spec-review` / **`problem-review`**
+- `ChatTurn` 六类：`user`（含 `attachments?`）/ `assistant`（含 `self_check?`）/ `ask` / `error` / `spec-review`（历史兼容，v2.0 不再产出）/ **`problem-review`**
 - `appendAIResponse` 维护 constructionLog（成功命令追加）；`clearMessages`/`undoLastTurn` 同步清空/重建日志（`logFromMessages`）
 
 ## AI ↔ GGB 协议（14 个 op）
@@ -101,21 +103,21 @@
 | `unitAxes` | 带单位坐标轴 |
 | `constants` | 物理常量注入（白名单）|
 
-Schema 校验失败 → `chatWithFormatRetry`（≤2 次格式重试，raw + detail 反馈 AI）；执行失败 → `buildCheckerPrompt` 修复回路（≤2 次，快照/日志回滚 + 符号表注入 + RAG 纠正注入）。Phase 2 输出含 `self_check` 自检报告，assistant 气泡渲染。
+> v2.0：主链路走 Agent 工具调用（`toolCallToEvalCommands` 映射为 eval 命令）；本协议 JSON 保留用于历史会话兼容与外部工具消费（`.agents/skills/aiggb` skill 的 render/draw 直接产出与校验该协议）。
 
-## 防漂移七层
+## 防漂移七层（v2.0）
 
-1. **提示层**：`prompts.ts` + RAG 过滤的命令参考/臆造警告 + 5 阶段流程 + Point/Vector 类型铁律 + **Sequence 契约专节**（5 种官方重载/循环变量单字母/区间独立成参/逗号与括号铁律）
-2. **自检层**：compile prompt 强制 AI 输出 `self_check`（逐项核对白名单/3D 禁用/Point+Vector/除零/参数个数/Sequence 契约）
-3. **清洗层**：`aiClient` stripCodeFence（BOM 剥离 + 去 code fence）
-4. **校验层**：`schema.ts`（臆造命令硬黑名单、slider/view 语义、ask 互斥、forceDiagram.vec 形态、CoordExpr 注入防护、withTextSafety 文本安全）
-5. **语法预检层**：`commandValidate.ts`（**执行前**纯文本静态检查：括号配对、逗号误写成句点、Sequence 参数契约、参数个数、运算符结尾、**属性命令专项**——3D 模式禁令 / SetColor 值域 0~1 浮点与色名形态 / 透明度 0~1）——把引擎那句无语义的「执行失败」换成「具体错在哪 + 正确形态」，供修复回路精准自愈；`eval`/`eval_raw` 两条入口统一生效
-6. **纠正层**：`commandCorrect`（Levenshtein 模糊纠正 + 臆造映射 + 参数校验）
-7. **执行层**：`ggbBridge`（animate/trace/style 目标存在预检、vector Point+Point 自动重写、style opacity 双路可观测）+ 修复回路
+1. **提示层**：Agent system prompt（RAG 命令参考/臆造警告 + 5 阶段流程 + Point/Vector 类型铁律 + Sequence 契约）+ `trapStore` known_traps 动态注入
+2. **清洗层**：`aiClient` stripCodeFence（BOM 剥离 + 去 code fence）
+3. **校验层**：`tools.ts` TOOL_SCHEMAS Zod 校验（含 SafeCmd 硬黑名单 + XSS/注入拦截 + CoordExpr 防护）
+4. **语法预检层**：`commandValidate.ts`（**执行前**纯文本静态检查：括号配对、逗号误写成句点、Sequence 参数契约、参数个数、运算符结尾、**属性命令专项**——3D 模式禁令 / SetColor 值域 0~1 浮点与色名形态 / 透明度 0~1）+ `toolExecutor` preFlight 语义预检（负半径/min≥max/除零/依赖缺失）——把引擎那句无语义的「执行失败」换成「具体错在哪 + 正确形态」，供 AI 精准自愈；`eval`/`eval_raw` 两条入口统一生效
+5. **纠正层**：`commandCorrect`（Levenshtein ≤2 模糊纠正 + 臆造映射 + 参数校验）
+6. **执行层**：`ggbBridge`（animate/trace/style 目标存在预检、vector Point+Point 自动重写、style opacity 双路可观测）+ 失败详情喂回 AI 自修复
+7. **核对层**：AI 输出总结时 **StateCheck 双路核对**（getRichSnapshot 结构快照 + exportPNG 截图视觉，带图轮加原题图片交叉验证），偏差注入循环继续修正（≤2 轮，共享迭代预算；核对异常按通过结束）
 
 ## Agent 模式（ReAct 工具调用回路）
 
-除两阶段流水线外，系统还支持 **Agent 模式**：AI 通过 OpenAI Function Calling 逐步调用工具在画布上构造图形。
+v2.0 起**唯一的执行架构**：AI 通过 OpenAI Function Calling 逐步调用工具在画布上构造图形。
 
 ```
 用户输入 → runAgentLoop → observe（画布状态）→ plan（选择工具）→ act（执行工具）
@@ -136,16 +138,6 @@ Schema 校验失败 → `chatWithFormatRetry`（≤2 次格式重试，raw + det
 - **safe**：create_*/set_*/list_*/get_*（含 transform_object、get_canvas_info/fit_view_to）— 无需确认直接执行；单命令薄包装（Line/Midpoint/Intersect/Locus/Point/Tangent/Angle）走免确认 eval_raw + ggbKB 惯用法
 - **dangerous**：`eval_raw`、`delete_object`、`clear_canvas` — 需用户确认（或信任会话后自动通过）
 - **★ eval 自动降档**：赋值形态（`name = ...`）+ 通过黑名单/XSS 拦截 + 通过静态预检 + 不含 Delete 的 `eval_raw` 调用自动并入 safe 免确认（`isEvalAutoSafe`）——3D 构造（Cube/Sphere/Surface 均为赋值形态）确认次数趋零；Delete / 非赋值 scripting（SetColor/ZoomIn）/ 任一拦截失败仍走确认
-
-### Agent 模式 vs 流水线模式
-
-| | 流水线模式 | Agent 模式 |
-|---|---|---|
-| 入口 | `runPipeline()` | `runAgentLoop()` |
-| AI 调用 | `chat()` 单次返回 commands JSON | `agentChat()` 多次流式返回 tool_calls |
-| 执行方式 | 批量 `executeCommands` | 逐步 `executeToolCall` |
-| 错误恢复 | 批量失败 → checker prompt 修复 | 单步失败 → AI 观察 error 自行调整 |
-| 适用场景 | 已知需求的快速生成 | 复杂多步构造、探索性绘图 |
 
 ### Agent 模型配置
 
@@ -303,7 +295,7 @@ A/B 开关：设置面板「3D 批量重绘」（`localStorage: aiggb_batch_3d`�
 ## 环境
 
 - `.env` 放测试密钥：`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`（默认 deepseek-flash = V4.1-Flash-1017）、`DEEPSEEK_BASE_URL`
-- 模型：日常 flash（快）、复杂/3D 场景 pro；两阶段 Phase 1 用 flash，Phase 2 用主模型
+- 模型：日常 `deepseek-flash`（快、原生多模态）；复杂/3D 场景可换主力模型，统一走 Agent 模式
 
 ## GeoGebra 库本地化（自托管，官方 bundle）
 
