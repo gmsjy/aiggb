@@ -31,7 +31,12 @@ function call(name: string, args: Record<string, unknown>, id = "t1") {
 function run(api: MockGGB, name: string, args: Record<string, unknown>, id = "t1") {
   const r = executeToolCall(api as unknown as GGBAppletApi, call(name, args, id));
   assert.equal(r.role, "tool");
-  return JSON.parse(r.content) as { success: boolean; result?: string; error?: string };
+  return JSON.parse(r.content) as {
+    success: boolean;
+    result?: string;
+    error?: string;
+    kind?: "args" | "safety" | "preflight" | "denied" | "engine" | "unknown";
+  };
 }
 
 // ═══════════════════════════════════════════════════
@@ -43,6 +48,36 @@ test("参数校验：create_circle 缺 radius → 拒绝", () => {
   const r = run(mock, "create_circle", { name: "c", center: "O" });
   assert.equal(r.success, false);
   assert.match(r.error ?? "", /参数校验失败/);
+});
+
+// ── 结构化失败类别（kind）—— 让 agentLoop 的熔断判定不依赖错误文案前缀 ──
+
+test("kind：Zod 参数校验失败 → kind='args'", () => {
+  const mock = new MockGGB();
+  const r = run(mock, "create_circle", { name: "c", center: "O" });
+  assert.equal(r.kind, "args");
+});
+
+test("kind：语义预检失败 → kind='preflight'（而非 args）", () => {
+  const mock = new MockGGB();
+  // 小写点名会被 preflight 拦截（防 Vector 隐式推断）
+  const r = run(mock, "create_points", { points: [{ name: "pt", x: 0, y: 0 }] });
+  assert.equal(r.success, false);
+  assert.equal(r.kind, "preflight", "预检失败应与其他校验失败区分");
+});
+
+test("kind：安全拦截 → kind='safety'", () => {
+  const mock = new MockGGB();
+  const r = run(mock, "eval_raw", { command: "Execute({\"a\":1})" });
+  assert.equal(r.success, false);
+  assert.equal(r.kind, "safety");
+});
+
+test("kind：成功结果不带 kind 字段（避免噪音）", () => {
+  const mock = new MockGGB();
+  const r = run(mock, "create_points", { points: [{ name: "A", x: 0, y: 0 }] });
+  assert.equal(r.success, true);
+  assert.equal(r.kind, undefined, "成功时不应有 kind");
 });
 
 test("参数校验：中文标识符 → 拒绝", () => {

@@ -49,7 +49,7 @@ export function executeToolCall(
       const detail = parsed.error.issues
         .map(i => `${i.path.join(".")}: ${i.message}`)
         .join("; ");
-      return formatResult(call.id, false, undefined, `参数校验失败：${detail}`);
+      return formatResult(call.id, false, undefined, `参数校验失败：${detail}`, "args");
     }
     args = parsed.data as Record<string, unknown>;
   } else {
@@ -59,14 +59,14 @@ export function executeToolCall(
   // Step 2: 安全拦截
   const safetyCheck = checkSafety(call.name, args);
   if (safetyCheck) {
-    return formatResult(call.id, false, undefined, safetyCheck);
+    return formatResult(call.id, false, undefined, safetyCheck, "safety");
   }
 
   // Step 2.5: 语义预检（Pre-flight）——拦截 Zod 查不出、GGB 会崩的逻辑错误
   //    （如负半径、min>=max、端点相同）。字符串表达式无法静态判断 → 仅检查字面量 number。
   const preFlight = preFlightCheck(api, call.name, args);
   if (preFlight) {
-    return formatResult(call.id, false, undefined, `执行前检查失败：${preFlight}`);
+    return formatResult(call.id, false, undefined, `执行前检查失败：${preFlight}`, "preflight");
   }
 
   // Step 3: 执行
@@ -78,7 +78,8 @@ export function executeToolCall(
       call.id,
       false,
       undefined,
-      err instanceof Error ? err.message : String(err)
+      err instanceof Error ? err.message : String(err),
+      "engine"
     );
   }
 }
@@ -978,16 +979,38 @@ export function isEvalAutoSafe(
 
 // ──── 格式化 ────
 
+/**
+ * 工具失败类别（结构化，供 agentLoop 判定熔断/可自愈，替代脆弱的错误文案前缀匹配）。
+ *
+ * ★ 为什么需要它：熔断判定曾依赖 `error.startsWith("参数校验失败：")` 这类字面前缀。
+ *   一旦有人改写错误文案，判定就会**静默失效**且没有测试会报错。
+ *   现在控制流只看 kind，文案可自由改写。
+ */
+export type ToolFailureKind =
+  | "args"        // Zod 参数校验失败 —— 模型可自愈，不计入熔断
+  | "safety"      // 安全拦截 —— 模型应换做法，不计入熔断
+  | "preflight"   // 语义预检失败 —— 模型可自愈，不计入熔断
+  | "denied"      // 用户拒绝（在 agentLoop 的确认环节产生，非本模块抛出）
+  | "engine"      // GGB 执行真失败 —— 计入熔断
+  | "unknown";
+
 function formatResult(
   tool_call_id: string,
   success: boolean,
   result?: string,
-  error?: string
+  error?: string,
+  kind?: ToolFailureKind
 ): ToolResult {
   return {
     tool_call_id,
     role: "tool",
-    content: JSON.stringify({ success, ...(result ? { result } : {}), ...(error ? { error } : {}) }),
+    content: JSON.stringify({
+      success,
+      ...(result ? { result } : {}),
+      ...(error ? { error } : {}),
+      // 仅在失败时带 kind（成功不需要）
+      ...(!success && kind ? { kind } : {}),
+    }),
   };
 }
 

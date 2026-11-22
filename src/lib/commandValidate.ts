@@ -468,6 +468,10 @@ function validateSetProperty(
   }
 
   // ② SetColor 值域 / 色名形态
+  //   ⚠️ 两条路径值域相反，勿混：
+  //      - 本条检查的是 **GGB 脚本命令** SetColor(obj,r,g,b) → r/g/b 是 0~1 浮点
+  //      - 另一条路径 **JS API** api.setColor(name,r,g,b) → 0~255 整数（hexToRgb 产出）
+  //   改这里前先确认自己改的是脚本命令还是 JS API 调用。
   if (def?.name.toLowerCase() === "setcolor") {
     if (args.length === 4) {
       // SetColor(obj, r, g, b)：r/g/b 是 0~1 浮点（引擎按 ×255 解析，官方手册同）。

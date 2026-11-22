@@ -1,38 +1,26 @@
 /**
- * 两阶段流水线 —— 从 ChatPanel 提取的纯 TS 状态机（无 React 依赖，可 node 单测）
+ * Agent 流水线 —— 从 ChatPanel 提取的纯 TS 状态机（无 React 依赖，可 node 单测）
  *
- * 主流程：Phase 1（flash 精炼）→ 规格确认（等待用户）→ Phase 2（编译）→ 执行 + 修复回路
- * 降级：Phase 1 API 异常 / 规格为空 → 单阶段一步到位
+ * v2.0：两阶段流水线（Phase 1 精炼 → 规格确认 → Phase 2 编译）已移除。
+ * 纯文字与带图统一走 Agent 模式（runAgentPipeline / runVisionPipeline）。
  *
  * 失败回滚策略（全失败时）：
  *   1. 优先恢复执行前 base64 快照；
  *   2. 快照缺失/超时 → newConstruction + 重放 constructionLog（store 维护的成功命令日志）。
  */
 import {
-  chat as defaultChat,
   chatRaw as defaultChatRaw,
-  AIError,
-  AISchemaError,
   resolveModel,
+  getProviderCapabilities,
   type AIConfig,
   type ChatMessage,
   type ContentPart,
   type AgentMessage
 } from "./aiClient";
-import { collectFailures, executeCommands, resetTmpIds, getRichSnapshot, exportPNG, type ExecResult } from "./ggbBridge";
-import {
-  buildSystemPrompt,
-  buildCompilePrompt,
-  buildCheckerPrompt,
-  buildFormatRepairMessage,
-  type Domain
-} from "./prompts";
-import { buildRefinePrompt } from "./refinePrompt";
+import { getRichSnapshot, exportPNG, type ExecResult } from "./ggbBridge";
+import type { Domain } from "./prompts";
 import { parseProblemAnalysis, serializeProblem, type ProblemAnalysis } from "./problemSchema";
 import { buildVisionExtractPrompt } from "./visionPrompt";
-import { batchCorrect, correctionsToRepairContext } from "./commandCorrect";
-import { RefinedSpec, type RefinedSpec as RefinedSpecT } from "./specSchema";
-import { lookupCachedSpec, storeCachedSpec, type SpecStorage } from "./specCache";
 import type { AIResponse } from "./schema";
 import type { GGBAppletApi } from "../types/ggb";
 import type { ChatTurn } from "../store/useAppStore";
@@ -47,20 +35,8 @@ import {
 } from "./agentLoop";
 import { toolCallToEvalCommands } from "./toolExecutor";
 import { saveTrajectory } from "./trajectoryStore";
-import { recordFailure, refreshTraps, buildTrapPrompt, backfillTrapsFromTrajectories } from "./trapStore";
-import {
-  searchExecution,
-  searchScene,
-  storeExecution,
-  buildExecutionRecord,
-  buildExamplePrompt,
-  buildScenePrompt,
-  type ExecutionRecord,
-  type SceneRecord,
-} from "./trainingStore";
+import { refreshTraps, buildTrapPrompt, backfillTrapsFromTrajectories } from "./trapStore";
 
-export const MAX_REPAIR = 2;
-export const MAX_FORMAT_RETRY = 2;
 export const HISTORY_WINDOW = 6; // 最近 N 轮发给 AI
 
 /** 用户对规格确认气泡的决定 */
@@ -103,29 +79,19 @@ export interface PipelineDeps {
   getConstructionLog(): string[];
   appendMessage(t: ChatTurn): void;
   appendAIResponse(resp: AIResponse, results: ExecResult[]): void;
-  updateSpecReview(id: string, spec: string, status: "pending" | "confirmed" | "rejected"): void;
   updateProblemReview?(id: string, problem: ProblemAnalysis, status: "pending" | "confirmed" | "rejected"): void;
   removeMessage(id: string): void;
   setThinking(b: boolean): void;
   newMessageId(): string;
-  /** 测试可注入脚本网关，替换真实调用 */
-  chatImpl?: typeof defaultChat;
+  /** 测试可注入脚本网关，替换真实调用（题目识别用） */
   chatRawImpl?: typeof defaultChatRaw;
   /** 满足度评估注入（测试可 mock） */
   evalSatisfactionImpl?: typeof import("./satisfactionEval").evaluateSatisfaction;
   /** 视觉审查注入（画布截图 + 视觉模型；测试可 mock，缺省用真实实现） */
   evalVisualImpl?: typeof import("./satisfactionEval").evaluateVisual;
-  /** 训练库检索（Phase 2 注入参考案例）。注入以支持单测 mock */
-  trainingSearchImpl?: (spec: string) => Promise<ExecutionRecord | null>;
-  /** L2 场景检索（Phase 2 注入场景模式，优先于单案例）。注入以支持单测 mock */
-  sceneSearchImpl?: (spec: string) => Promise<SceneRecord | null>;
-  /** 训练库存储（成功命令）。注入以支持单测 mock */
-  trainingStoreImpl?: (rec: ExecutionRecord) => void;
-  /** 规格缓存的底层存储（测试可注入内存实现，验证缓存命中/跳过的逻辑）。默认 localStorage */
-  specCacheStorage?: SpecStorage;
-  /** 解析后的轻量模型名（用于精炼/评估） */
+  /** 解析后的轻量模型名（满足度评估） */
   lightModel: string;
-  /** 解析后的主力模型名（用于编译/修复/降级） */
+  /** 解析后的主力模型名（Agent 回退链） */
   heavyModel: string;
   /** 解析后的视觉模型名（用于题目图片识别） */
   visionModel?: string;
@@ -136,468 +102,14 @@ export interface PipelineDeps {
 }
 
 export interface PipelineCallbacks {
-  /** Phase 1 产出规格后调用；UI 展示确认气泡并持有 handle 以回传决定 */
-  onReview(handle: ReviewHandle, reviewId: string): void;
+  /** Phase 1 产出规格后调用；UI 展示确认气泡并持有 handle 以回传决定（两阶段已移除，保留可选兼容） */
+  onReview?(handle: ReviewHandle, reviewId: string): void;
   /** 工具调用代理模式：dangerous 工具需用户确认 */
   onConfirm?(requests: ConfirmationRequest[]): Promise<ConfirmationDecision[]>;
   /** Agent 模式实时思考步骤（观察/规划/执行工具），UI 展示减少等待焦虑 */
   onAgentStep?(message: string): void;
   /** 题目识别后调用；UI 展示确认气泡并持有 handle 以回传决定 */
   onProblemReview?(handle: ProblemHandle, reviewId: string): void;
-}
-
-/**
- * 跑完一整轮：Phase 1 → 确认 → Phase 2 → 修复。
- * 全程结束（含等待用户确认）前不 resolve；被 abort 时 reject（AbortError）。
- */
-export async function runPipeline(
-  userText: string,
-  deps: PipelineDeps,
-  cb: PipelineCallbacks
-): Promise<void> {
-  let phase1Pass = true;
-  for (;;) {
-    // ── Phase 1：意图 → 精炼规格（缓存优先）──
-    // ★ retry（重新生成）时跳过 specCache：否则命中缓存返回同一份规格，「重新生成」形同虚设
-    let spec: RefinedSpecT | null;
-    try {
-      spec = await refineSpec(userText, deps, !phase1Pass);
-    } catch (err) {
-      if (deps.signal.aborted) throw err;
-      console.warn(`[Pipeline] ${getTraceId()} Phase 1 failed, falling back to single-phase`, err);
-      await runSinglePhase(userText, deps);
-      return;
-    }
-
-    // ── 反问：直接展示，本轮结束 ──
-    // ★ ask 优先于空规格判断：RefinedSpec 中 ask 是一等输出，不应被误当空规格降级
-    if (spec?.ask) {
-      deps.appendAIResponse({ explanation: "需要确认", commands: [], ask: spec.ask }, []);
-      return;
-    }
-
-    if (!spec?.spec) {
-      if (deps.signal.aborted) return;
-      console.warn("[Pipeline] empty spec, falling back to single-phase");
-      await runSinglePhase(userText, deps);
-      return;
-    }
-
-    // ── 规格确认气泡：等待用户决定 ──
-    const reviewId = deps.newMessageId();
-    deps.setThinking(false);
-    deps.appendMessage({
-      id: reviewId,
-      role: "spec-review",
-      payload: { spec: spec.spec, status: "pending" }
-    });
-
-    const decision = await waitReview(spec.spec, deps.signal, handle =>
-      cb.onReview(handle, reviewId)
-    );
-
-    if (decision.action === "retry") {
-      deps.removeMessage(reviewId);
-      deps.setThinking(true);
-      phase1Pass = false; // ★ 下次 Phase 1 跳过缓存，真正重新生成
-      continue; // 重新走 Phase 1
-    }
-
-    // ── Phase 2：编译 + 执行 + 修复 ──
-    deps.updateSpecReview(reviewId, decision.spec, "confirmed");
-    await runPhase2(decision.spec, deps);
-    return;
-  }
-}
-
-// ── Phase 1 ──
-
-async function refineSpec(userText: string, deps: PipelineDeps, skipCache = false): Promise<RefinedSpecT | null> {
-  const existingObjs = deps.getApi()?.getAllObjectNames() ?? [];
-  const storage = deps.specCacheStorage;
-  if (!skipCache) {
-    const cached = lookupCachedSpec(userText, deps.domain, deps.appMode, existingObjs, storage);
-    if (cached) return cached;
-  }
-
-  const chatRawFn = deps.chatRawImpl ?? defaultChatRaw;
-  const phase1Messages: ChatMessage[] = [
-    { role: "system", content: buildRefinePrompt(deps.domain) },
-    { role: "user", content: userText }
-  ];
-  let rawSpec = await chatRawFn(deps.config, phase1Messages, deps.signal, deps.lightModel, undefined, true, u => deps.onTokenUsage?.(u));
-
-  // ★ V4 json_object 模式有概率返回空 content（官方已知问题）→ 重试 1 次
-  //    避免空规格直接降级 single-phase（浪费 heavy model 重新做整轮）
-  if (!rawSpec.trim()) {
-    console.warn(`[Pipeline] ${getTraceId()} Phase 1 空响应，重试 1 次`);
-    rawSpec = await chatRawFn(deps.config, phase1Messages, deps.signal, deps.lightModel, undefined, true, u => deps.onTokenUsage?.(u));
-  }
-
-  const spec = parseRefinedSpec(rawSpec);
-  if (spec && !spec.ask) {
-    storeCachedSpec(userText, deps.domain, deps.appMode, existingObjs, spec, storage);
-  }
-  return spec;
-}
-
-/** 等待用户确认/重试；abort 时 reject AbortError */
-function waitReview(
-  spec: string,
-  signal: AbortSignal,
-  onHandle: (h: ReviewHandle) => void
-): Promise<ReviewDecision> {
-  return new Promise<ReviewDecision>((resolve, reject) => {
-    let settled = false;
-    const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener("abort", onAbort);
-      reject(new DOMException("The operation was aborted.", "AbortError"));
-    };
-    const handle: ReviewHandle = {
-      spec,
-      confirm(finalSpec) {
-        if (settled) return;
-        settled = true;
-        signal.removeEventListener("abort", onAbort);
-        resolve({ action: "confirm", spec: finalSpec });
-      },
-      retry() {
-        if (settled) return;
-        settled = true;
-        signal.removeEventListener("abort", onAbort);
-        resolve({ action: "retry" });
-      }
-    };
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
-    onHandle(handle);
-  });
-}
-
-function waitProblemReview(
-  problem: ProblemAnalysis,
-  signal: AbortSignal,
-  onHandle: (h: ProblemHandle) => void
-): Promise<ProblemDecision> {
-  return new Promise<ProblemDecision>((resolve, reject) => {
-    let settled = false;
-    const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener("abort", onAbort);
-      reject(new DOMException("The operation was aborted.", "AbortError"));
-    };
-    const handle: ProblemHandle = {
-      problem,
-      confirm(final) {
-        if (settled) return;
-        settled = true;
-        signal.removeEventListener("abort", onAbort);
-        resolve({ action: "confirm", problem: final });
-      },
-      retry() {
-        if (settled) return;
-        settled = true;
-        signal.removeEventListener("abort", onAbort);
-        resolve({ action: "retry" });
-      }
-    };
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
-    onHandle(handle);
-  });
-}
-
-// ── Phase 2 ──
-
-async function runPhase2(finalSpec: string, deps: PipelineDeps): Promise<void> {
-  deps.setThinking(true);
-  try {
-    // ★ 分层记忆注入（L2 场景优先，L1 案例兜底）——DeepSeek recency bias 放 user message 末尾
-    //    - 场景模式（≥2 次成功的结构骨架）→ 解决单案例硬套参数
-    //    - 单案例 → 兜底，仅当命令数 ≥ 3 时注入（避免误导）
-    const sceneSearchFn = deps.sceneSearchImpl ?? searchScene;
-    let scene: SceneRecord | null = null;
-    try {
-      scene = await sceneSearchFn(finalSpec);
-    } catch {
-      scene = null;
-    }
-
-    // ★ 画布状态注入（多轮连贯性：AI 知道已建对象，增量修改不重建）
-    const objs = deps.getApi()?.getAllObjectNames() ?? [];
-    const canvasStatus = objs.length > 0
-      ? `\n[当前画布已有对象：${objs.slice(0, 30).join(", ")}${objs.length > 30 ? "…" : ""}]`
-      : "\n[当前画布为空]";
-
-    let userContent = `${finalSpec}${canvasStatus}`;
-    if (scene && scene.heat >= 2 && scene.pattern.length >= 3) {
-      userContent = `${finalSpec}${canvasStatus}\n\n${buildScenePrompt(scene)}`;
-    } else {
-      const searchFn = deps.trainingSearchImpl ?? searchExecution;
-      let example: ExecutionRecord | null = null;
-      try {
-        example = await searchFn(finalSpec);
-      } catch {
-        example = null;
-      }
-      if (example && example.commands.length >= 3) {
-        userContent = `${finalSpec}${canvasStatus}\n\n${buildExamplePrompt(example)}`;
-      }
-    }
-
-    const phase2Messages: ChatMessage[] = [
-      { role: "system", content: buildCompilePrompt(deps.domain, deps.appMode) },
-      ...collectHistory(deps.getMessages(), Math.ceil(HISTORY_WINDOW / 2)),
-      { role: "user", content: userContent }
-    ];
-    const chatFn = deps.chatImpl ?? defaultChat;
-    const response = await chatWithFormatRetry(chatFn, deps, phase2Messages);
-    await executeAndRepair(response, finalSpec, deps);
-
-    // ★ 满足度评估：对精炼规格 + 画布快照做逻辑审查
-    await evaluateAndRepair(finalSpec, deps);
-  } finally {
-    deps.setThinking(false);
-  }
-}
-
-/** 满足度评估 + 不满足时修复（最多 1 次） */
-async function evaluateAndRepair(finalSpec: string, deps: PipelineDeps): Promise<void> {
-  const api = deps.getApi();
-  if (!api) {
-    console.log(`[AiGGB:DIAG] ${getTraceId()} evaluateAndRepair: api is null, skip`);
-    return;
-  }
-
-  console.log(`[AiGGB:DIAG] ${getTraceId()} evaluateAndRepair: 开始满足度评估`);
-  // ★ 等待浏览器下一帧，确保 3D 渲染管线空闲（避免刚恢复重绘时立即大量 API 读取导致 WebGL 压力）
-  if (typeof requestAnimationFrame !== "undefined") {
-    await new Promise<void>(r => requestAnimationFrame(() => r()));
-  }
-  const snapshot = getRichSnapshot(api);
-
-  const evalFn = deps.evalSatisfactionImpl ??
-    ((await import("./satisfactionEval")).evaluateSatisfaction as typeof import("./satisfactionEval").evaluateSatisfaction);
-
-  let evalResult;
-  try {
-    evalResult = await evalFn(deps.config, finalSpec, snapshot, deps.signal, deps.lightModel, undefined, u => deps.onTokenUsage?.(u));
-  } catch (err) {
-    if (deps.signal.aborted) throw err;
-    console.warn("[Pipeline] 满足度评估失败，跳过", err);
-    return;
-  }
-
-  // 满足 → 完成；不满足 → 追加 issues 消息 + 1 次修复
-  if (evalResult.satisfied) return;
-
-  // 追加评估失败消息
-  deps.appendMessage({
-    id: deps.newMessageId(),
-    role: "error",
-    content: `⚠ 审查发现 ${evalResult.issues.length} 个问题：\n${evalResult.issues.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n\n${evalResult.summary}`
-  });
-
-  // 1 次修复尝试：将 issues + 精炼规格 + 画布快照发给 AI 修正
-  try {
-    const { buildSatisfactionRepairPrompt } = await import("./satisfactionEval");
-    const repairMsg = buildSatisfactionRepairPrompt(finalSpec, evalResult.issues, snapshot);
-
-    const chatFn = deps.chatImpl ?? defaultChat;
-    const repairResponse = await chatWithFormatRetry(chatFn, deps, [
-      { role: "user", content: repairMsg }
-    ]);
-
-    // 执行修正命令（不做递归评估，避免无限循环；captureTraining=false 避免增量污染训练库；
-    // 内层修复上界收紧为 1，控制一轮的最坏调用次数）
-    await executeAndRepair(repairResponse, finalSpec, deps, false, 1);
-  } catch (err) {
-    if (deps.signal.aborted) throw err;
-    deps.appendMessage({
-      id: deps.newMessageId(),
-      role: "error",
-      content: `自动修复失败：${err instanceof Error ? err.message : String(err)}`
-    });
-  }
-}
-
-// ── 单阶段降级路径 ──
-
-async function runSinglePhase(userText: string, deps: PipelineDeps): Promise<void> {
-  deps.setThinking(true);
-  const baseMessages: ChatMessage[] = [
-    { role: "system", content: buildSystemPrompt(deps.domain, deps.appMode) },
-    ...collectHistory(deps.getMessages(), HISTORY_WINDOW),
-    { role: "user", content: userText }
-  ];
-  const chatFn = deps.chatImpl ?? defaultChat;
-  const response = await chatWithFormatRetry(chatFn, deps, baseMessages);
-  await executeAndRepair(response, userText, deps);
-}
-
-// ── 执行 + 修复回路 ──
-
-async function executeAndRepair(
-  response: AIResponse,
-  originalRequest: string,
-  deps: PipelineDeps,
-  /** 是否捕获训练样本（主执行 true；满足度修复回路 false，避免增量命令污染训练库） */
-  captureTraining = true,
-  /** 命令修复轮数上界：主执行 MAX_REPAIR=2；满足度修复回路传 1——评估修复自身已消耗
-   *  1+2 次调用，内层再放 2 轮会把一轮的最坏 LLM 调用数乘法放大到 ≈19 次（实测 5 分钟） */
-  maxRepairs: number = MAX_REPAIR
-): Promise<void> {
-  // [ASK] 反问：不执行命令
-  if (response.ask) {
-    deps.appendAIResponse(response, []);
-    return;
-  }
-
-  const api = deps.getApi();
-  if (!api) {
-    deps.appendMessage({
-      id: deps.newMessageId(),
-      role: "error",
-      content: "GeoGebra 画布尚未就绪，请稍候"
-    });
-    return;
-  }
-
-  let ragRepairNote = applyRagCorrection(response);
-  const snapshot = await takeSnapshot(api);
-
-  console.log(`[AiGGB:DIAG] ${getTraceId()} executeAndRepair: 执行`, response.commands.length, "条命令");
-  let results = executeCommands(api, response.commands, deps.appMode);
-  deps.appendAIResponse(response, results);
-
-  let attempts = 0;
-  while (attempts < maxRepairs) {
-    const failures = collectFailures(results);
-    console.log(`[AiGGB:DIAG] ${getTraceId()} executeAndRepair: 第${attempts}次执行 — ${results.length - failures.length}成功 / ${failures.length}失败`);
-    if (failures.length === 0) break;
-    attempts++;
-
-    // 全部失败 → 回滚：快照优先，快照不可用则 newConstruction + 重放构造日志
-    if (attempts === 1 && failures.length === results.length) {
-      console.warn(`[AiGGB:DIAG] ${getTraceId()} executeAndRepair: ★ 全部命令失败，尝试回滚...`);
-      const restored = snapshot !== null && (await restoreSnapshot(api, snapshot));
-      if (!restored) {
-        console.warn(`[AiGGB:DIAG] ${getTraceId()} executeAndRepair: ★ 快照不可用 → newConstruction() + 重放日志`);
-        api.newConstruction();
-        resetTmpIds();
-        replayConstructionLog(api, deps.getConstructionLog());
-      } else {
-        console.log(`[AiGGB:DIAG] ${getTraceId()} executeAndRepair: 快照恢复成功`);
-      }
-    }
-
-    const curApi = deps.getApi() ?? api;
-    const existingObjs = curApi.getAllObjectNames() ?? [];
-
-    // ★ known_traps 动态升级：记录本次失败（两阶段模式），并从 Agent 失败轨迹回填
-    for (const f of failures) {
-      void recordFailure(extractCmdName(f.cmd), f.error).catch(() => {});
-    }
-    const traps = await refreshTraps().catch(() => []);
-
-    const checkerSystem = buildCheckerPrompt(failures, existingObjs, originalRequest);
-    let repairUserMsg = JSON.stringify(response);
-    const trapNote = buildTrapPrompt(traps);
-    if (trapNote) repairUserMsg = trapNote + "\n\n" + repairUserMsg;
-    if (ragRepairNote) repairUserMsg = ragRepairNote + "\n\n" + repairUserMsg;
-
-    const chatFn = deps.chatImpl ?? defaultChat;
-    response = await chatWithFormatRetry(chatFn, deps, [
-      { role: "system", content: checkerSystem },
-      { role: "assistant", content: repairUserMsg }
-    ]);
-    if (response.ask) {
-      deps.appendAIResponse(response, []);
-      return;
-    }
-
-    const repairNote = applyRagCorrection(response);
-    if (repairNote) ragRepairNote = repairNote;
-
-    results = executeCommands(deps.getApi() ?? api, response.commands, deps.appMode);
-    deps.appendAIResponse(response, results);
-  }
-
-  // ★ 训练数据闭环：首次执行即全成功 → 存训练库（供后续相似意图检索注入）
-  //    attempts === 0 表示未进入修复循环；仅主执行捕获（captureTraining 控制）
-  if (captureTraining && attempts === 0 && collectFailures(results).length === 0) {
-    const storeFn = deps.trainingStoreImpl ?? storeExecution;
-    try {
-      void storeFn(buildExecutionRecord(originalRequest, response.commands));
-    } catch {
-      // 静默：训练库失败不影响主流程
-    }
-  }
-}
-
-/** 从失败命令提取首命令名（"obj = Cmd(...)" → "Cmd"；无法提取返回 "eval"） */
-function extractCmdName(cmd: string): string {
-  const m = /^(?:\w+\s*=\s*)?(\w+)\s*\(/.exec(cmd.trim());
-  return m ? m[1] : "eval";
-}
-
-/** RAG 模糊纠正：就地修正 eval 命令；返回可注入修复上下文的说明（无纠正/无建议时为 null） */
-function applyRagCorrection(response: AIResponse): string | null {
-  const correction = batchCorrect(
-    response.commands.filter(c => c.op === "eval").map(c => ({ cmd: (c as { cmd: string }).cmd }))
-  );
-  if (correction.anyChanged) {
-    let idx = 0;
-    for (const c of response.commands) {
-      if (c.op === "eval") {
-        const r = correction.results[idx++];
-        if (r?.changed) (c as { cmd: string }).cmd = r.corrected;
-      }
-    }
-    return correctionsToRepairContext(correction);
-  }
-  return correction.results.some(r => r.suggestions.length > 0)
-    ? correctionsToRepairContext(correction)
-    : null;
-}
-
-/** 格式重试：AISchemaError 时把原始输出与诊断回喂模型，最多 MAX_FORMAT_RETRY 次 */
-async function chatWithFormatRetry(
-  chatFn: typeof defaultChat,
-  deps: PipelineDeps,
-  msgs: ChatMessage[]
-): Promise<AIResponse> {
-  let conv = msgs;
-  for (let i = 0; i <= MAX_FORMAT_RETRY; i++) {
-    try {
-      return await chatFn(deps.config, conv, deps.signal, deps.heavyModel, u => deps.onTokenUsage?.(u));
-    } catch (err) {
-      if (err instanceof AISchemaError && i < MAX_FORMAT_RETRY) {
-        deps.appendMessage({
-          id: deps.newMessageId(),
-          role: "error",
-          content: `AI 返回格式异常（${err.message}：${err.detail}），正在自动重试 ${i + 1}/${MAX_FORMAT_RETRY}…`
-        });
-        conv = [
-          ...conv,
-          { role: "assistant", content: err.raw },
-          { role: "user", content: buildFormatRepairMessage(err.raw, err.detail) }
-        ];
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw new AIError("AI 多次返回格式错误，已放弃");
 }
 
 // ── 快照与回滚 ──
@@ -654,30 +166,46 @@ export function replayConstructionLog(api: GGBAppletApi, log: string[]): void {
   }
 }
 
-// ── 工具 ──
+// ── 题目确认等待（带图轮使用） ──
 
-/** 解析 Phase 1 的纯文本输出为 RefinedSpec（code fence 剥离 + JSON 容错） */
-export function parseRefinedSpec(raw: string): RefinedSpecT | null {
-  const cleaned = raw.trim()
-    .replace(/^```json?\s*/, "").replace(/\s*```$/, "");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    return { spec: cleaned.slice(0, 3000) };
-  }
-  const result = RefinedSpec.safeParse(parsed);
-  if (result.success) return result.data;
-  // AI 显式输出了结构化空 spec（如 {"spec":""}）→ 视为空规格走降级，
-  // 而非把原始 JSON 文本包成 spec 进入确认气泡
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-    const o = parsed as Record<string, unknown>;
-    if (typeof o.spec === "string" && o.spec.trim().length === 0 && !o.ask) {
-      return { spec: "" };
+function waitProblemReview(
+  problem: ProblemAnalysis,
+  signal: AbortSignal,
+  onHandle: (h: ProblemHandle) => void
+): Promise<ProblemDecision> {
+  return new Promise<ProblemDecision>((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    const handle: ProblemHandle = {
+      problem,
+      confirm(final) {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve({ action: "confirm", problem: final });
+      },
+      retry() {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve({ action: "retry" });
+      }
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
     }
-  }
-  return { spec: cleaned.slice(0, 3000) };
+    signal.addEventListener("abort", onAbort, { once: true });
+    onHandle(handle);
+  });
 }
+
+// ── 工具 ──
 
 /** 把消息历史折叠为 user/assistant 对话（含 ask 反问），仅保留最近 windowSize 轮 */
 export function collectHistory(messages: ChatTurn[], windowSize: number): ChatMessage[] {
@@ -841,6 +369,9 @@ function peekAgentResumeCache(api: GGBAppletApi | null): AgentMessage[] | undefi
 interface AgentRoundOpts {
   stateCheck?: import("./agentLoop").StateCheckSpec;
   evalBasis?: string;
+  /** 原题图片（data URL）。透传给 agent loop 附在首条 user 消息上，
+   *  使构造过程中能回看原图核对几何关系；同时供视觉核对交叉验证 */
+  images?: string[];
 }
 
 async function runAgentRound(
@@ -893,6 +424,8 @@ async function runAgentRound(
       getApi: deps.getApi,
       getMessages: deps.getMessages,
       agentModel: resolveModel(deps.config, "agent"),
+      // ★ 原题图片透传：让 Agent 构造时能"看得到图"，而不是只凭视觉模型的二手文字转写
+      images: opts?.images,
       // ★ 改造五：ReAct 轨迹持久化（IndexedDB；非浏览器环境静默跳过）
       persistTrajectory: rec => {
         void saveTrajectory(rec).then(() => { trajectorySaved = true; }).catch(() => {});
@@ -1132,9 +665,13 @@ async function extractProblem(
   if (text.trim()) {
     parts.push({ type: "text", text: text.trim() });
   }
-  for (const img of images) {
+  // ★ 多图加 [图N] 标注：视觉模型看到多张无标注图片时，容易当作「同一张图的多个视角」
+  images.forEach((img, i) => {
+    if (images.length > 1) {
+      parts.push({ type: "text", text: `[图${i + 1}]` });
+    }
     parts.push({ type: "image_url", image_url: { url: img } });
-  }
+  });
 
   const msgs: ChatMessage[] = [
     { role: "system", content: buildVisionExtractPrompt(deps.domain) },
@@ -1144,19 +681,24 @@ async function extractProblem(
   const chatRawFn = deps.chatRawImpl ?? defaultChatRaw;
   const visionModel = deps.visionModel ?? deps.heavyModel;
 
-  // ★ 识别调用跳过 thinking：感知任务无需深思考，避免 reasoning tokens 挤占输出预算
-  const visionConfig = { ...deps.config, reasoningEffort: undefined };
+  // ★ 识别调用跳过 thinking：感知任务无需深思考，避免 reasoning tokens 挤占输出预算。
+  //   显式传 "none"（不再依赖 undefined 的隐式语义），意图与参数一致。
+  const visionConfig = { ...deps.config, reasoningEffort: "none" as const };
 
-  // first attempt (jsonMode=false: vision models often don't support response_format:json_object)
-  // ★ maxTokens=4096: 视觉模型默认输出上限可能很低，显式设防截断（B+A 联动）
+  // ★ JSON 模式：多数视觉模型不支持 response_format:json_object，但支持该特性的
+  //   provider（DeepSeek/GLM/OpenAI）开启后非 JSON 输出率显著下降。
+  const useJsonMode = getProviderCapabilities(visionConfig).jsonSchema;
+
+  // ★ 输出预算：首轮 4096，空响应重试扩容到 8192（同 agentLoop 思路：同参数重试无效）
   let raw = await chatRawFn(
-    visionConfig, msgs, deps.signal, visionModel, 4096, false, u => deps.onTokenUsage?.(u)
+    visionConfig, msgs, deps.signal, visionModel, 4096, useJsonMode, u => deps.onTokenUsage?.(u)
   );
 
-  // empty response retry once
+  // 空响应重试：扩容 + 更强约束（改变条件，而非原样重试）
   if (!raw.trim()) {
+    console.warn("[Pipeline] 题目识别空响应，扩容预算重试 1 次");
     raw = await chatRawFn(
-      visionConfig, msgs, deps.signal, visionModel, 4096, false, u => deps.onTokenUsage?.(u)
+      visionConfig, msgs, deps.signal, visionModel, 8192, useJsonMode, u => deps.onTokenUsage?.(u)
     );
   }
 
@@ -1176,6 +718,23 @@ export async function runVisionPipeline(
 ): Promise<void> {
   const { text, images } = input;
 
+  /**
+   * 纯图识别失败时向用户反问（而不是只丢一条 error 就结束本轮）。
+   */
+  const askForTextFallback = (reason: string, hint: string): void => {
+    deps.appendMessage({
+      id: deps.newMessageId(),
+      role: "error",
+      content: `${reason}${hint ? ` ${hint}` : ""}`,
+    });
+    deps.appendAIResponse({
+      explanation: "需要你的帮助才能继续",
+      commands: [],
+      ask: "我没能可靠地读出这张图里的题目。你可以：① 换一张更清晰/更正对拍摄的图片重试；" +
+           "② 直接在输入框用文字描述题目（例如「画出斜抛运动，v₀=20 m/s，仰角 45°」），我就能开始绘制。",
+    }, []);
+  };
+
   for (;;) {
     // ── 识别段 ──
     let problem: ProblemAnalysis | null;
@@ -1193,19 +752,15 @@ export async function runVisionPipeline(
           role: "error",
           content: `题目识别失败（${reason}），将直接按文字绘制`,
         });
-        await runAgentPipeline(text, deps, cb);
+        // ★ 降级仍把原图带上：Agent 若能直接看图还有机会画对
+        await runAgentRound(text, deps, cb, { images });
       } else {
-        deps.appendMessage({
-          id: deps.newMessageId(),
-          role: "error",
-          content: `识别失败：请在 设置 → 高级 中配置支持图片的视觉模型（${reason}）`,
-        });
+        askForTextFallback(`识别失败：${reason}`, "请在 设置 → 高级 中确认已配置支持图片输入的视觉模型。");
       }
       return;
     }
 
     if (!problem) {
-      // ★ D-min: 区分截断 vs 真失败，给用户可操作的提示
       const truncHint = truncated ? "（输出被截断，请尝试更清晰的图片或简化题目后重试）" : "";
       if (text.trim()) {
         deps.appendMessage({
@@ -1213,15 +768,12 @@ export async function runVisionPipeline(
           role: "error",
           content: `题目识别失败${truncHint || "（无法解析输出）"}，将直接按文字绘制`,
         });
-        await runAgentPipeline(text, deps, cb);
+        await runAgentRound(text, deps, cb, { images });
       } else {
-        deps.appendMessage({
-          id: deps.newMessageId(),
-          role: "error",
-          content: truncated
-            ? "识别输出不完整（可能被截断），请尝试更清晰的图片或简化题目后重试"
-            : "识别失败：请在 设置 → 高级 中配置支持图片的视觉模型",
-        });
+        askForTextFallback(
+          truncated ? "识别输出不完整（可能被截断）。" : "识别失败：请在 设置 → 高级 中配置支持图片的视觉模型。",
+          ""
+        );
       }
       return;
     }
@@ -1244,7 +796,8 @@ export async function runVisionPipeline(
       // no UI handler — treat as confirmed with original analysis
       const basis = serializeProblem(problem);
       const taskText = [text.trim(), basis].filter(Boolean).join("\n\n");
-      await runAgentPipeline(taskText, deps, cb);
+      // ★ 同样透传原图：无 UI 时也保留"看图构造"的能力
+      await runAgentRound(taskText, deps, cb, { images });
       return;
     }
 
@@ -1263,6 +816,7 @@ export async function runVisionPipeline(
 
     // ★ Agent 构造 + 画布状态核对（文本结构核对 + 截图视觉核对，两路失败均不阻断）
     await runAgentRound(taskText, deps, cb, {
+      images,
       stateCheck: {
         basis,
         check: async (snapshot, signal) => {
@@ -1284,7 +838,9 @@ export async function runVisionPipeline(
                   ((await import("./satisfactionEval")).evaluateVisual as typeof import("./satisfactionEval").evaluateVisual);
                 const visual = await visualFn(
                   deps.config, basis, pngDataUrl, signal,
-                  deps.visionModel ?? deps.heavyModel, undefined, u => deps.onTokenUsage?.(u)
+                  deps.visionModel ?? deps.heavyModel, undefined, u => deps.onTokenUsage?.(u),
+                  // ★ 交叉验证：原题图片 vs 画布截图
+                  images
                 );
                 visualIssues = visual.satisfied ? [] : visual.issues.map(s => `[视觉] ${s}`);
                 visualSummary = visual.summary;

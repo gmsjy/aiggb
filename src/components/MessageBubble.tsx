@@ -107,19 +107,12 @@ function AssistantBubble({ turn }: { turn: Extract<ChatTurn, { role: "assistant"
   );
 }
 
-/** Phase 1 精炼规格确认气泡——用户可编辑规格后确认或重新生成 */
+/**
+ * 旧会话中的「Phase 1 规格确认」气泡（v2.0 已移除两阶段流水线）。
+ * 只读展示历史规格，不再派发确认/重试事件——点击按钮没有任何流水线在监听。
+ */
 function SpecReviewBubble({ turn }: { turn: Extract<ChatTurn, { role: "spec-review" }> }) {
-  const [editing, setEditing] = useState(false);
-  const [editedSpec, setEditedSpec] = useState(turn.payload.spec);
   const isDone = turn.payload.status !== "pending";
-
-  const onConfirm = () => {
-    const spec = editing ? editedSpec : turn.payload.spec;
-    window.dispatchEvent(new CustomEvent("aiggb:spec-confirm", { detail: spec }));
-  };
-  const onRetry = () => {
-    window.dispatchEvent(new CustomEvent("aiggb:spec-retry"));
-  };
 
   if (isDone) {
     return (
@@ -127,7 +120,7 @@ function SpecReviewBubble({ turn }: { turn: Extract<ChatTurn, { role: "spec-revi
         <Edit3 size={14} className="bubble-icon" />
         <div className="bubble-body">
           <span className="ask-label">
-            {turn.payload.status === "confirmed" ? "已确认规格" : "已放弃规格"}
+            {turn.payload.status === "confirmed" ? "已确认规格（历史会话）" : "已放弃规格（历史会话）"}
           </span>
         </div>
       </div>
@@ -138,29 +131,8 @@ function SpecReviewBubble({ turn }: { turn: Extract<ChatTurn, { role: "spec-revi
     <div className="bubble bubble-spec-review">
       <Edit3 size={14} className="bubble-icon" />
       <div className="bubble-body">
-        <div className="spec-review-label">AI 精炼的绘图规格——请确认或修改后开始绘制</div>
-        {editing ? (
-          <textarea
-            className="spec-edit-area"
-            value={editedSpec}
-            onChange={e => setEditedSpec(e.target.value)}
-            rows={6}
-            autoFocus
-          />
-        ) : (
-          <pre className="spec-preview">{turn.payload.spec}</pre>
-        )}
-        <div className="spec-review-actions">
-          <button className="spec-btn edit" onClick={() => setEditing(!editing)}>
-            {editing ? "预览" : <><Edit3 size={12} /> 编辑</>}
-          </button>
-          <button className="spec-btn retry" onClick={onRetry}>
-            <RefreshCw size={12} /> 重新生成
-          </button>
-          <button className="spec-btn confirm" onClick={onConfirm}>
-            <CheckCircle size={12} /> 确认绘制
-          </button>
-        </div>
+        <div className="spec-review-label">历史规格（两阶段模式已移除，仅供查看）</div>
+        <pre className="spec-preview">{turn.payload.spec}</pre>
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 /**
- * aiClient L1 单测（0 API、纯离线）—— 智谱 GLM 适配
- *   - isZhipuProvider 检测（provider / baseURL / 模型名）
- *   - getProviderQuirks zhipu 分支
+ * aiClient L1 单测（0 API、纯离线）—— 智谱 GLM / DeepSeek V4 适配
+ *   - isZhipuProvider / isDeepSeek 检测（provider / baseURL / 模型名）
+ *   - getProviderQuirks 各 provider 分支
  *   - buildThinkingParam 按 provider 翻译（GLM thinking.type / DeepSeek reasoning_effort / 其他不发）
  */
 import { test } from "node:test";
@@ -10,9 +10,12 @@ import assert from "node:assert/strict";
 import {
   buildThinkingParam,
   getProviderQuirks,
+  isDeepSeek,
   isZhipuProvider,
   resolveMaxOutputTokens,
   DEFAULT_OUTPUT_TOKENS,
+  MAX_EFFORT_OUTPUT_TOKENS,
+  MAX_OUTPUT_TOKENS,
   THINKING_OUTPUT_TOKENS,
   type AIConfig,
 } from "../src/lib/aiClient";
@@ -59,6 +62,13 @@ test("getProviderQuirks：deepseek 仍回传 reasoning_content（回归）", () 
   assert.equal(q.supportsThinking, true);
 });
 
+test("getProviderQuirks：deepseek 默认档位 high + 思考忽略 temperature（官方 2026-10）", () => {
+  const q = getProviderQuirks(cfg({ provider: "deepseek", model: "deepseek-flash" }));
+  assert.equal(q.reasoningEffort, "high", "官方默认档位为 high");
+  assert.equal(q.thinkingIgnoresTemperature, true, "thinking 模式下 temperature 不生效");
+  assert.equal(q.contextWindow, 1_000_000, "V4 上下文 1M");
+});
+
 // ── buildThinkingParam ──
 
 test("buildThinkingParam：zhipu 未设置 effort → thinking disabled（对齐 baseline）", () => {
@@ -76,8 +86,38 @@ test("buildThinkingParam：deepseek 设置 effort → reasoning_effort", () => {
   assert.deepEqual(p, { reasoning_effort: "high" });
 });
 
-test("buildThinkingParam：deepseek 未设置 → null（不发）", () => {
-  assert.equal(buildThinkingParam(cfg({ provider: "deepseek", model: "deepseek-v4-flash" })), null);
+test("buildThinkingParam：deepseek max 档原样下发（官方 2026-10 新增档位）", () => {
+  const p = buildThinkingParam(cfg({ provider: "deepseek", model: "deepseek-flash", reasoningEffort: "max" }));
+  assert.deepEqual(p, { reasoning_effort: "max" });
+});
+
+test("buildThinkingParam：deepseek medium 归一为 high（服务端本就映射 high）", () => {
+  const p = buildThinkingParam(cfg({ provider: "deepseek", model: "deepseek-flash", reasoningEffort: "medium" }));
+  assert.deepEqual(p, { reasoning_effort: "high" });
+});
+
+test("buildThinkingParam：deepseek none 显式关闭思考", () => {
+  const p = buildThinkingParam(cfg({ provider: "deepseek", model: "deepseek-flash", reasoningEffort: "none" }));
+  assert.deepEqual(p, { reasoning_effort: "none" });
+});
+
+test("buildThinkingParam：deepseek 未设置 → 显式关闭思考（不再跟随 provider 默认开 + high）", () => {
+  const p = buildThinkingParam(cfg({ provider: "deepseek", model: "deepseek-v4-flash" }));
+  assert.deepEqual(p, { reasoning_effort: "none" }, "未设置即 opt-in 关闭，对齐 A/B 结论");
+});
+
+test("buildThinkingParam：自定义 baseURL 指向 DeepSeek 也识别为 deepseek", () => {
+  const p = buildThinkingParam(cfg({
+    provider: "custom", baseURL: "https://api.deepseek.com", model: "deepseek-flash", reasoningEffort: "low",
+  }));
+  assert.deepEqual(p, { reasoning_effort: "low" });
+});
+
+test("isDeepSeek：provider / baseURL / 模型名命中，其他不命中", () => {
+  assert.equal(isDeepSeek(cfg({ provider: "deepseek" })), true);
+  assert.equal(isDeepSeek(cfg({ provider: "custom", baseURL: "https://api.deepseek.com" })), true);
+  assert.equal(isDeepSeek(cfg({ provider: "custom", model: "deepseek-flash" })), true);
+  assert.equal(isDeepSeek(cfg({ provider: "openai", model: "gpt-4o" })), false);
 });
 
 test("buildThinkingParam：其他 provider（openai）→ 恒 null", () => {
@@ -89,9 +129,11 @@ test("buildThinkingParam：其他 provider（openai）→ 恒 null", () => {
 // 背景：V4.1 Flash 默认思考，reasoning 与正文共享 max_tokens；budget 太小 →
 //      正文/工具调用被截断为空（finish_reason="length"）。
 
-test("resolveMaxOutputTokens：未配置 → 非 thinking 16384 / thinking 32768", () => {
+test("resolveMaxOutputTokens：未配置 → 非 thinking 16384 / thinking 32768 / max 档 131072", () => {
   assert.equal(resolveMaxOutputTokens(cfg(), false), DEFAULT_OUTPUT_TOKENS);
   assert.equal(resolveMaxOutputTokens(cfg(), true), THINKING_OUTPUT_TOKENS);
+  assert.equal(resolveMaxOutputTokens(cfg(), true, "max"), MAX_EFFORT_OUTPUT_TOKENS, "max 档按官方默认 128K");
+  assert.equal(resolveMaxOutputTokens(cfg(), true, "high"), THINKING_OUTPUT_TOKENS, "非 max 档仍 32K");
   assert.ok(DEFAULT_OUTPUT_TOKENS >= 16384, "baseline 预算须给思考留足空间（原值 8192 实测被吃满 95%）");
 });
 
@@ -103,6 +145,11 @@ test("resolveMaxOutputTokens：配置优先于默认值", () => {
 test("resolveMaxOutputTokens：非法/零值回退默认", () => {
   assert.equal(resolveMaxOutputTokens(cfg({ maxOutputTokens: 0 }), false), DEFAULT_OUTPUT_TOKENS);
   assert.equal(resolveMaxOutputTokens(cfg({ maxOutputTokens: -5 }), true), THINKING_OUTPUT_TOKENS);
+});
+
+test("输出预算上限：MAX_OUTPUT_TOKENS 容纳 max 档且不超官方 384K", () => {
+  assert.equal(MAX_OUTPUT_TOKENS, MAX_EFFORT_OUTPUT_TOKENS, "自保上限对齐 max 档默认值");
+  assert.ok(MAX_OUTPUT_TOKENS <= 393216, "不得超过 DeepSeek 官方 max_tokens 上限 384K");
 });
 
 // ── withCallTimeout（非流式调用兜底超时）──

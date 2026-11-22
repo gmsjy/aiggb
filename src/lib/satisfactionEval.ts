@@ -151,6 +151,20 @@ ${issueLines}
 
 // ──── 视觉审查（画布截图 + 视觉模型） ────
 
+const VISUAL_REVIEW_SYSTEM_PROMPT_WITH_SOURCE = `你是 GeoGebra 画布视觉审查员。你会看到两张图：【原题图片】（用户的题目/参考图）与【画布截图】（AI 实际画出来的结果）。请判断画布是否忠实还原了原题的几何/物理场景。
+
+规则：
+1. 对照原图逐一核对：原题中的关键对象（点/线/圆/轨迹/矢量/标注）在画布截图中是否都存在？
+2. 几何关系是否一致：平行/垂直/相切/中点/共线/等长/角度等关系，是否与原图相符？这是最重要的一项——关系画错比位置微偏严重得多。
+3. 位置与比例：轨迹是否明显超出视窗、对象是否过度拥挤或互相遮挡、标注是否可读？
+4. 颜色/样式是否与要求一致（如"红色轨迹""蓝色小球"）？
+5. 画布截图只是动画的某一瞬间：动画是否启动、滑块是否可调等动态要求不要从截图判断（由文本快照核对负责）。
+6. 坐标轴、网格、GGB 界面元素本身不是问题；原图上的文字题面不需要在画布上复现。
+7. 只报告明确可见的差异，不要吹毛求疵；最多 5 条。
+
+输出 JSON：
+{"satisfied":true/false,"issues":["问题描述"],"summary":"一句话总结"}`;
+
 const VISUAL_REVIEW_SYSTEM_PROMPT = `你是 GeoGebra 画布视觉审查员。对照【题目要求】检查【画布截图】，从"看图"角度判断绘制结果是否达标。
 
 规则：
@@ -168,12 +182,19 @@ const VISUAL_REVIEW_SYSTEM_PROMPT = `你是 GeoGebra 画布视觉审查员。对
  * 视觉审查：画布截图 + 视觉模型，判断渲染效果是否满足题目要求。
  *
  * 与 evaluateSatisfaction（文本结构核对）并存：结构问题归文本快照，
- * 视觉问题（出框/遮挡/样式不符/标注不可读）归截图。失败不阻断（默认通过）。
+ * 视觉问题（出框/遮挡/样式不符/几何关系画错）归截图。失败不阻断（默认通过）。
  *
- * @param basis        确认后的序列化题目解读（serializeProblem 输出）
+ * ★ 双模式：
+ *   - 传了 sourceImages（原题图片）→「原图 vs 画布截图」交叉验证。这才是真正的独立校验：
+ *     若视觉模型在识别阶段把图画错了（如把"斜抛"读成"平抛"），拿它自己的文字转写去核对
+ *     只会"忠实于错误前提"；直接比原图才能对冲识别误差。
+ *   - 未传 sourceImages → 退回旧模式（文字要求 vs 画布截图），兼容纯文字轮与旧调用。
+ *
+ * @param basis        确认后的序列化题目解读（serializeProblem 输出）——双模式下的辅助上下文
  * @param imageDataUrl 画布截图 data URL（exportPNG 产出）
  * @param visionModel  视觉模型名（缺省回退 config.model）
  * @param chatRawImpl  测试可注入 mock
+ * @param sourceImages 原题图片 data URL 数组（可选；提供则启用交叉验证）
  */
 export async function evaluateVisual(
   config: AIConfig,
@@ -182,7 +203,8 @@ export async function evaluateVisual(
   signal?: AbortSignal,
   visionModel?: string,
   chatRawImpl?: typeof defaultChatRaw,
-  onUsage?: (usage: { prompt: number; completion: number }) => void
+  onUsage?: (usage: { prompt: number; completion: number }) => void,
+  sourceImages?: string[]
 ): Promise<SatisfactionResult> {
   if (!imageDataUrl.trim()) {
     return { satisfied: true, issues: [], summary: "无截图，跳过视觉核对" };
@@ -191,16 +213,35 @@ export async function evaluateVisual(
   const chatRawFn = chatRawImpl ?? defaultChatRaw;
   // ★ 视觉审查同为感知任务：跳过 thinking（防 reasoning 挤占输出预算）+ 显式输出上限
   //   （同 extractProblem 的截断教训：多数视觉模型不支持 json_object，输出上限需显式给）
-  const vConfig: AIConfig = { ...config, reasoningEffort: undefined, timeoutMs: EVAL_CALL_TIMEOUT_MS };
-  const messages: ChatMessage[] = [
-    { role: "system", content: VISUAL_REVIEW_SYSTEM_PROMPT },
-    {
-      role: "user",
-      content: [
+  //   显式传 "none"：DeepSeek 侧「未设置」已等价关闭，但显式写法不受该默认影响。
+  const vConfig: AIConfig = { ...config, reasoningEffort: "none", timeoutMs: EVAL_CALL_TIMEOUT_MS };
+
+  const srcs = (sourceImages ?? []).filter(u => !!u && u.trim().length > 0);
+  const crossMode = srcs.length > 0;
+
+  const userParts: ContentPart[] = crossMode
+    ? [
+        { type: "text", text: `【题目文字解读（辅助参考）】\n${basis}` },
+        { type: "text", text: "【原题图片】" },
+        ...srcs.flatMap((url, i): ContentPart[] =>
+          srcs.length > 1
+            ? [{ type: "text", text: `[原图${i + 1}]` }, { type: "image_url", image_url: { url } }]
+            : [{ type: "image_url", image_url: { url } }]
+        ),
+        { type: "text", text: "【画布截图（AI 实际绘制结果）】" },
+        { type: "image_url", image_url: { url: imageDataUrl } },
+      ]
+    : [
         { type: "text", text: `【题目要求】\n${basis}` },
         { type: "image_url", image_url: { url: imageDataUrl } },
-      ] as ContentPart[]
-    }
+      ];
+
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content: crossMode ? VISUAL_REVIEW_SYSTEM_PROMPT_WITH_SOURCE : VISUAL_REVIEW_SYSTEM_PROMPT,
+    },
+    { role: "user", content: userParts }
   ];
 
   try {

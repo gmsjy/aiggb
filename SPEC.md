@@ -841,12 +841,14 @@ Agent 模式的 `toolExecutor.ts` 同样包含 3D 防护：
 
 ### 4C.6 思考深度（thinking）与 A/B 验证
 
-DeepSeek V4 原生内嵌 thinking（流式返回 `reasoning_content`）。系统通过 `AIConfig.reasoningEffort`（SettingsDialog「思考深度」下拉）控制：
+DeepSeek V4 原生内嵌 thinking（流式返回 `reasoning_content`）。系统通过 `AIConfig.reasoningEffort` 控制（**两处入口共享同一份配置**：SettingsDialog「思考深度」下拉 + ChatPanel 输入框旁的「思考」就近开关）：
 
-- **未设置（baseline）**：三个调用点（`chat` 编译/修复、`chatRaw` 精炼/评估、`agentChat` Agent 模式）均**不发送** `reasoning_effort` 参数。⚠ 实测 deepseek-flash（V4.1）**默认仍会思考**：一次简单构造中推理占输出 token 的 ~90%（`reasoning_tokens: 1051 / completion 1163`）
-- **显式关闭**：`reasoningEffort = "none"` → 发 `reasoning_effort: "none"`（实测 HTTP 200，`reasoning_content` 归零、usage 不再含 `reasoning_tokens`）；GLM 走 `thinking: { type: "disabled" }`。这是唯一能让思考不占输出预算的方式——**`max_tokens` 由服务端对 completion tokens 统一封顶，客户端无法把 reasoning 剔除出预算**
-- **开启**：low/medium/high → 对支持 thinking 的 provider（`quirks.supportsThinking`）发送对应档位
-- **输出预算（max_tokens）**：`AIConfig.maxOutputTokens`（SettingsDialog「输出预算」，留空 = 自动）。默认值 `DEFAULT_OUTPUT_TOKENS=16384` / thinking `THINKING_OUTPUT_TOKENS=32768`（v1.8 由 8192/16384 上调，`resolveMaxOutputTokens()` 统一解析）。max_tokens 是上限而非计费量，调高不额外花钱
+- **官方参数（2026-10 核对）**：`reasoning_effort ∈ {none, low, high, max}`，启用思考时的默认档位为 `high`；`minimal→low`、`medium/xhigh→high`、`ultra→max` 由服务端映射。也可用 `thinking: {type: "enabled"|"disabled"}` 二元开关。**思考模式默认开启**
+- **未设置 = 显式关闭（本项目语义，v1.9 起）**：三个调用点（`chat` 编译/修复、`chatRaw` 精炼/评估、`agentChat` Agent 模式）在 DeepSeek 上**默认发 `reasoning_effort: "none"`**，而非「跟随 provider 默认」。理由：官方默认是「开 + high」，而 A/B 实测 high 端到端 −8.3%，且思考开启时 temperature 被服务端忽略（Agent 的 0.05 低温度防幻觉失效）。**想用思考必须在设置面板显式选档**（opt-in）。⚠ 实测推理可占输出 token 的 ~90%（`reasoning_tokens: 1051 / completion 1163`）
+- **显式档位**：low/high/max → 对支持 thinking 的 provider（`quirks.supportsThinking`）发送对应档位；`medium` 在 `buildThinkingParam` 中显式归一为 `high`（与服务端映射一致，避免「中档」的语义误解）；`none` 与「未设置」等效（GLM 走 `thinking: { type: "disabled" }`）
+- **temperature 失效**：官方明确 thinking 模式下 `temperature` / `presence_penalty` / `frequency_penalty` 不生效（不报错但不影响输出）。DeepSeek 的 `quirks.thinkingIgnoresTemperature=true` 记录该事实——Agent 的 0.05 低温度防工具名幻觉**只在关闭思考时生效**，这也是默认关闭的另一个理由
+- **感知任务强制关闭**：`extractProblem`（题目识别）与 `evaluateVisual`（画布视觉审查）显式传 `reasoningEffort: "none"`，不受用户全局设置影响（感知任务不需要深思考，reasoning 只会挤占输出预算）
+- **输出预算（max_tokens）**：`AIConfig.maxOutputTokens`（SettingsDialog「输出预算」，留空 = 自动）。默认值 `DEFAULT_OUTPUT_TOKENS=16384` / thinking `THINKING_OUTPUT_TOKENS=32768` / `max` 档 `MAX_EFFORT_OUTPUT_TOKENS=131072`（对齐官方 max 档服务端默认 128K，`resolveMaxOutputTokens(config, thinking, effort)` 统一解析）。DeepSeek 官方允许 `1 ~ 384K`；客户端自保上限 `MAX_OUTPUT_TOKENS=131072`。max_tokens 是上限而非计费量，调高不额外花钱
 - **截断重试自动扩容**：`finish_reason="length"` 时 `agentLoop` 以 `{ maxTokensScale: 2, reasoningEffort: "low" }` 覆盖参数重试一次（**必须改变条件**，否则同参数重试必然再次截断）
 - **Agent 模式实时展示**：`agentChat` 的 `reasoning_content` 增量经 `onReasoning` 回调 → `onThinking` 在 UI 显示 `🧠 思考中…`（截尾 400 字符，经 ChatPanel 120ms 节流），V4 思考阶段不再干等
 - **回传门控**：`reasoning_content` 多轮回传受 `quirks.mustRoundtripReasoning` 控制（V4=true，其他 provider 无该字段，回传即 no-op）
@@ -1011,7 +1013,7 @@ Provider 视觉模型候选（待核对）：
 
 | Provider | `visionModels` 候选 | 备注 |
 |---|---|---|
-| DeepSeek | `deepseek-flash`（V4.1 Flash 原生多模态；旧 `deepseek-v4-flash-vision-exp` 已下线，暂路由兼容） |
+| DeepSeek | `deepseek-flash`（V4.1-Flash-1017 原生多模态；单图 ≤1024 tokens、仅限 user 消息） |
 | 智谱 GLM | `glm-4.5v` | 视觉理解 |
 | Moonshot | 未预置（可在「自定义」手填） | providers.ts 未含 Moonshot 视觉候选，以控制台实时清单为准 |
 | OpenAI | `gpt-4o` / `gpt-4.1` | 主力本身多模态，也可留空跟随主力 |
@@ -1061,19 +1063,39 @@ export async function fileToDataUrl(file: File, opts?: { maxDim?: number; qualit
 
 ### 4D.6 改动清单（文件级）
 
-**`satisfactionEval.ts`** —— 视觉审查（v1.7+ 新增 `evaluateVisual`）：
+**`satisfactionEval.ts`** —— 视觉审查（v1.7+ 新增 `evaluateVisual`；**v1.9 起双模式**）：
 
 ```ts
 /** 画布截图 + 视觉模型审查：判断渲染效果（出框/遮挡/样式不符/标注不可读）。
  *  与 evaluateSatisfaction（文本结构核对）并存；跳过 thinking + 显式 4096 防截断；
- *  空截图跳过；解析容错（fence 剥离 / {...} 提取 / 字符串 satisfied）；失败不阻断（默认通过） */
+ *  空截图跳过；解析容错（fence 剥离 / {...} 提取 / 字符串 satisfied）；失败不阻断（默认通过）。
+ *
+ *  ★ 第 8 参 sourceImages（原题图片）：
+ *    - 传入 → 交叉验证模式：专用 system prompt，比对「原题图片 vs 画布截图」，
+ *      重点核对几何关系（平行/垂直/相切/中点/共线/等长/角度）是否一致
+ *    - 不传 → 旧模式：「文字要求 vs 画布截图」（兼容纯文字轮与旧调用）
+ *  为什么必须支持交叉验证：拿识别阶段的文字转写去核对，等于用同一份理解自证——
+ *  识别错了也会"一致通过"，无法对冲识别误差。 */
 export async function evaluateVisual(
-  config, basis: string, imageDataUrl: string, signal?, visionModel?, chatRawImpl?, onUsage?
+  config, basis: string, imageDataUrl: string, signal?, visionModel?,
+  chatRawImpl?, onUsage?, sourceImages?: string[]
 ): Promise<SatisfactionResult>;
 // PipelineDeps += evalVisualImpl?（单测 mock 注入）
 ```
 
-**`pipeline.ts`** —— stateCheck 闭包双路合并：文本核对（evaluateSatisfaction）+ 截图视觉核对（exportPNG → evaluateVisual，用 visionModel）；视觉 issues 加 `[视觉] ` 前缀，summary 合并两路结论；截图能力缺失（base64 ≤100 字符 / 无 getPNGBase64）→ 静默跳过视觉路，仅保留文本结果。
+**`pipeline.ts`** —— stateCheck 闭包双路合并：文本核对（evaluateSatisfaction）+ 截图视觉核对（exportPNG → evaluateVisual，用 visionModel，**并传入原题图片做交叉验证**）；视觉 issues 加 `[视觉] ` 前缀，summary 合并两路结论；截图能力缺失（base64 ≤100 字符 / 无 getPNGBase64）→ 静默跳过视觉路，仅保留文本结果。
+
+**`pipeline.ts` 图片贯通（v1.9）**——图片不再止步于识别阶段：
+
+```
+extractProblem（视觉模型）→ 题目确认 → taskText
+   ├─① runAgentRound(..., { images }) → AgentLoopDeps.images
+   │     → agentLoop 首条 user 消息的 ContentPart[]（[图N] 标注 + image_url）
+   │     → Agent 构造时可回看原图核对几何关系
+   └─② evaluateVisual(..., sourceImages = images) → 原图 vs 画布截图交叉验证
+```
+
+同时：识别调用 `jsonMode` 按 `getProviderCapabilities().jsonSchema` 动态开启（DeepSeek/GLM/OpenAI 支持 `json_object`），空响应重试从 4096 扩到 **8192**（改变条件而非原样重试）；多图逐张加 `[图N]` 标注；纯图识别失败时走 **ask 反问**（引导换图或改用文字描述），而非只丢 error。
 
 **`aiClient.ts`** —— 类型放宽（现有字符串调用点编译不变）：
 
@@ -1085,9 +1107,16 @@ export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string | ContentPart[];
 }
+/** v1.9：AgentMessage.content 同样放宽，支撑原图进 Agent 循环 */
+export interface AgentMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | ContentPart[] | null;   // ← 由 string | null 放宽
+  // ...
+}
+/** v1.9 新增：多模态 content 归一为文本（日志/轨迹/长度判断用；图片记为 [图片]） */
+export function contentToText(content: AgentMessage["content"]): string;
 // resolveModel：role 加 "vision"
 // ping(config, signal?, modelOverride?)
-// agentChat / AgentMessage：零改动
 ```
 
 **`agentLoop.ts`** —— 状态核对钩子（新机制核心）：
@@ -1207,6 +1236,7 @@ persist v3→v4：`visionModel` 为可选字段，**无字段迁移逻辑**，mi
 - `updateProblemReview` 经 deps 内联 `setState` 实现（与 `updateSpecReview` 同款，**不加 store action**）
 - 危险工具确认：`cb.onConfirm` 注入对所有路径无条件生效（带图轮在两阶段开关下也能弹确认）
 - 三通道输入 UI（见 4D.5）
+- **思考就近开关 + 可折叠思考（借鉴 DeepSeek chat-demo 交互范式）**：输入框旁 `aria-pressed`「思考」按钮，点击循环 `low→medium→high→max→none→low`，直接 `setConfig({...config, reasoningEffort})` 持久化（与设置面板下拉同源同步）；运行中的 agentStep 可点箭头展开全文（`.thinking-text.expanded`，可滚动），未展开时保持单行截尾。不接全家桶协议——服务端联网工具与 GGB 自定义 `tools` 互斥，且联网对画图场景价值低。
 
 **`MessageBubble.tsx`**：
 
@@ -1343,13 +1373,13 @@ persist v3→v4：`visionModel` 为可选字段，**无字段迁移逻辑**，mi
 
 | 角色 | 推荐模型 | 思考深度 | 输出预算 |
 |---|---|---|---|
-| 主力模型 | `deepseek-flash`（V4.1） | — | 留空（16384） |
+| 主力模型 | `deepseek-flash`（V4.1-Flash-1017） | — | 留空（16384） |
 | 轻量模型 | `deepseek-flash` | — | 留空 |
-| Agent 模型 | `deepseek-flash` | 留空（会思考）或 **关闭** | 复杂 3D 建议 32768 |
+| Agent 模型 | `deepseek-flash` | 留空（会思考，默认 high）或 **关闭** | 复杂 3D 建议 32768 |
 | 视觉模型 | 留空跟随主力（V4.1 原生多模态） | — | — |
 
-> 2026-09 DeepSeek 更新：V4.1 Flash（`deepseek-flash`）原生多模态，官方宣布性能/费用/速度全面超越 V4 Pro；`deepseek-v4-pro` 于 2026-09-14 12:00 后强制路由到 V4.1 Flash 计费；旧模型名（v4-flash / v4-flash-vision-exp）暂时路由兼容。V4.1 实测默认开启思考（reasoning_content），AiGGB 未设置思考深度时 DeepSeek 路径不发参数（baseline 语义）——**v1.8 起提供「关闭」选项（`reasoning_effort: "none"`，实测推理归零）与可自定义输出预算**。
-> 旧版说明（V4 时代）：视觉模型必须显式配置——`deepseek-v4-pro/flash` 不支持图片输入，留空回退会导致识别阶段 4xx 错误。V4.1 起此限制解除。
+> **2026-10-17 DeepSeek 更新（V4.1-Flash-1017）**：模型名仍为 `deepseek-flash`，上下文 1M、`max_tokens` 上限 384K、原生多模态（JPEG/PNG/GIF/WebP，单图上限 1024 tokens，图片只允许出现在 `user` 消息）。`deepseek-v4-pro`（V4-Pro-0813）**仍在服务**（此前预期的强制路由未发生），价格约为 flash 的 4 倍、且**不支持图片输入**；旧模型名 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 已下线但服务端路由到 V4.1-Flash-1017。行为约束（均已代码核对）：① `response_format` 仅支持 `text` / `json_object`，**无 `json_schema`**；② thinking 模式默认开启、默认档位 `high`，档位取值 `none/low/high/max`；③ thinking 模式下 `temperature` 无效；④ 带 `tools` 的请求必须完整回传 `reasoning_content`，否则 400，且 `tool_choice=required`/指定工具在 thinking 模式下会 400（项目不使用 `tool_choice`）。
+> 旧版说明（V4 时代）：视觉模型必须显式配置——`deepseek-v4-pro/flash` 不支持图片输入，留空回退会导致识别阶段 4xx 错误。V4.1 起此限制解除（`v4-pro` 仍不支持）。
 
 ---
 
@@ -1462,7 +1492,7 @@ AI: {
 
 | Provider | baseURL | 代表模型 | 浏览器直连 |
 |---|---|---|---|
-| DeepSeek | `https://api.deepseek.com` | `deepseek-flash`（V4.1）/ `deepseek-v4-pro`（过渡期兼容） | ✅ |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-flash`（V4.1-Flash-1017）/ `deepseek-v4-pro`（在售，贵 4 倍且不支持图片） | ✅ |
 | Moonshot (Kimi) | `https://api.moonshot.cn/v1` | `kimi-k2-0905-preview` / `kimi-latest` / `moonshot-v1-128k` | ✅ |
 | 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` / `glm-4.6-flash` / `glm-4.5` | ✅ |
 | SiliconFlow | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V3` / `Qwen/Qwen2.5-72B-Instruct` | ✅ |

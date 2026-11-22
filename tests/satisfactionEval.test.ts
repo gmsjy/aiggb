@@ -156,6 +156,61 @@ test("SatisfactionResult Zod schema 通过合法数据", async () => {
 
 const IMG = "data:image/png;base64," + "Zm9v".repeat(40); // 合法形态的 data URL
 
+// ──── evaluateVisual 交叉验证（原图 vs 画布截图） ────
+
+test("交叉验证：传原图 → 消息含「原图 + 画布截图」两张图", async () => {
+  let captured: ChatMessage[] | null = null;
+  const mockChatRaw = async (_cfg: AIConfig, msgs: ChatMessage[]) => {
+    captured = msgs;
+    return JSON.stringify({ satisfied: true, issues: [], summary: "ok" });
+  };
+  const src = "data:image/jpeg;base64," + "QUJD".repeat(40);
+  await evaluateVisual(config, "题目解读文字", IMG, undefined, "vision-m", mockChatRaw, undefined, [src]);
+
+  const parts = captured![1].content as ContentPart[];
+  const images = parts.filter(p => p.type === "image_url");
+  assert.equal(images.length, 2, "应同时包含原题图片与画布截图");
+  assert.equal((images[0] as { image_url: { url: string } }).image_url.url, src, "第一张是原题图");
+  assert.equal((images[1] as { image_url: { url: string } }).image_url.url, IMG, "第二张是画布截图");
+
+  const allText = parts.filter(p => p.type === "text").map(p => (p as { text: string }).text).join("\n");
+  assert.ok(allText.includes("原题图片"), "应标注原图段落");
+  assert.ok(allText.includes("画布截图"), "应标注画布截图段落");
+
+  // system prompt 应换成交叉验证版（强调几何关系一致性）
+  const sys = captured![0].content as string;
+  assert.ok(/原题图片/.test(sys), "system prompt 应说明会看到原题图");
+  assert.ok(/平行|垂直|相切|几何关系/.test(sys), "system prompt 应要求核对几何关系");
+});
+
+test("交叉验证：多张原图逐张标注", async () => {
+  let captured: ChatMessage[] | null = null;
+  const mockChatRaw = async (_cfg: AIConfig, msgs: ChatMessage[]) => {
+    captured = msgs;
+    return JSON.stringify({ satisfied: true, issues: [], summary: "ok" });
+  };
+  const srcs = ["data:image/jpeg;base64,AAA", "data:image/jpeg;base64,BBB"];
+  await evaluateVisual(config, "题目解读", IMG, undefined, "vision-m", mockChatRaw, undefined, srcs);
+  const parts = captured![1].content as ContentPart[];
+  const allText = parts.filter(p => p.type === "text").map(p => (p as { text: string }).text).join("\n");
+  assert.ok(allText.includes("[原图1]") && allText.includes("[原图2]"), "多图应逐张标注");
+  assert.equal(parts.filter(p => p.type === "image_url").length, 3, "两张原图 + 一张画布截图");
+});
+
+test("交叉验证：原图数组为空 → 退回旧模式（仅画布截图）", async () => {
+  let captured: ChatMessage[] | null = null;
+  const mockChatRaw = async (_cfg: AIConfig, msgs: ChatMessage[]) => {
+    captured = msgs;
+    return JSON.stringify({ satisfied: true, issues: [], summary: "ok" });
+  };
+  await evaluateVisual(config, "题目要求", IMG, undefined, "vision-m", mockChatRaw, undefined, []);
+  const parts = captured![1].content as ContentPart[];
+  assert.equal(parts.filter(p => p.type === "image_url").length, 1, "无原图时只有画布截图");
+  assert.equal(parts.filter(p => p.type === "text").length, 1, "旧模式下只有一段题目要求文本");
+  const sys = captured![0].content as string;
+  assert.ok(!/原题图片/.test(sys), "旧模式 system prompt 不应提原题图");
+});
+
 test("视觉审查 satisfied=false + issues → 正确解析", async () => {
   const mockChatRaw = async () =>
     JSON.stringify({ satisfied: false, issues: ["轨迹明显超出视窗"], summary: "轨迹出框" });
@@ -182,7 +237,7 @@ test("视觉审查消息 = 文本(题目要求) + 截图(image_url) 两段", asy
   assert.ok((parts[0] as { text: string }).text.includes("题目要求全文在此"));
 });
 
-test("视觉审查跳过 thinking：reasoningEffort 不下发", async () => {
+test("视觉审查跳过 thinking：虽然用户开了 high，审查调用仍显式关闭思考", async () => {
   let capturedCfg: AIConfig | null = null;
   const mockChatRaw = async (cfg: AIConfig) => {
     capturedCfg = cfg;
@@ -190,7 +245,7 @@ test("视觉审查跳过 thinking：reasoningEffort 不下发", async () => {
   };
   const cfgWithThinking: AIConfig = { ...config, reasoningEffort: "high" };
   await evaluateVisual(cfgWithThinking, "题目要求文本，超过最短长度限制以正常执行审查。", IMG, undefined, "vision-m", mockChatRaw);
-  assert.equal(capturedCfg!.reasoningEffort, undefined, "视觉审查不应携带 reasoning_effort");
+  assert.equal(capturedCfg!.reasoningEffort, "none", "视觉审查应显式关闭思考，而不是把用户的 high 传下去");
 });
 
 test("视觉审查空截图 → 跳过且不调 AI", async () => {

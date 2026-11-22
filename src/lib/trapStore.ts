@@ -11,6 +11,7 @@
  */
 
 import { getAllTrajectories, type TrajectoryRecord } from "./trajectoryStore";
+import { contentToText } from "./aiClient";
 import { openGGBDB } from "./ggbDB";
 
 // ── 类型 ──
@@ -142,9 +143,12 @@ export async function ingestTrajectoryFailures(records: TrajectoryRecord[]): Pro
       if (m.role === "assistant" && m.tool_calls) {
         for (const tc of m.tool_calls) {
           const resp = msgs.slice(i + 1).find(x => x.role === "tool" && x.tool_call_id === tc.id);
-          if (!resp?.content) continue;
+          // ★ tool 响应的 content 正常是 JSON 字符串；用 contentToText 归一化以兼容
+          //   多模态 content 类型（AgentMessage.content 可为 ContentPart[]）
+          const respText = contentToText(resp?.content ?? null);
+          if (!respText) continue;
           try {
-            const p = JSON.parse(resp.content) as { success?: boolean; error?: string };
+            const p = JSON.parse(respText) as { success?: boolean; error?: string };
             if (p.success === false && p.error) {
               await recordFailure(tc.function.name, p.error);
               count++;

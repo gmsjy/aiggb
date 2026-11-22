@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { executeCommands, orderCommands, collectFailures } from "../src/lib/ggbBridge";
+import { executeCommands, orderCommands, collectFailures, getRichSnapshot } from "../src/lib/ggbBridge";
 import { formatGGBNumber } from "../src/lib/physics";
 import { MockGGB } from "./mockGGB";
 import type { Command } from "../src/lib/schema";
@@ -205,6 +205,49 @@ test("style op 目标存在且常规设置 → ok:true", () => {
     { op: "style", target: "c", color: "#2196f3", thickness: 3, dashed: true } as Command,
   ], "2d");
   assert.equal(results[0].ok, true, `实际错误：${results[0].error}`);
+});
+
+// ── 7. getRichSnapshot 有界输出（借鉴 DSH bounded outputs 原则） ──
+
+test("getRichSnapshot：空画布返回固定文案", () => {
+  const mock = new MockGGB();
+  assert.equal(getRichSnapshot(mock), "(空画布)");
+});
+
+test("getRichSnapshot：少量对象全量输出，不含截断标记", () => {
+  const mock = new MockGGB();
+  mock.seed([
+    { name: "A", type: "Point" },
+    { name: "B", type: "Point" },
+  ]);
+  const snap = getRichSnapshot(mock);
+  assert.ok(snap.includes("A"), "应列出对象 A");
+  assert.ok(snap.includes("B"), "应列出对象 B");
+  assert.ok(!snap.includes("快照已截断"), "未超限不应截断");
+});
+
+test("getRichSnapshot：对象数超上限 → 截断并明确告知剩余数量", () => {
+  const mock = new MockGGB();
+  // 造 80 个点，超过 MAX_SNAPSHOT_OBJECTS(60)
+  const objs = Array.from({ length: 80 }, (_, i) => ({ name: `P${i}`, type: "Point" }));
+  mock.seed(objs);
+
+  const snap = getRichSnapshot(mock);
+  assert.ok(snap.includes("快照已截断"), "超限必须给出显式截断标记");
+  assert.match(snap, /另有 \d+ 个对象未列出/, "必须写明还有多少对象（避免模型误判为不存在）");
+  assert.ok(snap.includes("get_object_info"), "应指引模型如何查具体对象");
+});
+
+test("getRichSnapshot：截断时可回读的对象数 < 总数", () => {
+  const mock = new MockGGB();
+  const objs = Array.from({ length: 80 }, (_, i) => ({ name: `Q${i}`, type: "Point" }));
+  mock.seed(objs);
+  const snap = getRichSnapshot(mock);
+  // 至少第一个对象永远输出（避免小上限时全空）
+  assert.ok(snap.includes("Q0"), "首个对象必须保留");
+  // 不应把 80 个全列出来
+  const listed = (snap.match(/^Q\d+ \(/gm) ?? []).length;
+  assert.ok(listed > 0 && listed < 80, `应部分列出（实际 ${listed}）`);
 });
 
 // ── 6. scripting 命令「假 false」豁免（GGB evalCommand 对 Set* 成功也返回 false） ──

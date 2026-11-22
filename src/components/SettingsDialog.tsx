@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { X, ExternalLink, ShieldAlert } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
-import { PROVIDER_PRESETS, findProvider } from "../lib/providers";
+import { PROVIDER_PRESETS, findProvider, modelSupportsVision } from "../lib/providers";
 import { ping, AIError, type AIConfig } from "../lib/aiClient";
 import { isBatch3DEnabled, setBatch3DEnabled } from "../lib/repaintGate";
 import { TokenUsageChart } from "./TokenUsageChart";
@@ -44,8 +44,8 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
   const [lightModel, setLightModel] = useState<string>(existing?.lightModel ?? existing?.flashModel ?? "");
   const [agentModel, setAgentModel] = useState<string>(existing?.agentModel ?? "");
   const [visionModel, setVisionModel] = useState<string>(existing?.visionModel ?? "");
-  // ★ 思考深度（V4 reasoning_effort；留空 = 不发参数 = 仍会思考，none = 显式关闭）
-  const [reasoningEffort, setReasoningEffort] = useState<"none" | "low" | "medium" | "high" | "">(
+  // ★ 思考深度（DeepSeek reasoning_effort: none/low/high/max；留空 = 不发参数 = 跟随 provider 默认）
+  const [reasoningEffort, setReasoningEffort] = useState<"none" | "low" | "medium" | "high" | "max" | "">(
     existing?.reasoningEffort ?? ""
   );
   // ★ 输出预算（max_tokens；留空 = 自动：16384 / 思考模式 32768）
@@ -56,6 +56,9 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
   const [batch3D, setBatch3D] = useState<boolean>(() => isBatch3DEnabled());
 
   const preset = findProvider(providerId);
+
+  /** Agent 模型的实际取值（留空回退主力模型）——用于多模态能力提示 */
+  const resolvedAgentModel = (agentModel.trim() || model.trim());
 
   /** 用户是否主动切到"自定义模型"输入模式 */
   const [customMode, setCustomMode] = useState<boolean>(
@@ -338,7 +341,20 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
                   placeholder="留空则使用主力模型"
                 />
               )}
-              <small className="hint">用于 Agent 模式的 ReAct 循环。需支持 Function Calling。</small>
+              <small className="hint">
+                用于 Agent 模式的 ReAct 循环，需支持 Function Calling。
+                <br />
+                <strong>带图轮会把原题图片直接交给 Agent 模型</strong>（构造时回看原图核对几何关系），
+                因此建议选<strong>支持图片输入</strong>的模型。
+                {resolvedAgentModel && !modelSupportsVision(providerId, resolvedAgentModel, baseURL) && (
+                  <>
+                    <br />
+                    <span style={{ color: "#d97706" }}>
+                      ⚠ 当前「{resolvedAgentModel}」不在已知的多模态清单内：带图轮中图片会被忽略，退化为纯文字构造。
+                    </span>
+                  </>
+                )}
+              </small>
             </label>
             <label>
               <span>视觉模型 (题目识别)</span>
@@ -381,26 +397,30 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
                   placeholder="留空则使用主力模型"
                 />
               )}
-              <small className="hint">用于题目图片识别，需支持图片输入。DeepSeek 的 deepseek-flash（V4.1）原生多模态，视觉角色可直接跟随主力；留空时主力须为多模态模型。</small>
+              <small className="hint">用于题目图片识别，需支持图片输入。DeepSeek 的 deepseek-flash（V4.1-Flash-1017）原生多模态，视觉角色可直接跟随主力；<strong>deepseek-v4-pro 不支持图片输入</strong>，主力选它时必须单独配置视觉模型。留空时主力须为多模态模型。</small>
             </label>
             <label>
               <span>思考深度 (Thinking)</span>
               <select
                 value={reasoningEffort}
-                onChange={e => setReasoningEffort(e.target.value as "none" | "low" | "medium" | "high" | "")}
+                onChange={e => setReasoningEffort(e.target.value as "none" | "low" | "medium" | "high" | "max" | "")}
               >
-                <option value="none">关闭（思考不占输出预算）</option>
-                <option value="">跟随 provider 默认（V4.1 仍会思考）</option>
-                <option value="low">低</option>
-                <option value="medium">中</option>
-                <option value="high">高</option>
+                <option value="none">关闭（默认，思考不占输出预算）</option>
+                <option value="">不发送该参数（DeepSeek 服务端默认 = 开 + 高）</option>
+                <option value="low">低 (low)</option>
+                <option value="medium">中 (medium → 服务端等同 high)</option>
+                <option value="high">高 (high)</option>
+                <option value="max">最高 (max，预算上限 128K)</option>
               </select>
               <small className="hint">
-                V4 思考深度（reasoning_effort）。<strong>思考 token 与正文共享 max_tokens</strong>
-                （服务端统一计入 completion tokens，客户端无法剔除），实测 baseline 下一次简单构造
-                就有 <strong>90% 的输出 token 花在推理上</strong>。「关闭」= 发
-                <code>reasoning_effort: "none"</code>，实测推理归零、全部预算留给正文与工具调用
-                （GLM 走 <code>thinking.type=disabled</code>）；代价是复杂构造的质量可能下降。
+                DeepSeek 思考深度（<code>reasoning_effort</code>，官方档位：none / low / high / max）。
+                <strong>本应用默认「关闭」</strong>——A/B 实测 <code>high</code> 端到端 −8.3%，且思考开启时
+                服务端会<strong>忽略 temperature</strong>（Agent 的低温度防工具名幻觉随之失效）。
+                官方原生默认是「开启且为 high」，想用思考须在此显式选档。
+                <strong>思考 token 与正文共享 max_tokens</strong>（服务端统一计入 completion tokens，
+                客户端无法剔除），实测 baseline 下一次简单构造就有 <strong>90% 的输出 token 花在推理上</strong>。
+                「关闭」= 发 <code>reasoning_effort: "none"</code>，实测推理归零（GLM 走
+                <code>thinking.type=disabled</code>）；代价是复杂构造的质量可能下降。
               </small>
             </label>
             <label>
@@ -409,13 +429,15 @@ export function SettingsDialog({ onClose, onOpenTraining }: Props) {
                 type="number"
                 min={1024}
                 step={1024}
-                placeholder="留空 = 自动（16384 / 思考 32768）"
+                placeholder="留空 = 自动（16384 / 思考 32768 / max 档 131072）"
                 value={maxOutputTokens}
                 onChange={e => setMaxOutputTokens(e.target.value)}
               />
               <small className="hint">
                 单次回复的最大输出 token（思维链 + 正文共享）。这是上限而非计费量，调高不额外花钱。
-                Agent 模式截断失败时会自动扩容 2 倍并降一档思考重试一次。
+                DeepSeek 官方允许 1 ~ 384K，未设置时服务端默认非思考 8K / 思考 64K / <code>max</code> 档 128K。
+                留空时本应用按 非思考 16384 / 思考 32768 / <code>max</code> 档 131072 下发；
+                Agent 模式截断失败时会自动扩容 2 倍并降一档思考重试一次（本就关闭思考时只扩容）。
               </small>
             </label>
             <label>

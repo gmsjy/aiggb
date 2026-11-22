@@ -31,7 +31,8 @@ import {
   unregisterConfirmationHandler,
   type AgentLoopDeps,
 } from "../src/lib/agentLoop";
-import type { AgentChatOverrides, AgentMessage, AgentResponse, ToolCallDelta } from "../src/lib/aiClient";
+import type { AgentChatOverrides, AgentMessage, AgentResponse, ContentPart, ToolCallDelta } from "../src/lib/aiClient";
+import { contentToText } from "../src/lib/aiClient";
 import type { TrajectoryRecord } from "../src/lib/trajectoryStore";
 import { MockGGB } from "./mockGGB";
 import type { GGBAppletApi } from "../src/types/ggb";
@@ -94,10 +95,55 @@ function makeHarness(scripts: AgentResponse[]) {
   };
 }
 
-/** 从 messages 中提取某 role 的所有 content 文本 */
+/** 从 messages 中提取某 role 的所有 content 文本（多模态 content 归一为文本） */
 function contents(msgs: AgentMessage[], role: "user" | "assistant" | "tool"): string[] {
-  return msgs.filter(m => m.role === role && m.content).map(m => m.content as string);
+  return msgs.filter(m => m.role === role).map(m => contentToText(m.content)).filter(Boolean);
 }
+
+// ═══════════════════════════════════════════════════
+// 多模态：原题图片透传到 Agent 循环
+// ═══════════════════════════════════════════════════
+
+test("带图轮：首条 user 消息携带原题图片（多模态 content）", async () => {
+  const h = makeHarness([textResp("已按原图构造")]);
+  h.deps.images = ["data:image/jpeg;base64,AAAA", "data:image/jpeg;base64,BBBB"];
+  await runAgentLoop("画这道题", h.deps);
+
+  const firstUser = h.chatLog[0].find(m => m.role === "user")!;
+  assert.ok(Array.isArray(firstUser.content), "带图轮的首条 user content 应为多模态数组");
+  const parts = firstUser.content as ContentPart[];
+  assert.equal(parts.filter(p => p.type === "image_url").length, 2, "两张原图都应带上");
+  const text = parts.filter(p => p.type === "text").map(p => (p as { text: string }).text).join("\n");
+  assert.ok(text.includes("画这道题"), "原始指令文本保留");
+  assert.ok(text.includes("[图1]") && text.includes("[图2]"), "多图应有 [图N] 标注");
+});
+
+test("纯文字轮：content 保持字符串（不凭空引入多模态结构）", async () => {
+  const h = makeHarness([textResp("ok")]);
+  await runAgentLoop("画个圆", h.deps);
+  const firstUser = h.chatLog[0].find(m => m.role === "user")!;
+  assert.equal(typeof firstUser.content, "string", "无图片时 content 仍为字符串");
+});
+
+test("带图轮：图片为空数组时退化为纯文本", async () => {
+  const h = makeHarness([textResp("ok")]);
+  h.deps.images = [];
+  await runAgentLoop("画个圆", h.deps);
+  const firstUser = h.chatLog[0].find(m => m.role === "user")!;
+  assert.equal(typeof firstUser.content, "string");
+});
+
+test("contentToText：多模态归一为文本，图片为占位符", () => {
+  assert.equal(contentToText(null), "");
+  assert.equal(contentToText("abc"), "abc");
+  const text = contentToText([
+    { type: "text", text: "题干" },
+    { type: "image_url", image_url: { url: "data:x" } },
+  ]);
+  assert.ok(text.includes("题干"));
+  assert.ok(text.includes("[图片]"), "图片不应被当作文本拼接");
+  assert.ok(!text.includes("data:x"), "不得把 base64 混入文本");
+});
 
 test.afterEach(() => unregisterConfirmationHandler());
 
@@ -156,7 +202,7 @@ test("finish_reason=length 的空响应 → 提示截断而非空响应", async 
   assert.equal(r.finalText, "ok");
 });
 
-test("截断重试 → 自动扩容预算 + 降思考档；成功后恢复默认参数", async () => {
+test("截断重试 → 自动扩容预算；默认关闭思考时档位保持 none；成功后恢复默认参数", async () => {
   const h = makeHarness([
     emptyResp("length"),
     toolResp(toolCall("create_points", { points: [{ name: "A", x: 0, y: 0 }] })),
@@ -167,8 +213,8 @@ test("截断重试 → 自动扩容预算 + 降思考档；成功后恢复默认
   assert.equal(h.overrides[0], undefined, "首次调用不覆盖参数");
   assert.deepEqual(
     h.overrides[1],
-    { maxTokensScale: 2, reasoningEffort: "low" },
-    "截断重试必须扩容预算并降思考档（否则同样参数必然再次截断）"
+    { maxTokensScale: 2, reasoningEffort: "none" },
+    "截断重试必须扩容预算（默认未开思考 → 档位保持 none，不反向开启）"
   );
   assert.equal(h.overrides[2], undefined, "重试成功后应恢复默认参数");
   assert.equal(r.failed, false);
@@ -182,6 +228,33 @@ test("普通空响应重试 → 不改动输出预算 / 思考档", async () => 
   assert.equal(h.overrides[0], undefined);
 });
 
+test("截断重试：用户本已关闭思考时不得反向开启（保持 none，只扩容）", async () => {
+  const h = makeHarness([emptyResp("length"), textResp("ok")]);
+  h.deps.config = { ...h.deps.config, reasoningEffort: "none" };
+  const r = await runAgentLoop("复杂构造", h.deps);
+  assert.deepEqual(
+    h.overrides[1],
+    { maxTokensScale: 2, reasoningEffort: "none" },
+    "关闭思考时重试必须保持关闭，否则会把思考打开、挤占本就紧张的预算"
+  );
+  assert.equal(r.failed, false);
+});
+
+test("截断重试：max 档降为 low（跨档降级收益最大）", async () => {
+  const h = makeHarness([emptyResp("length"), textResp("ok")]);
+  h.deps.config = { ...h.deps.config, reasoningEffort: "max" };
+  await runAgentLoop("复杂构造", h.deps);
+  assert.deepEqual(h.overrides[1], { maxTokensScale: 2, reasoningEffort: "low" });
+});
+
+test("截断重试：连降两次不升级档位（第二次仍为 low，不回到高档）", async () => {
+  const h = makeHarness([emptyResp("length"), emptyResp("length"), textResp("ok")]);
+  h.deps.config = { ...h.deps.config, reasoningEffort: "high" };
+  await runAgentLoop("复杂构造", h.deps);
+  assert.deepEqual(h.overrides[1], { maxTokensScale: 2, reasoningEffort: "low" });
+  assert.deepEqual(h.overrides[2], { maxTokensScale: 2, reasoningEffort: "low" }, "已降到 low 后再次截断仍保持 low");
+});
+
 test("截断重试预算 2 次：两次截断都重试，第三次仍截断 → failed", async () => {
   const h = makeHarness([emptyResp("length"), emptyResp("length"), emptyResp("length")]);
   const r = await runAgentLoop("复杂构造", h.deps);
@@ -189,9 +262,9 @@ test("截断重试预算 2 次：两次截断都重试，第三次仍截断 → 
   assert.equal(r.failed, true);
   assert.match(r.finalText, /AI 未返回有效响应/);
   assert.match(r.finalText, /预算已被思考吃光/);
-  // 后两次重试都带扩容 + 降档覆盖
-  assert.deepEqual(h.overrides[1], { maxTokensScale: 2, reasoningEffort: "low" });
-  assert.deepEqual(h.overrides[2], { maxTokensScale: 2, reasoningEffort: "low" });
+  // 后两次重试都带扩容；默认（未设置思考）下保持关闭，故档位为 none
+  assert.deepEqual(h.overrides[1], { maxTokensScale: 2, reasoningEffort: "none" });
+  assert.deepEqual(h.overrides[2], { maxTokensScale: 2, reasoningEffort: "none" });
 });
 
 test("第二次截断仍有重试机会（截断预算不因首次用掉而耗尽）", async () => {
@@ -214,7 +287,7 @@ test("截断与普通空响应的重试预算互不挤占", async () => {
   assert.equal(h.calls, 3, "普通空响应应有自己的一次重试");
   assert.equal(r.failed, false);
   assert.equal(r.finalText, "ok");
-  assert.deepEqual(h.overrides[1], { maxTokensScale: 2, reasoningEffort: "low" }, "第 2 次调用是截断重试，带扩容");
+  assert.deepEqual(h.overrides[1], { maxTokensScale: 2, reasoningEffort: "none" }, "第 2 次调用是截断重试，带扩容");
   assert.equal(h.overrides[2], undefined, "第 3 次调用是普通空响应重试，不扩容");
 });
 
@@ -319,6 +392,66 @@ test("危险工具 approve_all → 信任激活，后续跳过确认", async () 
   assert.equal(confirmCalls, 1, "信任后第二轮不再请求确认");
   assert.equal(r.deniedTools.length, 0);
   assert.ok(h.mock.exists("A"));
+});
+
+// ═══════════════════════════════════════════════════
+// 7b. 确认回调的边界条件（P0-A 重构前的行为基线）
+//     这三条锁定「决策缺失 / 部分拒绝 / approve_all 与 deny 共存」的语义，
+//     重构为 ToolDecision 类型后必须保持一致。
+// ═══════════════════════════════════════════════════
+
+test("确认回调返回空数组 → 视为未收到决策，工具不执行且记入 deniedTools", async () => {
+  const h = makeHarness([
+    toolResp(toolCall("eval_raw", { command: "ZoomIn(2)" }, "tc-e1")),
+    textResp("结束"),
+  ]);
+  // 回调返回空：模拟 UI 异常/组件卸载后决策丢失
+  registerConfirmationHandler(async () => []);
+  const r = await runAgentLoop("缩放", h.deps);
+
+  assert.deepEqual(r.deniedTools, ["eval_raw"], "无决策也应记入 deniedTools");
+  // 结果里的 error 文案应区分「未收到决策」而非「用户拒绝」
+  const toolMsg = r.messages.find(m => m.role === "tool" && m.tool_call_id === "tc-e1");
+  assert.ok(toolMsg, "应回喂 tool 结果");
+  assert.match(contentToText(toolMsg!.content), /未收到确认决策/, "空决策应与用户明确拒绝区分");
+});
+
+test("部分拒绝：同一批两个危险工具，只批一个 → 另一个仍执行", async () => {
+  const h = makeHarness([
+    toolResp(
+      toolCall("eval_raw", { command: 'SetCaption(A, "点A")' }, "tc-p1"),
+      toolCall("eval_raw", { command: "ZoomIn(2)" }, "tc-p2"),
+    ),
+    textResp("完成"),
+  ]);
+  // 只批准第一个，明确拒绝第二个
+  registerConfirmationHandler(async () => [
+    { action: "approve", toolCallId: "tc-p1" },
+    { action: "deny", toolCallId: "tc-p2" },
+  ]);
+  const r = await runAgentLoop("构造", h.deps);
+
+  assert.deepEqual(r.deniedTools, ["eval_raw"], "只有被拒的那个记入 deniedTools");
+  const denied = r.messages.find(m => m.role === "tool" && m.tool_call_id === "tc-p2");
+  assert.match(contentToText(denied!.content), /拒绝/, "被拒工具回喂用户拒绝文案");
+});
+
+test("approve_all 与 deny 共存：显式 deny 的工具仍被拒绝，其余放行", async () => {
+  const h = makeHarness([
+    toolResp(
+      toolCall("eval_raw", { command: 'SetCaption(A, "点A")' }, "tc-x1"),
+      toolCall("eval_raw", { command: "ZoomIn(2)" }, "tc-x2"),
+    ),
+    textResp("完成"),
+  ]);
+  registerConfirmationHandler(async () => [
+    { action: "approve_all" },
+    { action: "deny", toolCallId: "tc-x2" },
+  ]);
+  const r = await runAgentLoop("构造", h.deps);
+
+  // 显式 deny 优先于 approve_all（见 handleDangerousTools 的决策优先级）
+  assert.deepEqual(r.deniedTools, ["eval_raw"], "显式 deny 不应被 approve_all 覆盖");
 });
 
 // ═══════════════════════════════════════════════════

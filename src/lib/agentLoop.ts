@@ -14,11 +14,13 @@
 import {
   agentChat as defaultAgentChat,
   AIError,
+  contentToText,
   getProviderQuirks,
   type AIConfig,
   type AgentChatOverrides,
   type AgentMessage,
   type AgentResponse,
+  type ContentPart,
   type ToolCallDelta
 } from "./aiClient";
 import { TOOL_DEFINITIONS, getToolSafety, isKnownTool, TOOL_SCHEMAS, buildToolCategoryOverview } from "./tools";
@@ -61,8 +63,22 @@ const TRUNCATION_RETRY_BUDGET_SCALE = 2;
 
 /** 截断重试时降到的思考档位（腾出正文/工具调用空间）。
  *  ★ GLM 注意：thinking.type 是二元开关，"low" 经 buildThinkingParam 仍落为 enabled——
- *    GLM 侧只有扩容生效；GLM-5.2+ 支持 reasoning_effort 后降档才真正起作用。 */
+ *    GLM 侧只有扩容生效；GLM-5.2+ 支持 reasoning_effort 后降档才真正起作用。
+ *  ★ 若用户本就关闭思考（含 DeepSeek「未设置 = 关闭」的默认），重试必须保持关闭：
+ *    否则这次重试反而把思考打开，让本就不够用的预算雪上加霜。见 resolveTruncationRetryEffort。 */
 const TRUNCATION_RETRY_REASONING = "low" as const;
+
+/**
+ * 解析截断重试应使用的思考档位。
+ * 关闭中 → 保持关闭（"none"），只靠扩容腾空间；已开启 → 降一档到 "low"。
+ * max → low（跨档降级，收益最大）。
+ */
+export function resolveTruncationRetryEffort(
+  current: "none" | "low" | "medium" | "high" | "max" | undefined
+): "none" | "low" {
+  if (!current || current === "none") return "none";
+  return TRUNCATION_RETRY_REASONING;
+}
 
 /** 截断类空响应的最大重试次数。长任务中截断易复发（预算随历史膨胀更易吃满），
  *  全 loop 只给一次机会会让第二次截断直接失败回滚；非截断空响应仍限 1 次 */
@@ -111,6 +127,14 @@ export interface AgentLoopDeps {
   getApi(): GGBAppletApi | null;
   /** 获取历史消息（多轮对话上下文） */
   getMessages(): ChatTurn[];
+  /**
+   * 原题图片（data URL 数组，来自带图轮的附件）。
+   * ★ 关键：图片一路传到 Agent 循环内部，附在首条 user 消息上。
+   *   若不传，视觉识别转写后像素信息即丢失，Agent 只能凭二手文字描述构造图形，
+   *   几何关系（平行/垂直/相切/中点）容易走样。Agent 模型本身需支持图片输入
+   *   （DeepSeek `deepseek-flash` 原生多模态；不支持的模型会忽略 image_url）。
+   */
+  images?: string[];
   /** 流式展示 AI 的中间思考（可选） */
   onThinking?(message: string): void;
   /** 每次 AI 调用的 token 用量回传（累计到 UI 统计）。reasoning = 其中的思考 token；
@@ -307,10 +331,25 @@ export async function runAgentLoop(
     : null;
   const resumed = resumedMsgs !== null;
 
+  // ★ 首条 user 消息：带图轮把原题图片一并交给 Agent（多模态 content）。
+  //   图片放在文本之后（OpenAI 兼容格式惯例），每张前置 [图N] 标注便于对号入座。
+  //   注意 DeepSeek 限制：图片只能出现在 user 消息。
+  const firstUserText = (resumed ? "[续作] " : "") + userPrefix + userText + canvasStatus;
+  const images = (deps.images ?? []).filter(url => !!url && url.length > 0);
+  const firstUserContent: AgentMessage["content"] = images.length === 0
+    ? firstUserText
+    : [
+        { type: "text", text: firstUserText },
+        ...images.flatMap((url, i): ContentPart[] => [
+          { type: "text", text: `[图${i + 1}] 原题图片（构造时可回看核对几何关系）` },
+          { type: "image_url", image_url: { url } },
+        ]),
+      ];
+
   let messages: AgentMessage[] = [
     { role: "system", content: systemPrompt },
     ...(resumedMsgs ?? historyMsgs),
-    { role: "user", content: (resumed ? "[续作] " : "") + userPrefix + userText + canvasStatus }
+    { role: "user", content: firstUserContent }
   ];
 
   // ★ 当前用户请求的下标（压缩时必须保留）。多轮对话时不是 messages[1]——那里是历史消息，
@@ -446,7 +485,7 @@ export async function runAgentLoop(
       const reasoningTokens = response.usage?.reasoning;
       console.warn(
         `[agentLoop] ${getTraceId()} 第${iterations}轮空响应: finishReason=${response.finishReason || "无"}, ` +
-        `contentLen=${response.content?.length ?? 0}, reasoningChars=${reasoningChars}, ` +
+        `contentLen=${contentToText(response.content).length}, reasoningChars=${reasoningChars}, ` +
         `completionTokens=${completionTokens ?? "?"}（推理 ${reasoningTokens ?? "?"}）, msgCount=${messages.length}`
       );
 
@@ -461,13 +500,21 @@ export async function runAgentLoop(
         // ★ finish_reason="length" 是明确的截断信号，即使 streamsFinishReason=false 也应信任
         //   （该 flag 仅表示 provider 可能省略 finish_reason，不代表返回的值不可信）
         const truncated = isTruncation;
-        // ★ 截断的根因是输出预算被 thinking 吃光：重试必须改变条件（扩容 + 降思考档），
+        // ★ 当前生效的思考档位：本轮若已有覆盖（前一次截断重试降过档）以覆盖为准，
+        //   否则取用户配置。DeepSeek 侧「未设置」等价关闭，故用 ?? "none" 归一，
+        //   避免把「关闭中」误判成「开启中」而反向打开思考。
+        const effectiveEffort = (retryOverrides?.reasoningEffort ?? deps.config.reasoningEffort) ?? "none";
+        // ★ 截断的根因常常是输出预算被 thinking 吃光：重试必须改变条件（扩容 + 降思考档），
         //   否则同样的参数只会得到同样的截断（这是「空响应重试」此前失效的原因）
         retryOverrides = truncated
-          ? { maxTokensScale: TRUNCATION_RETRY_BUDGET_SCALE, reasoningEffort: TRUNCATION_RETRY_REASONING }
+          ? {
+              maxTokensScale: TRUNCATION_RETRY_BUDGET_SCALE,
+              reasoningEffort: resolveTruncationRetryEffort(effectiveEffort),
+            }
           : undefined;
         const reasonHint = truncated
-          ? "[系统] 你的上一条回复因长度限制被截断（推理占满了输出预算）。本次已提高输出预算并降低思考深度：请直接调用下一步工具，或用 1-2 句话简短总结，不要长篇推理。"
+          ? `[系统] 你的上一条回复因长度限制被截断${effectiveEffort && effectiveEffort !== "none" ? "（推理占满了输出预算）" : ""}。` +
+            `本次已提高输出预算${effectiveEffort && effectiveEffort !== "none" ? "并降低思考深度" : ""}：请直接调用下一步工具，或用 1-2 句话简短总结，不要长篇推理。`
           : "[系统] 请继续：调用下一步工具完成构造，或输出文本总结当前画布状态。不要返回空响应。";
         messages.push({ role: "user", content: reasonHint });
         continue;
@@ -592,20 +639,23 @@ export async function runAgentLoop(
     }
 
     // ★ 连续失败熔断：本轮所有实际执行全部失败（用户拒绝不计）→ 计数 +1，否则清零
-    //    改造二：区分「参数问题」（Zod 校验失败 / Pre-flight 预检失败）与「执行失败」。
-    //    参数问题是模型下一轮大概率修正的（如负半径、min>=max、引用不存在对象），
-    //    不计入熔断——否则参数写错 3 次就熔断，浪费了模型自我修正的机会。
-    const PARAM_ERROR_RE = /^参数校验失败：/;
-    const PREFLIGHT_ERROR_RE = /^执行前检查失败：/;
+    //    ★ 用结构化 `kind` 判定「参数问题」而非错误文案前缀。
+    //    旧实现靠 /^参数校验失败：/ 正则匹配文案——一旦有人改写文案，熔断判定就会
+    //    静默失效且无测试报错。现在控制流只看 kind，文案可自由改写。
     const allResults = [...safeResults, ...dangerousResults];
     const executed = allResults.map(r => {
       try {
-        const p = JSON.parse(r.content) as { success?: boolean; error?: string };
+        const p = JSON.parse(r.content) as {
+          success?: boolean;
+          error?: string;
+          kind?: import("./toolExecutor").ToolFailureKind;
+        };
         const error = p.error ?? "";
         return {
-          denied: error === USER_DENIED_MSG,
-          // 可修正：模型参数写错，下一轮大概率自行修正
-          recoverable: PARAM_ERROR_RE.test(error) || PREFLIGHT_ERROR_RE.test(error),
+          // ★ 优先读 kind；文案全等仅作兼容兜底（旧轨迹/外部注入的 tool 结果可能无 kind）
+          denied: p.kind === "denied" || error === USER_DENIED_MSG,
+          // 可修正：模型参数写错/预检不过，下一轮大概率自行修正 → 不计入熔断
+          recoverable: p.kind === "args" || p.kind === "preflight" || p.kind === "safety",
           failed: p.success === false,
         };
       } catch {
@@ -809,28 +859,41 @@ async function handleDangerousTools(
   //   执行阶段合并为一次重绘，避免代数区逐行重建闪烁
   withRepaintBatch(api, requests.length, appMode, () => {
     for (const req of requests) {
-      if (newApproveAll) {
-        results.push(executeToolCallFn(api, req));
+      const decision = decisionMap.get(req.id);
+
+      // ★ 两阶段判定：先定"本请求的最终决策"，再执行。
+      //   修 bug：旧实现把 `if (newApproveAll)` 放在循环顶部无条件放行，而
+      //   approve_all 会在处理首个请求时立刻把 newApproveAll 置 true —— 导致
+      //   同一批里后续请求的**显式 deny 被跳过**（用户点了拒绝却仍被执行）。
+      //   现改为：显式 deny 永远优先；只有"无显式决策"时才受 approve_all / 会话信任影响。
+      const explicitDeny = decision?.action === "deny";
+      const trustActive = newApproveAll || approveAllRequested;
+
+      if (explicitDeny) {
+        deniedTools.push(req.name);
+        results.push({
+          tool_call_id: req.id,
+          role: "tool",
+          // ★ 带结构化 kind：下游用 kind 判"用户拒绝"，不再靠文案全等比对
+          content: JSON.stringify({ success: false, error: USER_DENIED_MSG, kind: "denied" }),
+        });
         continue;
       }
 
-      const decision = decisionMap.get(req.id);
-      // 「信任此会话」：当前及后续请求全部放行（首个无显式决策的请求触发信任）
-      if (approveAllRequested && (!decision || decision.action !== "deny")) {
+      // 「信任此会话」：无显式拒绝时放行（approve_all 或已有信任）
+      if (trustActive) {
         newApproveAll = true;
         results.push(executeToolCallFn(api, req));
         continue;
       }
 
-      if (!decision || decision.action === "deny") {
+      if (!decision) {
+        // 回调返回了决策列表但缺这一条 → 与"用户主动拒绝"区分开（kind 不同）
         deniedTools.push(req.name);
         results.push({
           tool_call_id: req.id,
           role: "tool",
-          content: JSON.stringify({
-            success: false,
-            error: decision ? USER_DENIED_MSG : "未收到确认决策"
-          })
+          content: JSON.stringify({ success: false, error: "未收到确认决策", kind: "denied" }),
         });
         continue;
       }
@@ -987,7 +1050,7 @@ export function compressHistory(
 
   // 保留：system(0)、当前用户请求（currentUserIndex）、摘要、最近 N 条
   const system = messages[0];
-  const userRequest = messages[currentUserIndex] ?? messages[1]; // 含 userPrefix + userText + canvasStatus
+  const userRequest = messages[currentUserIndex] ?? messages[1]; // 含 userPrefix + userText + canvasStatus（可能含原题图片）
   const recentStart = Math.max(currentUserIndex + 1, messages.length - params.keepRecent);
   const recent = messages.slice(recentStart);
 

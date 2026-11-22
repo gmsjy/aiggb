@@ -27,9 +27,13 @@ export interface AIConfig {
   /** @deprecated 使用 lightModel 代替；迁移后保留用于向前兼容 */
   flashModel?: string;
   temperature?: number;
-  /** 思考深度。"none" = 显式关闭思考（实测 deepseek-flash 支持，推理字段归零）；
-   *  low/medium/high = DeepSeek reasoning_effort 档位；留空 = 不发该参数（provider 默认） */
-  reasoningEffort?: "none" | "low" | "medium" | "high";
+  /**
+   * 思考深度。"none" = 显式关闭思考（实测 deepseek-flash 推理字段归零）；
+   * low/medium/high/max = DeepSeek reasoning_effort 档位（官方可选 none/low/high/max，
+   * medium 由服务端映射为 high）；留空 = 不发该参数（provider 默认）。
+   * ★ 2026-10 官方：thinking 默认开启、默认档位 high；思考模式下 temperature 被忽略。
+   */
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "max";
   /**
    * 单次输出预算（max_tokens / max_completion_tokens）。留空 = 按是否 thinking 取默认
    * （DEFAULT_OUTPUT_TOKENS / THINKING_OUTPUT_TOKENS）。
@@ -51,19 +55,35 @@ export interface AIConfig {
 export const DEFAULT_OUTPUT_TOKENS = 16384;
 /** thinking 模式下的默认输出预算（reasoning 增量大，需额外空间） */
 export const THINKING_OUTPUT_TOKENS = 32768;
-/** 自动扩容上限（防止向 provider 申请超大 max_tokens 被拒） */
-export const MAX_OUTPUT_TOKENS = 65536;
+/**
+ * `reasoning_effort="max"` 档的默认输出预算。
+ * ★ 官方：max_tokens 上限 384K；未设置时服务端默认非思考 8K / 思考 64K / **max 档 128K**。
+ *   max 档的推理最长，若沿用小预算会被思考吃光正文（正是「截断」故障的成因），
+ *   因此按官方 max 档默认值 128K 下发。
+ */
+export const MAX_EFFORT_OUTPUT_TOKENS = 131072;
+/** 自动扩容上限（防止向 provider 申请超大 max_tokens 被拒）。
+ *  ★ DeepSeek 现行上限：max_tokens ∈ [1, 384K]，本值只作客户端自保上限。
+ *    取 131072（= max 档服务端默认），既容纳 max 档又不逼近 384K 的硬边界。 */
+export const MAX_OUTPUT_TOKENS = MAX_EFFORT_OUTPUT_TOKENS;
 
 /**
- * 解析本次调用的输出预算。优先级：config.maxOutputTokens（用户配置）> thinking 默认 > 普通默认。
+ * 解析本次调用的输出预算。
+ * 优先级：config.maxOutputTokens（用户配置）> 档位默认（max 档 128K / 其他 thinking 32K）> 普通 16K。
  * 注意 max_tokens 是【上限】而非计费量——调高不额外花钱，只在实际生成时才计费。
  */
-export function resolveMaxOutputTokens(config: AIConfig, thinking: boolean): number {
+export function resolveMaxOutputTokens(
+  config: AIConfig,
+  thinking: boolean,
+  effort?: string | null
+): number {
   const configured = config.maxOutputTokens && config.maxOutputTokens > 0
     ? Math.floor(config.maxOutputTokens)
     : 0;
   if (configured) return configured;
-  return thinking ? THINKING_OUTPUT_TOKENS : DEFAULT_OUTPUT_TOKENS;
+  if (!thinking) return DEFAULT_OUTPUT_TOKENS;
+  // max 档推理最长：沿用 32K 会被思考吃光正文，按官方 max 档默认 128K 给
+  return effort === "max" ? MAX_EFFORT_OUTPUT_TOKENS : THINKING_OUTPUT_TOKENS;
 }
 
 /** agentChat 单次调用的参数覆盖（截断重试自动扩容 / 降思考档位用） */
@@ -73,7 +93,7 @@ export interface AgentChatOverrides {
   /** 在解析出的预算上乘以倍数（截断重试扩容用）；不会低于原预算，也不超过 MAX_OUTPUT_TOKENS */
   maxTokensScale?: number;
   /** 覆盖思考档位；null = 显式关闭思考（GLM 落为 thinking.disabled；缺省沿用 config） */
-  reasoningEffort?: "none" | "low" | "medium" | "high" | null;
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "max" | null;
 }
 
 /** 解析实际使用的模型（含回退链） */
@@ -106,12 +126,15 @@ export interface ProviderQuirks {
   // ── V4+ 扩展 ──
   /** 是否支持原生 thinking 模式（DeepSeek V4 = true，内嵌非独立 reasoner） */
   supportsThinking?: boolean;
-  /** thinking 深度（V4 通过 reasoning_effort 控制） */
-  reasoningEffort?: "low" | "medium" | "high";
+  /** thinking 默认档位（V4 通过 reasoning_effort 控制；官方默认 high） */
+  reasoningEffort?: "low" | "medium" | "high" | "max";
   /** 多轮对话中是否必须把 reasoning_content 原样回传 API（V4 = true，否则 400） */
   mustRoundtripReasoning?: boolean;
   /** 上下文窗口 token 数（V4 = 1M，用于压缩策略调参） */
   contextWindow?: number;
+  /** thinking 开启时 temperature 是否被服务端忽略（DeepSeek V4 = true；
+   *  UI/文档据此说明「低温度防幻觉」在思考模式下不生效） */
+  thinkingIgnoresTemperature?: boolean;
 }
 
 /**
@@ -125,7 +148,9 @@ export function getProviderQuirks(config: AIConfig): ProviderQuirks {
     (config.agentModel ?? "").toLowerCase(),
   ].join(" ");
 
-  // DeepSeek V4 全系：thinking 内嵌 + reasoning_content 需回传（拒绝 tool_choice=required，故不使用 tool_choice 功能）
+  // DeepSeek V4 全系：thinking 内嵌 + reasoning_content 需回传
+  // （官方：带 tools 的请求必须完整回传 reasoning_content，否则 400；
+  //  thinking 模式下 tool_choice=required / 指定工具会 400，故项目不使用 tool_choice）
   if (/deepseek/.test(fingerprint)) {
     return {
       agentTemperature: 0.05,
@@ -133,9 +158,10 @@ export function getProviderQuirks(config: AIConfig): ProviderQuirks {
       maxToolsPerTurn: 4,      // DeepSeek 单轮 >4 个 tool 时后半易丢失
       streamsFinishReason: false,
       supportsThinking: true,          // V4 原生 thinking
-      reasoningEffort: "medium",
+      reasoningEffort: "high",         // 官方默认档位
       mustRoundtripReasoning: true,    // ★ 多轮必须回传 reasoning_content
       contextWindow: 1_000_000,        // V4 百万上下文
+      thinkingIgnoresTemperature: true, // 官方：thinking 模式不支持 temperature
     };
   }
 
@@ -164,26 +190,47 @@ export function isZhipuProvider(config: AIConfig): boolean {
   return /zhipu|bigmodel|glm/.test(fp);
 }
 
+/** 检测是否为 DeepSeek 官方端点（provider / baseURL / 模型名任一命中） */
+export function isDeepSeek(config: AIConfig): boolean {
+  // ★ 只看 provider / baseURL / 主力与 Agent 模型名：视觉/轻量模型可能填的是别家名字
+  const fp = [
+    (config.provider ?? "").toLowerCase(),
+    (config.baseURL ?? "").toLowerCase(),
+    (config.model ?? "").toLowerCase(),
+    (config.agentModel ?? "").toLowerCase(),
+  ].join(" ");
+  return /deepseek/.test(fp);
+}
+
 /**
  * 按 provider 构造 thinking 控制参数（chat / chatRaw / agentChat 共用）。
  *
  * - 智谱 GLM：`thinking: { type }`。GLM 4.5+ 默认开启思考，未设置或 "none" 时必须显式
  *   disabled 对齐「关闭 = baseline」语义（实测：默认思考会吃光输出预算）；
  *   设置 low/medium/high → enabled（GLM 无档位，二元开关）。
- * - DeepSeek V4：`reasoning_effort`。实测 deepseek-flash：
- *     · 不发该参数 → 仍会思考（baseline 也有 reasoning_content，可占 90% 输出 token）
- *     · "none"      → 推理归零（唯一真正关闭思考的方式）
- *     · low/medium/high → 有档位思考
- * - 其他 provider：null（不发任何参数）。
+ * - DeepSeek V4（官方 2026-10 文档）：thinking 默认【开启】，默认档位 high。两种控制方式：
+ *     · `thinking: { type: "enabled" | "disabled" }` —— 二元开关
+ *     · `reasoning_effort: "none" | "low" | "high" | "max"` —— 档位（medium→high、minimal→low）
+ *   本项目统一用 `reasoning_effort`（v1.8 起实测 "none" 推理归零，路径已验证）：
+ *     显式关闭 → "none"；档位 → 原样下发，其中 medium 显式归一为 "high"
+ *     （服务端本就把 medium 映射成 high，显式归一避免「中档」的语义误解）。
+ *   ★ 未设置 = 显式关闭（`reasoning_effort: "none"`），不再「跟随 provider 默认」：
+ *     官方默认是「开 + high」，而 A/B 实测 high 端到端 −8.3%，且思考开着时 temperature
+ *     被忽略（Agent 的 0.05 低温度防幻觉失效）——默认关闭才是本项目想要的行为。
+ *     要开启思考必须在设置面板显式选择档位，语义由「opt-in」而非「opt-out」。
+ * - 其他 provider：null（不发任何参数，保持各家的既有默认）。
  */
 export function buildThinkingParam(config: AIConfig): Record<string, unknown> | null {
   const effort = config.reasoningEffort;
-  const thinkingOff = !effort || effort === "none";
   if (isZhipuProvider(config)) {
-    return { thinking: { type: thinkingOff ? "disabled" : "enabled" } };
+    return { thinking: { type: effort && effort !== "none" ? "enabled" : "disabled" } };
+  }
+  if (isDeepSeek(config) && getProviderQuirks(config).supportsThinking === true) {
+    // 未设置 → 显式关闭思考（对齐 A/B 结论与 temperature 生效前提）
+    return { reasoning_effort: effort === "medium" ? "high" : (effort || "none") };
   }
   if (effort && getProviderQuirks(config).supportsThinking) {
-    return { reasoning_effort: effort };   // "none" 也被 provider 接受（实测 HTTP 200）
+    return { reasoning_effort: effort };   // 其他声明支持 thinking 的 provider
   }
   return null;
 }
@@ -202,15 +249,31 @@ export interface ChatMessage {
 /**
  * 支持 Function Calling 的扩展消息类型。
  * assistant 可携带 tool_calls；tool 角色携带 tool_call_id。
+ *
+ * ★ content 支持多模态片段（ContentPart[]）：带图轮的首条 user 消息把原题图片
+ *   一并交给 Agent，让构造过程中能"回看原图"核对几何关系——否则图片像素信息
+ *   在视觉识别转写成文字后就丢失了（见 AGENTS.md「多模态题目识别」）。
+ *   注意：DeepSeek 官方限制图片只能出现在 user 消息（system/assistant 带图 = 400）。
  */
 export interface AgentMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  content: string | ContentPart[] | null;
   tool_calls?: ToolCallDelta[];
   tool_call_id?: string;
   name?: string;
   /** V4 thinking 模式的推理过程。多轮对话中必须原样回传（mustRoundtripReasoning） */
   reasoning_content?: string;
+}
+
+/** 把 AgentMessage.content 归一为纯文本（多模态时拼接 text 片段，图片替换为占位符）。
+ *  用于上下文摘要、日志、长度判断、轨迹分析等没有图片语义的场合。 */
+export function contentToText(content: AgentMessage["content"]): string {
+  if (content === null || content === undefined) return "";
+  if (typeof content === "string") return content;
+  return content
+    .map(p => (p.type === "text" ? p.text : "[图片]"))
+    .join("\n")
+    .trim();
 }
 
 export interface ToolCallDelta {
@@ -399,8 +462,8 @@ export function getProviderCapabilities(config: AIConfig): ProviderCapabilities 
     (config.baseURL ?? "").toLowerCase(),
   ].join(" ");
   // 已知支持 json_schema 的 provider 名单
-  // ★ DeepSeek 实测：v4-flash 端点返回 400 "response_format type unavailable"（只支持 json_object）
-  //    → DeepSeek 保守降级 json_object（运行时若 json_schema 400 会自动回退，见 chat()）
+  // ★ DeepSeek 官方 response_format 仅支持 text / json_object（无 json_schema）
+  //    → DeepSeek 走保守降级 json_object（chat() 内若 json_schema 400 也会自动回退）
   if (/openai|glm|moonshot|zhipu|siliconflow|api\.together|fireworks/.test(fp)) {
     return { jsonSchema: true };
   }
@@ -599,7 +662,7 @@ export async function agentChat(
     ? overrides.reasoningEffort
     : config.reasoningEffort;
   const thinkingOn = !!reasoningEffort && reasoningEffort !== "none" && quirks.supportsThinking === true;
-  const baseBudget = resolveMaxOutputTokens(config, thinkingOn);
+  const baseBudget = resolveMaxOutputTokens(config, thinkingOn, reasoningEffort);
   const scaledBudget = Math.round(baseBudget * (overrides?.maxTokensScale ?? 1));
   const maxTokens = overrides?.maxTokens
     ?? Math.max(baseBudget, Math.min(scaledBudget, MAX_OUTPUT_TOKENS));
@@ -607,7 +670,9 @@ export async function agentChat(
     model: modelOverride ?? config.model,
     messages,
     tools,
-    // ★ DeepSeek 对温度敏感，低 temp 减少 tool name 拼写幻觉，同时不抑制多样性
+    // ★ DeepSeek 对温度敏感，低 temp 减少 tool name 拼写幻觉，同时不抑制多样性。
+    //   注意（官方 2026-10）：thinking 模式下 temperature 被服务端忽略（不报错但无效），
+    //   即「关闭思考」是低温度防幻觉真正生效的前提。
     temperature: quirks.agentTemperature ?? config.temperature ?? 0.2,
     stream: true,
     // ★ 流式也要 token 统计（usage 在最后一块返回）

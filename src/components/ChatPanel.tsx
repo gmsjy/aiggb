@@ -9,11 +9,11 @@
  * Promise 在整个流程（含确认等待 / 降级 / 重试 / 取消）结束前不 resolve。
  */
 import { useEffect, useRef, useState } from "react";
-import { Send, Loader2, X, Paperclip } from "lucide-react";
+import { Send, Loader2, X, Paperclip, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
 import { useAppStore, newMessageId } from "../store/useAppStore";
 import { AISchemaError } from "../lib/aiClient";
 import { resolveModel } from "../lib/aiClient";
-import { runPipeline, runAgentPipeline, runVisionPipeline, type PipelineDeps, type ReviewHandle, type ProblemHandle } from "../lib/pipeline";
+import { runAgentPipeline, runVisionPipeline, type PipelineDeps, type ProblemHandle } from "../lib/pipeline";
 import { abortCurrentRun, beginRun, endRun, wasAborted, onRunCancelled } from "../lib/runControl";
 import type { ConfirmationRequest, ConfirmationDecision } from "../lib/agentLoop";
 import type { ProblemAnalysis } from "../lib/problemSchema";
@@ -29,20 +29,18 @@ export function ChatPanel() {
   const runningRef = useRef<boolean>(false);
   // ★ 始终指向最新的 send（避免 effect 注册时的 stale closure）
   const sendRef = useRef<(text: string) => void>(() => {});
-  // ★ 当前轮的规格确认句柄：spec-review 气泡事件通过此句柄回传决定
-  const reviewHandleRef = useRef<ReviewHandle | null>(null);
   // ★ 当前轮的题目确认句柄：problem-review 气泡事件通过此句柄回传决定
   const problemHandleRef = useRef<ProblemHandle | null>(null);
 
   const config = useAppStore(s => s.config);
   const domain = useAppStore(s => s.domain);
-  const agentMode = useAppStore(s => s.agentMode);
   const messages = useAppStore(s => s.messages);
   const ggbApi = useAppStore(s => s.ggbApi);
   const setThinking = useAppStore(s => s.setThinking);
   const isThinking = useAppStore(s => s.isThinking);
   const appendMessage = useAppStore(s => s.appendMessage);
   const clearMessages = useAppStore(s => s.clearMessages);
+  const setConfig = useAppStore(s => s.setConfig);
 
   // Agent mode: confirmation dialog state
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -54,6 +52,22 @@ export function ChatPanel() {
   const [agentStep, setAgentStep] = useState("");
   const agentStepRef = useRef("");
   const lastStepFlushRef = useRef(0);
+
+  // ★ 思考过程可展开查看（借鉴 DeepSeek chat-demo 的折叠 thinking 块）
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
+
+  /** 思考开关（借鉴 DeepSeek 输入框就近的「深度思考」开关，aria-pressed 语义）：
+   *  未配置/关闭 → low；low → medium → high → max → 关闭(none) → low 循环。
+   *  直接改 config.reasoningEffort 并经 setConfig 持久化（设置面板读同一份配置）。 */
+  const toggleThinking = () => {
+    if (!config) return;
+    const order: Array<NonNullable<typeof config.reasoningEffort>> = ["low", "medium", "high", "max", "none"];
+    const cur = config.reasoningEffort;
+    const next = !cur || cur === "none" ? "low" : order[(order.indexOf(cur) + 1) % order.length];
+    setConfig({ ...config, reasoningEffort: next });
+  };
+  const thinkingOn = !!config?.reasoningEffort && config.reasoningEffort !== "none";
+  const effortLabel: Record<string, string> = { none: "关闭", low: "低", medium: "中", high: "高", max: "最高" };
 
   // 自动滚到底部
   useEffect(() => {
@@ -84,20 +98,6 @@ export function ChatPanel() {
     return () => window.removeEventListener("aiggb:send", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config?.apiKey, ggbApi]);
-
-  // 规格确认气泡事件 → 当前轮 handle（handle 每轮新建，ref 始终指向最新，无 stale 问题）
-  useEffect(() => {
-    const onConfirm = (e: Event) => {
-      reviewHandleRef.current?.confirm((e as CustomEvent<string>).detail);
-    };
-    const onRetry = () => reviewHandleRef.current?.retry();
-    window.addEventListener("aiggb:spec-confirm", onConfirm);
-    window.addEventListener("aiggb:spec-retry", onRetry);
-    return () => {
-      window.removeEventListener("aiggb:spec-confirm", onConfirm);
-      window.removeEventListener("aiggb:spec-retry", onRetry);
-    };
-  }, []);
 
   // 题目确认气泡事件 → 当前轮 handle
   useEffect(() => {
@@ -220,12 +220,6 @@ export function ChatPanel() {
         getConstructionLog: () => useAppStore.getState().constructionLog,
         appendMessage: m => useAppStore.getState().appendMessage(m),
         appendAIResponse: (r, res) => useAppStore.getState().appendAIResponse(r, res),
-        updateSpecReview: (id, spec, status) =>
-          useAppStore.setState(s => ({
-            messages: s.messages.map(m =>
-              m.role === "spec-review" && m.id === id ? { ...m, payload: { spec, status } } : m
-            )
-          })),
         removeMessage: id =>
           useAppStore.setState(s => ({ messages: s.messages.filter(m => m.id !== id) })),
         setThinking,
@@ -241,11 +235,8 @@ export function ChatPanel() {
             )
           })),
       };
-      // ★ 路由：带图 → 视觉识别管线；否则按模式开关
+      // ★ 路由：带图 → 视觉识别管线；纯文字 → Agent 模式（v2.0 起两阶段已移除）
       const sharedCallbacks = {
-        onReview: (handle: ReviewHandle) => {
-          reviewHandleRef.current = handle;
-        },
         onConfirm: async (requests: ConfirmationRequest[]) => {
           return new Promise<ConfirmationDecision[]>(resolve => {
             setConfirmDialog({ requests, resolve });
@@ -259,17 +250,15 @@ export function ChatPanel() {
 
       if (_imgs.length > 0) {
         await runVisionPipeline({ text: userText, images: _imgs }, deps, sharedCallbacks);
-      } else if (useAppStore.getState().agentMode) {
-        await runAgentPipeline(userText, deps, sharedCallbacks);
       } else {
-        await runPipeline(userText, deps, sharedCallbacks);
+        // ★ v2.0：两阶段流水线已移除，纯文字统一走 Agent 模式
+        await runAgentPipeline(userText, deps, sharedCallbacks);
       }
     } catch (err) {
       if (!wasAborted()) {
         appendMessage({ id: newMessageId(), role: "error", content: describeError(err) });
       }
     } finally {
-      reviewHandleRef.current = null;
       problemHandleRef.current = null;
       endRun();
       runningRef.current = false;
@@ -379,11 +368,24 @@ export function ChatPanel() {
         {isThinking && (
           <div className="thinking">
             <Loader2 size={14} className="spin" />
-            {agentMode
-              ? (agentStep
-                  ? <span className="thinking-text">{agentStep.length > 120 ? agentStep.slice(0, 120) + "…" : agentStep}</span>
-                  : <span>Agent 构造中…（可观察右侧脚本面板）</span>)
-              : <span>AI 思考中…</span>}
+            <div className="thinking-body">
+              {agentStep
+                ? (
+                    <>
+                      <span className={`thinking-text ${thinkingExpanded ? "expanded" : ""}`}>
+                        {thinkingExpanded ? agentStep : (agentStep.length > 120 ? agentStep.slice(0, 120) + "…" : agentStep)}
+                      </span>
+                      <button
+                        className="thinking-expand"
+                        onClick={() => setThinkingExpanded(v => !v)}
+                        title={thinkingExpanded ? "收起思考过程" : "展开完整思考过程"}
+                      >
+                        {thinkingExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                      </button>
+                    </>
+                  )
+                : <span>Agent 构造中…（可观察右侧脚本面板）</span>}
+            </div>
             <button
               className="thinking-cancel"
               onClick={() => abortCurrentRun()}
@@ -455,6 +457,19 @@ export function ChatPanel() {
           disabled={!config?.apiKey || runningRef.current}
         >
           <Paperclip size={16} />
+        </button>
+        {/* ★ 深度思考就近开关（借鉴 DeepSeek 输入框的 aria-pressed 开关）：
+            点击循环切档，长按/右键无副作用；思考开启时高亮。禁用态与输入框一致。 */}
+        <button
+          className={`think-toggle ${thinkingOn ? "on" : ""}`}
+          onClick={toggleThinking}
+          aria-pressed={thinkingOn}
+          disabled={!config?.apiKey || runningRef.current}
+          title={`深度思考：${thinkingOn ? effortLabel[config?.reasoningEffort ?? ""] ?? config?.reasoningEffort : "关闭"}（点击切换档位）`}
+        >
+          <Sparkles size={16} />
+          <span className="think-toggle-label">思考</span>
+          {thinkingOn && <span className="think-toggle-level">{effortLabel[config?.reasoningEffort ?? ""] ?? ""}</span>}
         </button>
         <div className="input-stack">
           {images.length > 0 && (

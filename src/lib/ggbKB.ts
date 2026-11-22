@@ -547,7 +547,7 @@ export const GGB_COMMAND_DEFS: GGBCommandDef[] = [
     name: "SetColor", signature: "SetColor(obj, color) | SetColor(obj, r, g, b)", paramCount: [2, 4],
     modes: ["2d", "3d"], category: "style",
     examples: ["SetColor(c, \"red\")", "SetColor(c, 0.9, 0.2, 0.2)"],
-    note: "r/g/b 是 0~1 浮点（引擎按 ×255 解析）；写 0~255 整数会被钳成白色",
+    note: "r/g/b 是 0~1 浮点（引擎按 ×255 解析）；写 0~255 整数会被钳成白色。⚠ 这是 GGB 脚本命令的值域；JS API api.setColor(name,r,g,b) 才是 0~255 整数（hexToRgb 产出），勿混",
   },
   {
     name: "SetVisibleInView", signature: "SetVisibleInView(obj, 1, true/false)", paramCount: [3, 3],

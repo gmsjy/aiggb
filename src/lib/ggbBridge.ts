@@ -734,14 +734,25 @@ function readOpacity(
  * 生成画布富文本快照：对象名 → 类型 → 定义 → 值 → 样式 → 标注 → 可见性。
  * 包含完整的样式元数据（颜色/粗细/线型/透明度/点样式），
  * 供纯文本模型做逻辑审查——不需要"看"图形，读快照即可核对。
+ *
+ * ★ 有界输出（借鉴 DSH「bounded outputs + 显式截断标记」原则）：
+ *   对象数超过 MAX_SNAPSHOT_OBJECTS 或文本超过 MAX_SNAPSHOT_CHARS 时截断，
+ *   并明确写出「另有 N 个对象未列出」——避免模型把"没列出"误判为"不存在"。
  */
+const MAX_SNAPSHOT_OBJECTS = 60;
+const MAX_SNAPSHOT_CHARS = 12000;
+
 export function getRichSnapshot(api: GGBAppletApi): string {
   const names = api.getAllObjectNames();
   console.log("[AiGGB:DIAG] getRichSnapshot —", names.length, "个对象:", names.slice(0, 10).join(","), names.length > 10 ? `...(${names.length - 10} more)` : "");
   if (names.length === 0) return "(空画布)";
 
+  // 对象数上限：超出部分不逐个展开，但明确告知模型还有多少
+  const shown = names.length > MAX_SNAPSHOT_OBJECTS ? names.slice(0, MAX_SNAPSHOT_OBJECTS) : names;
+  const omittedByCount = names.length - shown.length;
+
   const lines: string[] = [];
-  for (const name of names) {
+  for (const name of shown) {
     const parts: string[] = [];
     const type = api.getObjectType(name);
     const def = api.getCommandString(name) || api.getDefinitionString(name);
@@ -792,7 +803,24 @@ export function getRichSnapshot(api: GGBAppletApi): string {
 
     lines.push(parts.join("\n"));
   }
-  return lines.join("\n\n");
+
+  // 字符数上限：逐行累积，超限即停并记录还剩多少（比事后 slice 更准，不会切断半个对象）
+  let out = "";
+  let emitted = 0;
+  for (const line of lines) {
+    // 已输出过且再加会超限 → 停止（保证至少输出一个对象，避免极小上限时全空）
+    if (emitted > 0 && out.length + line.length + 2 > MAX_SNAPSHOT_CHARS) break;
+    out += (emitted > 0 ? "\n\n" : "") + line;
+    emitted++;
+  }
+
+  const omittedByChars = lines.length - emitted;
+  const omitted = omittedByCount + omittedByChars;
+  if (omitted > 0) {
+    out += `\n\n[快照已截断] 另有 ${omitted} 个对象未列出。` +
+      `需要具体对象时用 get_object_info 查询，或 list_objects 查看完整名单。`;
+  }
+  return out;
 }
 
 function safeNum(v: number | undefined | null): string {

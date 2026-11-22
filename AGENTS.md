@@ -38,7 +38,7 @@
 
 | 文件 | 职责 | 关键导出 |
 |---|---|---|
-| `aiClient.ts` | OpenAI 兼容调用 | `chat(config, msgs, signal?, modelOverride?)` 返回 schema 校验后的 `AIResponse`；`chatRaw(...)` 返回纯文本（Phase 1 / 视觉识别用）；`agentChat(...)` Agent **流式**工具调用（SSE 增量解析 tool_calls + `onContent` 实时回调 + JSON 兼容回退 + 输出预算 `resolveMaxOutputTokens()`：可配 `AIConfig.maxOutputTokens`，默认 16384 / thinking 32768；第 8 参 `AgentChatOverrides` 支持截断重试扩容+降思考档；`usage.reasoning` 单列思考 token）；`ping(config, signal?, modelOverride?)` 连接测试（设置面板传 visionModel 顺带测视觉模型）；`AIConfig`（**4-role 模型**：`model` 主力 / `lightModel?` 轻量 / `agentModel?` Agent / `visionModel?` 视觉，`flashModel?` 已 deprecated；`reasoningEffort` 含 `"none"` = 关闭思考；`maxOutputTokens?` 输出预算）；`resolveModel(config, role)` 统一解析回退链（vision → model）；`ChatMessage`（content 支持 `string \| ContentPart[]` 多模态）、`ContentPart`（text/image_url）、`AIError`、`AISchemaError` |
+| `aiClient.ts` | OpenAI 兼容调用 | `chat(config, msgs, signal?, modelOverride?)` 返回 schema 校验后的 `AIResponse`；`chatRaw(...)` 返回纯文本（Phase 1 / 视觉识别用）；`agentChat(...)` Agent **流式**工具调用（SSE 增量解析 tool_calls + `onContent` 实时回调 + JSON 兼容回退 + 输出预算 `resolveMaxOutputTokens()`：可配 `AIConfig.maxOutputTokens`，默认 16384 / thinking 32768；第 8 参 `AgentChatOverrides` 支持截断重试扩容+降思考档；`usage.reasoning` 单列思考 token）；`ping(config, signal?, modelOverride?)` 连接测试（设置面板传 visionModel 顺带测视觉模型）；`AIConfig`（**4-role 模型**：`model` 主力 / `lightModel?` 轻量 / `agentModel?` Agent / `visionModel?` 视觉，`flashModel?` 已 deprecated；`reasoningEffort` 含 `"none"` = 关闭思考、`"max"` = 最高档；`maxOutputTokens?` 输出预算）；`getProviderQuirks`（DeepSeek：1M 上下文 / 默认档 high / `thinkingIgnoresTemperature`）；`isDeepSeek`/`isZhipuProvider`；`resolveModel(config, role)` 统一解析回退链（vision → model）；`ChatMessage`（content 支持 `string \| ContentPart[]` 多模态）、`ContentPart`（text/image_url）、`AIError`、`AISchemaError` |
 | `pipeline.ts` | **两阶段流水线状态机**（从 ChatPanel 抽取）+ **多模态视觉管线** | `runPipeline(userText, deps, cb)`（Phase 1→确认→Phase 2→修复→**满足度评估**）、**`runVisionPipeline({text, images}, deps, cb)`**（带图轮入口：识别→题目确认→Agent 构造+状态核对）、`runAgentPipeline`/内部 `runAgentRound(userText, deps, cb, {stateCheck?, evalBasis?})`、`ReviewHandle`/`ProblemHandle`/对应 Decision、`PipelineDeps`（依赖注入接口，含 4-role 模型解析 + `runAgentLoopImpl?` + `updateProblemReview?` + `appMode`）、`PipelineCallbacks`（含 `onProblemReview?`）、`MAX_REPAIR=2`、`MAX_FORMAT_RETRY=2`、`HISTORY_WINDOW=6`、`parseRefinedSpec`、`collectHistory`（user 带 attachments 时追加 `[附件:图片×N]` 占位）；内部 `runSinglePhase`/`runPhase2`/`executeAndRepair`/`applyRagCorrection`/`chatWithFormatRetry`/`extractProblem`/`waitProblemReview`；Phase 2 调用 `executeCommands(api, cmds, deps.appMode)`；`requestAnimationFrame` 用 `typeof` 守卫兼容 Node.js 单测 |
 | `runControl.ts` | 单轮运行生命周期 | `beginRun()`（返回本轮 AbortSignal）、`abortCurrentRun()`（清空/切模式/撤销时取消请求）、`onRunCancelled(cb)`（spec-review 等待气泡订阅取消）、`wasAborted()`、`endRun()` |
 | `prompts.ts` | System Prompt 构建 | `buildSystemPrompt(domain, appMode, phase="full"\|"compile")`、`buildCompilePrompt`、`buildCheckerPrompt`（修复角色）、`buildRepairMessage`、`buildFormatRepairMessage`；compile 模式含 **self_check 自检指令**；`Domain = "general"\|"physics"` |
@@ -61,18 +61,18 @@
 | `problemSchema.ts` | 题目识别输出校验 | `ProblemAnalysis` 接口 + Zod 容错 + `parseProblemAnalysis` + `serializeProblem`（确定性序列化） |
 | `visionPrompt.ts` | 视觉模型系统提示 | `buildVisionExtractPrompt(domain)` — 指示输出 ProblemAnalysis JSON |
 | `imageInput.ts` | 图片输入预处理 | `validateImageFile`（纯校验）+ `fileToDataUrl`（浏览器缩放+白底+JPEG）；`MAX_IMAGES=3`、`MAX_FILE_MB=10` |
-| `providers.ts` | 6 预置 provider + 自定义 | `PROVIDER_PRESETS`（DeepSeek/Moonshot/GLM/SiliconFlow/OpenAI/Ollama）；含 `visionModels?` 候选列表（DeepSeek `deepseek-flash`（V4.1 原生多模态）、GLM `glm-4.5v`、SiliconFlow Qwen2.5-VL、OpenAI gpt-4o、Ollama qwen2.5vl 等）；GLM thinking 参数适配（`buildThinkingParam`：GLM=thinking.type / DeepSeek=reasoning_effort） |
+| `providers.ts` | 6 预置 provider + 自定义 | `PROVIDER_PRESETS`（DeepSeek/Moonshot/GLM/SiliconFlow/OpenAI/Ollama）；含 `visionModels?` 候选列表（DeepSeek `deepseek-flash`（V4.1-Flash-1017 原生多模态）、GLM `glm-4.5v`、SiliconFlow Qwen2.5-VL、OpenAI gpt-4o、Ollama qwen2.5vl 等）；thinking 参数适配（`buildThinkingParam`：GLM=thinking.type / DeepSeek=reasoning_effort，中等档位归一为 high）；**`modelSupportsVision(providerId, model, baseURL?)`** — 多模态能力判定（已知清单 + 命名启发式 + baseURL 反查），供设置面板警示「Agent 模型不支持图片，带图轮会退化为纯文字」 |
 | `format.ts` | 数字格式化工具 | `fmtTokens(n)` — token 用量 k/M 缩写（顶栏 + 统计图共用） |
 
 ### src/components/（React UI）
 
 | 文件 | 职责 |
 |---|---|
-| `ChatPanel.tsx` | 编排已提取至 pipeline.ts，本组件只负责：输入 UI（含**图片输入**：📎 上传 + textarea 粘贴 + 输入区拖拽，`MAX_IMAGES=3`，预览条增删）、消息渲染、**store 依赖注入成 `PipelineDeps`**（注入 `visionModel` + `updateProblemReview`）、spec / problem 确认事件桥接（`reviewHandleRef` + `problemHandleRef`）、**发送路由**（带图 → `runVisionPipeline`；纯文字按 agentMode 分流）、**Agent 思考步骤实时显示**（`agentStep` state + `onAgentStep` → thinking 区域）|
+| `ChatPanel.tsx` | 编排已提取至 pipeline.ts，本组件只负责：输入 UI（含**图片输入**：📎 上传 + textarea 粘贴 + 输入区拖拽，`MAX_IMAGES=3`，预览条增删）、消息渲染、**store 依赖注入成 `PipelineDeps`**（注入 `visionModel` + `updateProblemReview`）、spec / problem 确认事件桥接（`reviewHandleRef` + `problemHandleRef`）、**发送路由**（带图 → `runVisionPipeline`；纯文字按 agentMode 分流）、**Agent 思考步骤实时显示**（`agentStep` state + `onAgentStep` → thinking 区域）、**思考就近开关**（借鉴 DeepSeek chat-demo：输入框旁 `aria-pressed` 按钮循环切 `reasoningEffort` 档位，与设置面板同源）、**思考可折叠展开**（`.thinking-text.expanded`）|
 | `MessageBubble.tsx` | 消息气泡：user（含 attachments 缩略图 + **Lightbox 灯箱**，Esc 关闭）/assistant/error/ask/**spec-review**（规格确认 UI：编辑/重新生成/确认绘制）/**problem-review**（题目确认 UI：编辑题干/重新识别/确认并绘制，复用 spec-review 样式）+ **assistant 渲染 self_check 报告** |
 | `GGBCanvas.tsx` | GeoGebra applet 注入，监听 `ggbAppName` 重建（2D↔3D）；**心跳监控**（2s 间隔 canvas 计数 + DockGlassPane 检测）+ **自动恢复**（保存 base64 快照 → `inject(force=true)` 强制重建 → 恢复快照）；MutationObserver DOM 监控 + WebGL context loss 监听；诊断日志前缀 `[AiGGB:DIAG]` |
 | `Toolbar.tsx` | 顶栏：domain 切换/模板/撤销/清空/导出/截图/复制/安装；清空/切模式/撤销时调用 `abortCurrentRun()` |
-| `SettingsDialog.tsx` | API 配置（Provider/Key/**4-role 模型**：主力/轻量/Agent/视觉 + 思考深度（含「关闭」= `reasoning_effort:"none"`）/输出预算 max_tokens/温度/测试连接——测试时顺带 `ping(cfg, undefined, visionModel)` 验证视觉模型可用性）|
+| `SettingsDialog.tsx` | API 配置（Provider/Key/**4-role 模型**：主力/轻量/Agent/视觉 + 思考深度（含「关闭」= `reasoning_effort:"none"`、`low/medium/high/max` 档位）/输出预算 max_tokens/温度/测试连接——测试时顺带 `ping(cfg, undefined, visionModel)` 验证视觉模型可用性）|
 | `ScriptPanel.tsx` | 右侧实时 GGB 脚本展示（可折叠/复制/下载）|
 | `TemplateGallery.tsx` | 模板卡片，点击发 `aiggb:send` 事件 |
 | `PWAUpdatePrompt.tsx` | SW 更新提示 |
@@ -176,12 +176,33 @@ Schema 校验失败 → `chatWithFormatRetry`（≤2 次格式重试，raw + det
 | `visionPrompt.ts` | `buildVisionExtractPrompt(domain)` — 视觉模型系统提示 |
 | `imageInput.ts` | `validateImageFile`（纯校验）+ `fileToDataUrl`（浏览器缩放+白底+JPEG） |
 | `pipeline.ts:runVisionPipeline` | 识别 loop → 确认 → `runAgentRound` + stateCheck（文本+视觉双路核对，`evalVisualImpl?` 可注入） |
-| `pipeline.ts:runAgentRound` | 从 `runAgentPipeline` 抽取的内部函数，接受可选 `stateCheck`/`evalBasis` |
+| `pipeline.ts:runAgentRound` | 从 `runAgentPipeline` 抽取的内部函数，接受可选 `stateCheck`/`evalBasis`/`images` |
 | `agentLoop.ts:StateCheckSpec` | Case 1 终止钩子：`checkRounds < maxRounds` 时调用 `check(snapshot)` → 未通过则注入反馈消息 continue |
+| `agentLoop.ts:AgentLoopDeps.images` | 原题图片透传：附在首条 user 消息（多模态 content），构造时可回看原图 |
+| `aiClient.ts:contentToText` | 把 `AgentMessage.content`（string \| ContentPart[] \| null）归一为文本，供日志/轨迹/长度判断 |
+
+### 原图如何参与构造与核对（v1.9 多模态贯通）
+
+**问题背景**：图片此前只喂给「识别」阶段，`serializeProblem` 之后像素信息即丢失，Agent 只能凭二手文字转写构造图形——而几何关系（平行/垂直/相切/中点）恰恰是转写最易丢的部分。
+
+**当前设计（两条路径都拿到原图）**：
+
+```
+带图输入 → extractProblem（视觉模型）→ 题目确认 → taskText
+   ├─① Agent 构造：runAgentRound(..., { images })
+   │     → AgentLoopDeps.images → 首条 user 消息的 ContentPart[]（[图N] 标注 + image_url）
+   │     → 构造过程中可回看原图核对几何关系
+   └─② 视觉核对：evaluateVisual(..., sourceImages = images)
+         → 双图对比「原题图片 vs 画布截图」，核对几何关系是否一致
+```
+
+- **①原图进 Agent**：`AgentMessage.content` 类型放宽为 `string | ContentPart[] | null`。仅在 `deps.images` 非空时使用多模态数组，纯文字轮仍是字符串（不凭空引入结构）。DeepSeek 限制：图片只能出现在 user 消息。
+- **②核对基准换血**：`evaluateVisual` 第 8 参新增 `sourceImages`。传入时启用交叉验证模式（专用 system prompt 强调「平行/垂直/相切/中点/共线/等长/角度」逐一核对），不传则退回旧的「文字要求 vs 截图」模式（兼容纯文字轮与旧调用）。**为什么必须换**：拿识别阶段的文字转写去核对，等于用同一份理解自证——识别错了也会"一致通过"，无法对冲识别误差。
+- **图片成本**：DeepSeek 侧图片按尺寸折算 token（单图 ≤1024 tokens，超出按比例缩放），与文字共用输入 token 计费。识别阶段 4096→8192 的扩容重试针对**输出**被截断，与图片无关。
 
 ### 4-role 模型配置
 
-`AIConfig` 四角色：`model`（主力）/ `lightModel`（精炼/评估）/ `agentModel`（Agent）/ `visionModel`（题目识别）。`resolveModel(config, "vision")` 回退链 `visionModel → model`。
+`AIConfig` 四角色：`model`（主力）/ `lightModel`（精炼/评估）/ `agentModel`（Agent）/ `visionModel`（题目识别）。`resolveModel(config, "vision")` 回退链 `visionModel → model`。⚠ **Agent 模型在多模态轮需支持图片输入**（`deepseek-flash` 原生多模态；不支持的模型会忽略 `image_url`，退化为纯文字构造）。
 
 ### ChatTurn 扩展
 
@@ -191,8 +212,10 @@ Schema 校验失败 → `chatWithFormatRetry`（≤2 次格式重试，raw + det
 
 ### 降级策略
 
-- 识别失败 + 有文字 → error 气泡 → 降级为普通 Agent 轮（无 stateCheck）
-- 纯图识别失败 → error 气泡指向设置
+- 识别失败 + 有文字 → error 气泡 → 降级为普通 Agent 轮（**仍带原图**，Agent 若能直接看图还有机会画对）
+- 纯图识别失败 → **反问用户**（`ask`）：引导「换更清晰的图」或「改用文字描述」，而非只丢一条 error 就结束本轮
+- 识别阶段 `jsonMode` 按 provider 能力开启（`getProviderCapabilities().jsonSchema`）；空响应重试**扩容到 8192**（改变条件，非原样重试）
+- 多图（≤3）逐张加 `[图N]` 标注，避免模型把多张图当作同一张图的多个视角
 - 核对失败 / null → 按通过结束（不阻断）
 
 ## 3D 画布稳定性（DockGlassPane 修复与恢复系统）
@@ -272,15 +295,15 @@ A/B 开关：设置面板「3D 批量重绘」（`localStorage: aiggb_batch_3d`�
 | `npm run test:visual` | — | Playwright 截图（physics,dynamic,composite）。前置：`npm run dev` 已运行（5173，宿主 `tests/visual.html` 加载本地 GGB bundle）|
 | `npm run demos:regen` | — | **重生成 README 效果图**（docs/demos/ 10 个 GIF：P- 物理 / X- 复合 / D- 数学动态 / H- 3D）：fixture 场景 → dev server 本地 GGB 画布（宿主 `tests/visual.html`，与视觉回归共用；3D 场景 `?app=3d` 注入）→ Playwright 抓帧 8s → ffmpeg 调色板合成 640×448 GIF。`regen-demos.ts` 支持 per-id 附加命令（EXTRA_COMMANDS：静态场景补动画/覆盖样式）。前置：`npm run dev` 已运行（5173） |
 | `npm run prompt:iterate` | — | Prompt 迭代工作流 |
-| **单测** | — | 216 个（0 API）：`tests/commandValidate.test.ts`（静态预检：Sequence 官方 5 种重载/括号配对/逗号句点误用/循环变量契约 + 属性命令专项：3D 禁令/值域/色名）、`tests/pipeline.test.ts`（流水线状态机 + 视觉管线 + 视觉核对合并）、`tests/specCache.test.ts`（缓存，注入 `createMemoryStorage`）、`tests/satisfactionEval.test.ts`（满足度评估 + evaluateVisual 视觉审查）、`tests/problemSchema.test.ts`（题目识别 schema 容错 + 序列化确定性）、`tests/imageInput.test.ts`（图片校验边界）、`tests/agentLoop.test.ts` / `toolExecutor.test.ts` / `agentSmoke.test.ts` / `ggbBridge.test.ts` / `ggbKB.test.ts` / `sessionStore.test.ts` / `trainingStore.test.ts` / `trajectory-replay.test.ts` / `trapStore.test.ts` / `runControl.test.ts` / `repaintGate.test.ts` / `aiClient.test.ts` |
+| **单测** | — | 323 个（0 API）：`tests/commandValidate.test.ts`（静态预检：Sequence 官方 5 种重载/括号配对/逗号句点误用/循环变量契约 + 属性命令专项：3D 禁令/值域/色名）、`tests/pipeline.test.ts`（流水线状态机 + 视觉管线 + 视觉核对合并 + **原图透传/交叉验证/失败反问**）、`tests/aiClient.test.ts`（provider 适配：DeepSeek/GLM thinking 参数翻译、档位归一、max 档预算）、`tests/providers.test.ts`（模型清单 + **`modelSupportsVision` 多模态判定**）、`tests/agentLoop.test.ts`（截断重试档位语义 + **多模态 content 贯通**）、`tests/specCache.test.ts`（缓存，注入 `createMemoryStorage`）、`tests/satisfactionEval.test.ts`（满足度评估 + evaluateVisual 双模式视觉审查）、`tests/problemSchema.test.ts`（题目识别 schema 容错 + 序列化确定性）、`tests/imageInput.test.ts`（图片校验边界）、`tests/toolExecutor.test.ts` / `agentSmoke.test.ts` / `ggbBridge.test.ts` / `ggbKB.test.ts` / `sessionStore.test.ts` / `trainingStore.test.ts` / `trajectory-replay.test.ts` / `trapStore.test.ts` / `runControl.test.ts` / `repaintGate.test.ts` |
 
-关键文件：`tests/runner.ts`（运行器）、`tests/mockGGB.ts`（轻量 GGB mock）、`tests/cases.json`（用例）、`tests/assertions.ts`（12 维断言）、`tests/fixtures/`（回放数据）。基线 216 单测 / 63 回放。
+关键文件：`tests/runner.ts`（运行器）、`tests/mockGGB.ts`（轻量 GGB mock）、`tests/cases.json`（用例）、`tests/assertions.ts`（12 维断言）、`tests/fixtures/`（回放数据）。基线 323 单测 / 63 回放。
 
 **注意**：`test:record` 会覆盖 `tests/fixtures/`。基准 `tests/report.json` 当前 ~59/63（highschool 3D 是主要拉分项）。
 
 ## 环境
 
-- `.env` 放测试密钥：`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`（默认 deepseek-flash，V4.1）、`DEEPSEEK_BASE_URL`
+- `.env` 放测试密钥：`DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL`（默认 deepseek-flash = V4.1-Flash-1017）、`DEEPSEEK_BASE_URL`
 - 模型：日常 flash（快）、复杂/3D 场景 pro；两阶段 Phase 1 用 flash，Phase 2 用主模型
 
 ## GeoGebra 库本地化（自托管，官方 bundle）
@@ -313,6 +336,12 @@ A/B 开关：设置面板「3D 批量重绘」（`localStorage: aiggb_batch_3d`�
 - **列表函数与大小写（自托管 bundle 5.4.927 实测，截图存证 `docs/列表函数实测/`）**：`Zip`（1~3 变量/产出对象列表/内嵌 If）/`Flatten`（含变长展开）/`Element`/`KeepIf`/`Take`/`First`/`Join`/`Unique`/`Sort`/`Sum` 均**可用**。**不可用**：`El`（GGB 从无此命令，正确名 `Element`）、大写 `Round`（此版本未编译，仅小写函数 `round(x,n)`）、小写 `mod`（仅大写命令 `Mod(x,y)`，且可嵌套进表达式）、`CumulativeSum`（此版本没有）、大写变体（`ELEMENT`/`ZIP` 必失败——命令名大小写敏感）。`El`/`Round` 已入 `HALLUCINATION_MAP` 自动纠正，`commandCorrect.extractCommandName` 对 `round` 的豁免是**大小写敏感**的（小写函数放行、大写送纠正）。实测方法：dev server + `tests/visual.html` 宿主 `?cmds=[{"op":"eval","cmd":"..."}]` + Playwright 驱动 `window.__ggbApplet__.evalCommand`
 - **保留对象名与 f→If 误纠正（2026-09 整机 GUI 实测根因）**：对象赋值名禁用 GGB 保留名——`If` 是内置条件命令（实测 `If(x)=A*sin(kw*x+phi)` 创建的函数无法被 style 引用，样式修复多轮不收敛）、`xAxis`/`yAxis`/`zAxis` 是画布自带坐标轴**不需要也不可创建**（`xAxis=Line((0,0),(1,0))` 恒返回 false）、`x`/`y`/`z` 是坐标变量、`e` 是欧拉数（赋值后 `3e8` 被拆成 3×e×8）——commandValidate 第 ⑨ 项 `reserved-name` 已静态拦截。★ 连环根因：`commandCorrect` 旧版 `extractCommandName` 把函数定义 `f(x)=…` 的 `f` 当命令名，模糊匹配编辑距离 1 **误纠正成 `If(x)=…`**（AI 本来写对了！）——已修复为函数定义形态直接放行不参与纠正（回归测试在 `tests/ggbKB.test.ts`）。满足度评估曾误报「未检测到 x/y 轴对象」驱动修复 AI 去创建 xAxis——EVAL_SYSTEM_PROMPT 已加坐标轴豁免条款（画布自带轴，视觉审查 prompt 早有同款）
 - **`api.exists()` 对函数对象不可靠（实测）**：`f1(x) = round(x, 2)` 经 evalCommand 创建成功（返回 true 且在 `getAllObjectNames()` 中），但 `exists("f1")` 返回 false——依赖 `exists` 前后对比做删除诊断的路径（ggbBridge eval Delete 特判、visual.html 宿主同语义）对**函数对象**会误报「删除不存在对象」；函数删除可改用 `getAllObjectNames` 兜底
+- **⚠️ SetColor 两条路径值域相反（勿混）**：
+  - **GGB 脚本** `SetColor(obj, r, g, b)` → **0~1 浮点**（`commandValidate.ts` 按此判定；写 230 会被引擎钳成白色）
+  - **JS API** `api.setColor(name, r, g, b)` → **0~255 整数**（`ggbBridge.hexToRgb` 用 `parseInt(hex,16)` 产出，`toolExecutor` 直接透传，**不要再 ÷255**）
+  - 透明度/填充率两条路径统一 0~1 小数
+  - 这两套是 GeoGebra 自身接口约定差异，不是笔误。改任一侧前先确认自己在改哪条路径
+- **工具失败结构化类别（`ToolFailureKind`）**：`formatResult` 失败时带 `kind`（`args` / `safety` / `preflight` / `denied` / `engine` / `unknown`），成功时不带。`agentLoop` 的熔断判定**只看 kind**，不再用 `/^参数校验失败：/` 这类**错误文案前缀**匹配——旧实现一旦改写文案就会静默失效且无测试报错。`args`/`preflight`/`safety` 归为 recoverable（不计入连续失败熔断，给模型自我修正机会）；`engine` 计入熔断。用户拒绝在 `handleDangerousTools` 里生成 `kind:"denied"`（文案全等比对仅作旧轨迹兼容兜底）
 - **诊断日志**：画布/执行相关日志使用 `[AiGGB:DIAG]` 前缀；**MutationObserver 逐节点日志默认静音**（`localStorage.setItem("aiggb_diag","1")` 开启）——该回调里做字符串拼接 + console 输出本身会加重卡顿
 - **可注入确认钩子（E2E）**：Toolbar「清空」「切 2D↔3D」的确认走 `appConfirm()`（Toolbar.tsx）——默认原生 confirm，测试可注入 `window.__aiggbConfirm = () => true` 全自动通过（原生 confirm 同步阻塞渲染主线程，自动化协议无法应答且嵌入式 webview 对话框不可探测）
 - **会话落盘时机**：`persistCurrentSession`（ChatPanel runRound finally，轮结束）+ `pagehide`/`visibilitychange→hidden` 兜底（ChatPanel effect）——后者保证轮间手动滑块/画布微调在刷新后不丢（实测 A=2 落盘→重载→保持；此前轮结束定格旧快照，重载即回退）
@@ -321,6 +350,6 @@ A/B 开关：设置面板「3D 批量重绘」（`localStorage: aiggb_batch_3d`�
 - **3D batch 启用**：`executeCommands` 和 `executeToolCalls` 统一走 `repaintGate.shouldBatch()`（**任何非空批次都批处理**；3D 可在设置面板关闭「3D 批量重绘」）。危险工具组走 `withRepaintBatch`。批处理 = 暂停重绘 → 整批执行 → 恢复重绘；**恢复后必须 `markRepaintBusy()` 进入静默期**，否则 GGB 整屏重绘的瞬时空白会被 2s 心跳误判为"画布消失"→ 硬重建 → 用户看到闪一下 + 停顿。3D 闪烁的四条路径与对策见 SPEC.md §3D 稳定性
 - **尺寸同步防抖**：ResizeObserver 有对象时等 `RESIZE_SETTLE=220ms` 尺寸稳定后再 `setSize`，且 **3D 下不调用 `refreshViews()`**（size 变更已触发重绘，额外 refreshViews 是闪烁放大器）。**测量一律用 `measureHost()`（`.ggb-host`）而非 `#ggb-container`**——GGB 会往容器写内联尺寸，销毁子节点后仍残留，量容器会拿到陈旧尺寸（实测打开 DevTools 后注入 1137×670 而面板只有 1168×332）；`appletOnLoad` 后再做一次**尺寸对账**（偏差 >8px 即 `setSize`）
 - **`setPerspective` 全面下线（v1.8）**：`set_view` 的 `perspective:"3d"` 不再改透视（实测 classic 下会触发 DockGlassPane → 画布消失 → 硬重建闪烁）；2D↔3D 只能走工具栏切换（`setAppName` → GGBCanvas 监听重建，整体重注入 applet）
-- **思考深度（thinking）与输出预算**：`AIConfig.reasoningEffort`（SettingsDialog 设置，`chat`/`chatRaw`/`agentChat` 共用）三态：未设置（不发参数，**V4.1 实测仍会思考**）/ `"none"`（发 `reasoning_effort: "none"`，实测推理归零，GLM 走 `thinking.disabled`）/ low|medium|high。思考 token 与正文**共享** `max_tokens`（服务端封顶，客户端无法剔除）→ 预算可自定义：`AIConfig.maxOutputTokens` + `resolveMaxOutputTokens()`，默认 `16384` / thinking `32768`（v1.8 由 8192/16384 上调）；截断时 `agentLoop` 以 `{maxTokensScale: 2, reasoningEffort: "low"}` 扩容重试一次（否则同参数必然再次截断）。`AgentResponse.usage.reasoning` = `completion_tokens_details.reasoning_tokens`
-- **视觉识别调用**：`extractProblem` 用 `jsonMode=false`（多数视觉模型不支持 `response_format: json_object`），解析容错在 `parseProblemAnalysis`；带图轮 token 统计无需特殊处理
+- **思考深度（thinking）与输出预算**：`AIConfig.reasoningEffort`（SettingsDialog 设置，`chat`/`chatRaw`/`agentChat` 共用）。**未设置 = 显式关闭**（DeepSeek 发 `reasoning_effort:"none"`，不再跟随 provider 默认的「开 + high」）；`none` 同义；`low|high|max` 为官方档位（`medium` 由 `buildThinkingParam` 归一为 `high`）。**默认关闭的依据**：① A/B 实测 high 端到端 −8.3%；② 官方规定 thinking 模式下 `temperature` 无效（`quirks.thinkingIgnoresTemperature`），Agent 的 0.05 低温度防幻觉仅在关闭时生效。**感知任务强制关闭**：`extractProblem` / `evaluateVisual` 显式传 `"none"`。`max_tokens` 官方区间 `1~384K`，未设置时服务端默认非思考 8K / 思考 64K / `max` 档 128K。思考 token 与正文**共享** `max_tokens` → 预算 `AIConfig.maxOutputTokens` + `resolveMaxOutputTokens(config, thinking, effort)`：默认 `16384` / 思考 `32768` / `max` 档 `131072`，客户端自保上限 `MAX_OUTPUT_TOKENS=131072`；截断时 `agentLoop` 以 `{maxTokensScale: 2, reasoningEffort: resolveTruncationRetryEffort(...)}` 重试——**已关闭则保持关闭**（只扩容），已开启才降为 `low`（`max` 也降到 `low`）。`AgentResponse.usage.reasoning` = `completion_tokens_details.reasoning_tokens`
+- **视觉识别调用**：`extractProblem` 的 `jsonMode` 按 provider 能力动态开启（`getProviderCapabilities().jsonSchema`——DeepSeek/GLM/OpenAI 支持 `json_object`，本地模型保守关闭），解析容错仍在 `parseProblemAnalysis`；空响应重试扩容到 8192（改变条件而非原样重试）。DeepSeek 侧图片仅允许出现在 `user` 消息（system/assistant 带图 = 400），单图 ≤1024 tokens、请求体 48MiB、单请求最多 600 张
 - **A/B 验证**：`npm run test:ab`（`DRIFT_N`/`DRIFT_SAMPLE` 调规模）；结论：v4-flash 上 `reasoning_effort=high` 端到端 −8.3%，默认保持关闭

@@ -538,6 +538,13 @@ code {
   font-size: 13px;
   margin: var(--space-1) 0 0;
 }
+.thinking-body {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
 .thinking-text {
   color: var(--accent);
   font-weight: 500;
@@ -547,6 +554,28 @@ code {
   white-space: nowrap;
   animation: thinking-pulse 1.6s ease-in-out infinite;
 }
+/* 展开后：完整思考过程，可换行滚动（借鉴 chat-demo 可折叠 thinking 块） */
+.thinking-text.expanded {
+  max-width: 640px;
+  white-space: pre-wrap;
+  overflow-y: auto;
+  max-height: 160px;
+  animation: none;
+  line-height: 1.5;
+  font-weight: 400;
+}
+.thinking-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--fg-3);
+  cursor: pointer;
+  padding: 2px;
+  flex-shrink: 0;
+}
+.thinking-expand:hover { color: var(--accent); }
 @keyframes thinking-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.65; }
@@ -1103,6 +1132,37 @@ code {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+/* 深度思考就近开关（借鉴 DeepSeek chat-demo 的 aria-pressed 开关） */
+.think-toggle {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 var(--space-3);
+  flex-shrink: 0;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.think-toggle:hover:not(:disabled) { background: var(--bg-3); color: var(--fg-1); }
+.think-toggle.on {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-1));
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.think-toggle-label { font-weight: 500; }
+.think-toggle-level {
+  font-size: 10px;
+  opacity: .85;
+  padding: 1px 4px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 .attach-strip {
   display: flex;

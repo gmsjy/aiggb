@@ -1,8 +1,8 @@
 /**
  * 预置 OpenAI 兼容的 AI Provider —— SPEC.md §6.2
  *
- * 各 provider 的 baseURL 与模型清单经官方文档核对（2026-06）：
- *   DeepSeek      https://api.deepseek.com         （不带 /v1）
+ * 各 provider 的 baseURL 与模型清单经官方文档核对（2026-10）：
+ *   DeepSeek      https://api.deepseek.com         （不带 /v1；2026-10-17 发布 V4.1-Flash-1017）
  *   Moonshot      https://api.moonshot.cn/v1
  *   智谱 GLM      https://open.bigmodel.cn/api/paas/v4
  *   SiliconFlow   https://api.siliconflow.cn/v1
@@ -34,13 +34,15 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: "DeepSeek",
     baseURL: "https://api.deepseek.com",
     models: [
-      "deepseek-flash",              // V4.1 Flash：原生多模态，性能/费用/速度全面超越 V4 Pro（2026-09 发布）
-      "deepseek-v4-pro",             // 旧旗舰；2026-09-14 后自动路由到 V4.1 Flash 计费
-      "deepseek-v4-flash",           // 旧轻量；已下线，暂路由到 V4.1 Flash（兼容保留）
-      "deepseek-v4-flash-vision-exp" // 旧视觉实验版；已下线，暂路由到 V4.1 Flash（兼容保留）
+      "deepseek-flash",              // V4.1-Flash-1017（2026-10-17）：原生多模态，1M 上下文
+      "deepseek-v4-pro",             // V4-Pro-0813：仍在服务（价格约 flash 4 倍，不支持图片）
+      "deepseek-v4-flash",           // 旧模型名：已下线，服务端路由到 V4.1-Flash-1017（兼容保留）
+      "deepseek-v4-flash-vision-exp" // 旧视觉实验版：已下线，同样路由到 V4.1-Flash-1017
     ],
     visionModels: ["deepseek-flash"],
-    note: "deepseek-flash = V4.1 Flash，原生多模态（主力本身可识图，视觉角色跟随主力即可），已全面取代 v4-pro/v4-flash。旧模型名暂时保留路由兼容，新配置请用 deepseek-flash",
+    note:
+      "deepseek-flash = V4.1-Flash-1017（2026-10-17）：原生多模态、1M 上下文、max_tokens 上限 384K，已取代全部旧 flash 系列。" +
+      "deepseek-v4-pro 仍在服务，价格约为 flash 的 4 倍且不支持图片输入；旧模型名仅作路由兼容，新配置请用 deepseek-flash",
     apiKeyUrl: "https://platform.deepseek.com/api_keys"
   },
   {
@@ -128,4 +130,43 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 
 export function findProvider(id: string): ProviderPreset | undefined {
   return PROVIDER_PRESETS.find(p => p.id === id);
+}
+
+/**
+ * 判断某个模型是否支持图片输入（多模态）。
+ *
+ * 数据源：preset.visionModels（各 provider 的视觉候选清单）+ 常见命名启发式。
+ * ★ 用途：带图轮会把原题图片一路传给 Agent 模型（见 pipeline.ts 的 images 贯通），
+ *   若 Agent/主力模型不支持图片，image_url 会被服务端忽略 → 静默退化为纯文字构造。
+ *   这里用于在设置面板给出明确提示，而不是让用户事后困惑「为什么它没看我的图」。
+ *
+ * 注意：这是「已知清单」判断，不是权威能力探测。未知模型返回 false（保守），
+ * 但 settings 侧仅用于「提示」，不会阻止保存。
+ */
+export function modelSupportsVision(
+  providerId: string,
+  model: string | undefined,
+  baseURL?: string
+): boolean {
+  const m = (model ?? "").trim().toLowerCase();
+  if (!m) return false;
+
+  // 1) 已知视觉候选清单（provider 预设，或按 baseURL 反查——用户可能用了自定义 provider）
+  const presets = [findProvider(providerId)];
+  if (baseURL) {
+    const b = baseURL.toLowerCase();
+    const byUrl = PROVIDER_PRESETS.find(p => p.baseURL && b.includes(p.baseURL.toLowerCase().replace(/^https?:\/\//, "")));
+    if (byUrl) presets.push(byUrl);
+  }
+  for (const p of presets) {
+    if (p && (p.visionModels ?? []).some(v => v.toLowerCase() === m)) return true;
+  }
+
+  // 2) 命名启发式（官方命名较稳定，覆盖清单外的常见多模态模型）
+  //    视觉/VL/vision/omni/4o 系列；排除 -pro 等明确不带视觉的 DeepSeek 型号
+  if (/^deepseek-v4-pro$/.test(m)) return false;
+  if (/(vision|vl|omni|gpt-4o|gpt-4\.1|gemini|claude-3|claude-4|qwen.*vl)/.test(m)) return true;
+  if (/^deepseek-flash$/.test(m) || /^deepseek-v4-flash-vision-exp$/.test(m)) return true;
+
+  return false;
 }
