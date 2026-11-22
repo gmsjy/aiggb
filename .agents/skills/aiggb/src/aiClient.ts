@@ -1,0 +1,921 @@
+/**
+ * OpenAI 兼容的 AI 客户端 —— 见 SPEC.md §3.2 / §12.2
+ *
+ * 支持两种模式：
+ *   1. chat() —— 传统 JSON 模式（Phase 1/2 用，response_format: json_object）
+ *   2. agentChat() —— Function Calling 模式（工具调用代理用，不含 response_format）
+ */
+
+import { AIResponse, formatZodError, type AIResponse as AIResponseT } from "./schema";
+import type { ToolDefinition } from "./tools";
+import { getTraceId } from "./runControl";
+
+// ──── 配置与消息类型 ────
+
+export interface AIConfig {
+  provider: string;
+  baseURL: string;
+  apiKey: string;
+  /** 主力模型（编译/修复/降级）—— 也是所有角色未配置时的回退模型 */
+  model: string;
+  /** 轻量模型（精炼/评估）。不设置时回退到 flashModel → model */
+  lightModel?: string;
+  /** Agent 模式模型。不设置时回退到 model */
+  agentModel?: string;
+  /** 视觉模型（题目图片识别）。不设置时回退到 model；需为支持图片输入的模型 */
+  visionModel?: string;
+  /** @deprecated 使用 lightModel 代替；迁移后保留用于向前兼容 */
+  flashModel?: string;
+  temperature?: number;
+  /**
+   * 思考深度。"none" = 显式关闭思考（实测 deepseek-flash 推理字段归零）；
+   * low/medium/high/max = DeepSeek reasoning_effort 档位（官方可选 none/low/high/max，
+   * medium 由服务端映射为 high）；留空 = 不发该参数（provider 默认）。
+   * ★ 2026-10 官方：thinking 默认开启、默认档位 high；思考模式下 temperature 被忽略。
+   */
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "max";
+  /**
+   * 单次输出预算（max_tokens / max_completion_tokens）。留空 = 按是否 thinking 取默认
+   * （DEFAULT_OUTPUT_TOKENS / THINKING_OUTPUT_TOKENS）。
+   * ★ V4.1 Flash 默认思考，reasoning 与正文【共享】该预算：预算被思考吃光时正文与工具
+   *   调用都会为空（finish_reason="length"）→ 复杂 3D 任务建议 32768。
+   */
+  maxOutputTokens?: number;
+  /**
+   * 单次非流式调用的兜底超时（毫秒）。缺省 = AI_CALL_TIMEOUT_MS（180s）。
+   * 轻量场景（满足度评估/视觉审查）可按次收紧为 90s，避免评估链长时间"AI 思考中"无反馈。
+   * 流式 agentChat SSE 不经过此路径，不受影响。
+   */
+  timeoutMs?: number;
+}
+
+// ──── 输出预算（max_tokens）────
+
+/** 默认输出预算（思维链与正文共享） */
+export const DEFAULT_OUTPUT_TOKENS = 16384;
+/** thinking 模式下的默认输出预算（reasoning 增量大，需额外空间） */
+export const THINKING_OUTPUT_TOKENS = 32768;
+/**
+ * `reasoning_effort="max"` 档的默认输出预算。
+ * ★ 官方：max_tokens 上限 384K；未设置时服务端默认非思考 8K / 思考 64K / **max 档 128K**。
+ *   max 档的推理最长，若沿用小预算会被思考吃光正文（正是「截断」故障的成因），
+ *   因此按官方 max 档默认值 128K 下发。
+ */
+export const MAX_EFFORT_OUTPUT_TOKENS = 131072;
+/** 自动扩容上限（防止向 provider 申请超大 max_tokens 被拒）。
+ *  ★ DeepSeek 现行上限：max_tokens ∈ [1, 384K]，本值只作客户端自保上限。
+ *    取 131072（= max 档服务端默认），既容纳 max 档又不逼近 384K 的硬边界。 */
+export const MAX_OUTPUT_TOKENS = MAX_EFFORT_OUTPUT_TOKENS;
+
+/**
+ * 解析本次调用的输出预算。
+ * 优先级：config.maxOutputTokens（用户配置）> 档位默认（max 档 128K / 其他 thinking 32K）> 普通 16K。
+ * 注意 max_tokens 是【上限】而非计费量——调高不额外花钱，只在实际生成时才计费。
+ */
+export function resolveMaxOutputTokens(
+  config: AIConfig,
+  thinking: boolean,
+  effort?: string | null
+): number {
+  const configured = config.maxOutputTokens && config.maxOutputTokens > 0
+    ? Math.floor(config.maxOutputTokens)
+    : 0;
+  if (configured) return configured;
+  if (!thinking) return DEFAULT_OUTPUT_TOKENS;
+  // max 档推理最长：沿用 32K 会被思考吃光正文，按官方 max 档默认 128K 给
+  return effort === "max" ? MAX_EFFORT_OUTPUT_TOKENS : THINKING_OUTPUT_TOKENS;
+}
+
+/** agentChat 单次调用的参数覆盖（截断重试自动扩容 / 降思考档位用） */
+export interface AgentChatOverrides {
+  /** 直接指定输出预算（优先级最高） */
+  maxTokens?: number;
+  /** 在解析出的预算上乘以倍数（截断重试扩容用）；不会低于原预算，也不超过 MAX_OUTPUT_TOKENS */
+  maxTokensScale?: number;
+  /** 覆盖思考档位；null = 显式关闭思考（GLM 落为 thinking.disabled；缺省沿用 config） */
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "max" | null;
+}
+
+/** 解析实际使用的模型（含回退链） */
+export function resolveModel(config: AIConfig, role: "light" | "heavy" | "agent" | "vision"): string {
+  switch (role) {
+    case "light":
+      return config.lightModel ?? config.flashModel ?? config.model;
+    case "heavy": // 编译/修复/降级 → 主力模型
+      return config.model;
+    case "agent":
+      return config.agentModel ?? config.model;
+    case "vision":
+      return config.visionModel ?? config.model;
+  }
+}
+
+// ──── Provider quirks 适配 ────
+
+export interface ProviderQuirks {
+  /** Agent 模式的 temperature 覆盖（DeepSeek 对温度敏感，低 temp 减少 tool name 幻觉） */
+  agentTemperature?: number;
+  /** Agent 模式首条 user message 是否需要强指令前缀（DeepSeek 对 user-role 遵从度 > system-role） */
+  agentForceUserPrefix?: boolean;
+  /** 单轮最大工具调用数（超出阈值时 system prompt 收紧限制，避免 provider 丢弃后半 tool_calls） */
+  maxToolsPerTurn?: number;
+  /** stream 模式下是否可靠返回 finish_reason（DeepSeek/SiliconFlow 有时缺） */
+  streamsFinishReason?: boolean;
+  /** max tokens 参数字段名（OpenAI o-series 用 max_completion_tokens，其他用 max_tokens） */
+  maxTokensField?: "max_tokens" | "max_completion_tokens";
+  // ── V4+ 扩展 ──
+  /** 是否支持原生 thinking 模式（DeepSeek V4 = true，内嵌非独立 reasoner） */
+  supportsThinking?: boolean;
+  /** thinking 默认档位（V4 通过 reasoning_effort 控制；官方默认 high） */
+  reasoningEffort?: "low" | "medium" | "high" | "max";
+  /** 多轮对话中是否必须把 reasoning_content 原样回传 API（V4 = true，否则 400） */
+  mustRoundtripReasoning?: boolean;
+  /** 上下文窗口 token 数（V4 = 1M，用于压缩策略调参） */
+  contextWindow?: number;
+  /** thinking 开启时 temperature 是否被服务端忽略（DeepSeek V4 = true；
+   *  UI/文档据此说明「低温度防幻觉」在思考模式下不生效） */
+  thinkingIgnoresTemperature?: boolean;
+}
+
+/**
+ * 根据 provider / model 名称返回特定 provider 的行为矫正参数。
+ * 各 LLM 在 Function Calling 上的行为差异较大，这里集中适配。
+ */
+export function getProviderQuirks(config: AIConfig): ProviderQuirks {
+  const fingerprint = [
+    (config.provider ?? "").toLowerCase(),
+    (config.model ?? "").toLowerCase(),
+    (config.agentModel ?? "").toLowerCase(),
+  ].join(" ");
+
+  // DeepSeek V4 全系：thinking 内嵌 + reasoning_content 需回传
+  // （官方：带 tools 的请求必须完整回传 reasoning_content，否则 400；
+  //  thinking 模式下 tool_choice=required / 指定工具会 400，故项目不使用 tool_choice）
+  if (/deepseek/.test(fingerprint)) {
+    return {
+      agentTemperature: 0.05,
+      agentForceUserPrefix: true,
+      maxToolsPerTurn: 4,      // DeepSeek 单轮 >4 个 tool 时后半易丢失
+      streamsFinishReason: false,
+      supportsThinking: true,          // V4 原生 thinking
+      reasoningEffort: "high",         // 官方默认档位
+      mustRoundtripReasoning: true,    // ★ 多轮必须回传 reasoning_content
+      contextWindow: 1_000_000,        // V4 百万上下文
+      thinkingIgnoresTemperature: true, // 官方：thinking 模式不支持 temperature
+    };
+  }
+
+  // 智谱 GLM（glm-4.5/4.6/5.x 全系，OpenAI 兼容端点 /api/paas/v4）
+  // - thinking 参数形态与 DeepSeek 不同，经 buildThinkingParam 翻译为 thinking:{type}
+  // - GLM 默认开启思考；reasoning_content 流式返回但多轮无需回传（与 DeepSeek V4 相反）
+  if (/zhipu|bigmodel|glm/.test(fingerprint)) {
+    return {
+      streamsFinishReason: true,
+      supportsThinking: true,
+      mustRoundtripReasoning: false,
+    };
+  }
+
+  // 默认：标准 OpenAI 行为
+  return { streamsFinishReason: true };
+}
+
+/** 智谱 GLM 检测（provider 名 / baseURL / 模型名任一命中） */
+export function isZhipuProvider(config: AIConfig): boolean {
+  const fp = [
+    (config.provider ?? "").toLowerCase(),
+    (config.baseURL ?? "").toLowerCase(),
+    (config.model ?? "").toLowerCase(),
+  ].join(" ");
+  return /zhipu|bigmodel|glm/.test(fp);
+}
+
+/** 检测是否为 DeepSeek 官方端点（provider / baseURL / 模型名任一命中） */
+export function isDeepSeek(config: AIConfig): boolean {
+  // ★ 只看 provider / baseURL / 主力与 Agent 模型名：视觉/轻量模型可能填的是别家名字
+  const fp = [
+    (config.provider ?? "").toLowerCase(),
+    (config.baseURL ?? "").toLowerCase(),
+    (config.model ?? "").toLowerCase(),
+    (config.agentModel ?? "").toLowerCase(),
+  ].join(" ");
+  return /deepseek/.test(fp);
+}
+
+/**
+ * 按 provider 构造 thinking 控制参数（chat / chatRaw / agentChat 共用）。
+ *
+ * - 智谱 GLM：`thinking: { type }`。GLM 4.5+ 默认开启思考，未设置或 "none" 时必须显式
+ *   disabled 对齐「关闭 = baseline」语义（实测：默认思考会吃光输出预算）；
+ *   设置 low/medium/high → enabled（GLM 无档位，二元开关）。
+ * - DeepSeek V4（官方 2026-10 文档）：thinking 默认【开启】，默认档位 high。两种控制方式：
+ *     · `thinking: { type: "enabled" | "disabled" }` —— 二元开关
+ *     · `reasoning_effort: "none" | "low" | "high" | "max"` —— 档位（medium→high、minimal→low）
+ *   本项目统一用 `reasoning_effort`（v1.8 起实测 "none" 推理归零，路径已验证）：
+ *     显式关闭 → "none"；档位 → 原样下发，其中 medium 显式归一为 "high"
+ *     （服务端本就把 medium 映射成 high，显式归一避免「中档」的语义误解）。
+ *   ★ 未设置 = 显式关闭（`reasoning_effort: "none"`），不再「跟随 provider 默认」：
+ *     官方默认是「开 + high」，而 A/B 实测 high 端到端 −8.3%，且思考开着时 temperature
+ *     被忽略（Agent 的 0.05 低温度防幻觉失效）——默认关闭才是本项目想要的行为。
+ *     要开启思考必须在设置面板显式选择档位，语义由「opt-in」而非「opt-out」。
+ * - 其他 provider：null（不发任何参数，保持各家的既有默认）。
+ */
+export function buildThinkingParam(config: AIConfig): Record<string, unknown> | null {
+  const effort = config.reasoningEffort;
+  if (isZhipuProvider(config)) {
+    return { thinking: { type: effort && effort !== "none" ? "enabled" : "disabled" } };
+  }
+  if (isDeepSeek(config) && getProviderQuirks(config).supportsThinking === true) {
+    // 未设置 → 显式关闭思考（对齐 A/B 结论与 temperature 生效前提）
+    return { reasoning_effort: effort === "medium" ? "high" : (effort || "none") };
+  }
+  if (effort && getProviderQuirks(config).supportsThinking) {
+    return { reasoning_effort: effort };   // 其他声明支持 thinking 的 provider
+  }
+  return null;
+}
+
+/** 多模态内容片段（OpenAI Vision API 兼容格式） */
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+/** 传统纯文本消息（Phase 1/2 使用），content 支持字符串或多模态片段 */
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string | ContentPart[];
+}
+
+/**
+ * 支持 Function Calling 的扩展消息类型。
+ * assistant 可携带 tool_calls；tool 角色携带 tool_call_id。
+ *
+ * ★ content 支持多模态片段（ContentPart[]）：带图轮的首条 user 消息把原题图片
+ *   一并交给 Agent，让构造过程中能"回看原图"核对几何关系——否则图片像素信息
+ *   在视觉识别转写成文字后就丢失了（见 AGENTS.md「多模态题目识别」）。
+ *   注意：DeepSeek 官方限制图片只能出现在 user 消息（system/assistant 带图 = 400）。
+ */
+export interface AgentMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | ContentPart[] | null;
+  tool_calls?: ToolCallDelta[];
+  tool_call_id?: string;
+  name?: string;
+  /** V4 thinking 模式的推理过程。多轮对话中必须原样回传（mustRoundtripReasoning） */
+  reasoning_content?: string;
+}
+
+/** 把 AgentMessage.content 归一为纯文本（多模态时拼接 text 片段，图片替换为占位符）。
+ *  用于上下文摘要、日志、长度判断、轨迹分析等没有图片语义的场合。 */
+export function contentToText(content: AgentMessage["content"]): string {
+  if (content === null || content === undefined) return "";
+  if (typeof content === "string") return content;
+  return content
+    .map(p => (p.type === "text" ? p.text : "[图片]"))
+    .join("\n")
+    .trim();
+}
+
+export interface ToolCallDelta {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string; // JSON 字符串
+  };
+}
+
+/** agentChat 的返回：可能是纯文本，也可能是一组工具调用 */
+export interface AgentResponse {
+  /** 纯文本回复（无工具调用时） */
+  content: string | null;
+  /** 工具调用列表（AI 要求执行的操作） */
+  toolCalls: ToolCallDelta[];
+  /** SSE 流的 finish_reason："stop" | "length" | "tool_calls" | "content_filter" | null */
+  finishReason: string | null;
+  /** V4 thinking 模式的推理过程（多轮回传用） */
+  reasoningContent?: string;
+  /** 本次调用 token 用量（provider 返回 usage 时）。reasoning = 其中的思考 token 数；
+   *  cacheHit = 命中服务端前缀缓存（KV Cache）的输入 token 数（DeepSeek 提供） */
+  usage?: { prompt: number; completion: number; reasoning?: number; cacheHit?: number };
+}
+
+// ──── 错误类型 ────
+
+/** 网络 / HTTP / 鉴权类错误。重试无意义，应直接展示。 */
+export class AIError extends Error {
+  constructor(message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = "AIError";
+  }
+}
+
+/**
+ * AI 返回了内容，但 JSON 解析或 schema 校验失败。
+ * 携带原始 raw 与诊断信息，调用方可把这些反馈给模型让它重发。
+ */
+export class AISchemaError extends Error {
+  constructor(
+    /** 给用户/模型看的简短描述 */
+    message: string,
+    /** AI 这一轮的原始输出（已去 code fence） */
+    public readonly raw: string,
+    /** 具体校验失败原因（JSON 解析报错 / zod issues 摘要） */
+    public readonly detail: string
+  ) {
+    super(message);
+    this.name = "AISchemaError";
+  }
+}
+
+// ──── 通用 HTTP 调用 ────
+
+interface ChatCompletionResponse {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+      reasoning_content?: string | null; // V4 thinking 推理过程
+      tool_calls?: Array<{
+        id: string;
+        type: "function";
+        function: { name: string; arguments: string };
+      }>;
+    };
+    finish_reason?: string;
+  }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    /** KV Cache：本次输入中命中服务端前缀缓存的 token 数 */
+    prompt_cache_hit_tokens?: number;
+    /** KV Cache：本次输入中未命中的 token 数 */
+    prompt_cache_miss_tokens?: number;
+    /** prompt 明细（DeepSeek：cached_tokens 与 prompt_cache_hit_tokens 同值；OpenAI 风格字段） */
+    prompt_tokens_details?: { cached_tokens?: number } | null;
+    /** completion 明细（官方 schema：reasoning_tokens = 思维链 token 数） */
+    completion_tokens_details?: { reasoning_tokens?: number } | null;
+  };
+}
+
+/** 非流式 AI 调用兜底超时（毫秒）：正常生成 5~60s，慢供应商/thinking 最长 ~2 分钟；
+ *  超过视为连接挂起，主动中断——实测一轮评估修复链最坏 ≈19 次顺序调用，单次挂起会把整轮无限拖住。
+ *  仅用于 callAPI/ping 非流式路径；流式 agentChat 的 SSE 长流不适用。 */
+export const AI_CALL_TIMEOUT_MS = 180_000;
+
+/** 给外部 signal 叠加一层超时：返回的 signal 在「外部中止」或「超时」时任一触发；
+ *  调用方必须在结束后调用 done() 清理定时器与监听（否则定时器泄漏 keep-alive）。 */
+export function withCallTimeout(
+  signal: AbortSignal | undefined,
+  ms: number
+): { signal: AbortSignal; done: () => void } {
+  const ctrl = new AbortController();
+  if (signal?.aborted) {
+    ctrl.abort(signal.reason);
+    return { signal: ctrl.signal, done: () => {} };
+  }
+  const onOuterAbort = () => ctrl.abort(signal?.reason);
+  if (signal) signal.addEventListener("abort", onOuterAbort, { once: true });
+  const timer = setTimeout(
+    () => ctrl.abort(new DOMException(`AI 调用超时（${Math.round(ms / 1000)}s 无响应，已中断）`, "TimeoutError")),
+    ms
+  );
+  return {
+    signal: ctrl.signal,
+    done: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onOuterAbort);
+    },
+  };
+}
+
+/** 发起 chat/completions POST 请求，统一处理网络 / HTTP 错误，返回 Response（兼容流式） */
+async function fetchCompletion(
+  config: AIConfig,
+  body: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<Response> {
+  const baseURL = config.baseURL.replace(/\/+$/, "");
+  const url = `${baseURL}/chat/completions`;
+
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.apiKey}`
+      },
+      body: JSON.stringify(body),
+      signal
+    });
+  } catch (err) {
+    throw new AIError(
+      err instanceof Error ? `网络错误：${err.message}` : "网络错误",
+      err
+    );
+  }
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new AIError(`HTTP ${resp.status} ${resp.statusText} ${text.slice(0, 300)}`);
+  }
+  return resp;
+}
+
+async function callAPI(
+  config: AIConfig,
+  body: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<ChatCompletionResponse> {
+  // ★ 非流式调用兜底超时：挂起连接曾把评估修复链整体拖住（见 withCallTimeout 注释）。
+  //   config.timeoutMs 允许调用方按场景收紧（如满足度评估 90s——轻模型小输出，
+  //   实测空响应重试 × 180s 最坏会挂 6 分钟且用户无感知）。
+  const t = withCallTimeout(signal, config.timeoutMs ?? AI_CALL_TIMEOUT_MS);
+  try {
+    const resp = await fetchCompletion(config, body, t.signal);
+    try {
+      return (await resp.json()) as ChatCompletionResponse;
+    } catch (err) {
+      throw new AIError("响应不是合法 JSON", err);
+    }
+  } finally {
+    t.done();
+  }
+}
+
+// ──── Provider 能力检测 ────
+
+export interface ProviderCapabilities {
+  /** 是否支持 response_format json_schema（优于 json_object，约束更强） */
+  jsonSchema: boolean;
+}
+
+/**
+ * 检测 provider 是否支持结构化输出（json_schema）。
+ * OpenAI / DeepSeek / GLM / Moonshot / SiliconFlow / Zhipu 系均已支持，
+ * Ollama 等本地模型不支持。
+ */
+export function getProviderCapabilities(config: AIConfig): ProviderCapabilities {
+  const fp = [
+    (config.provider ?? "").toLowerCase(),
+    (config.baseURL ?? "").toLowerCase(),
+  ].join(" ");
+  // 已知支持 json_schema 的 provider 名单
+  // ★ DeepSeek 官方 response_format 仅支持 text / json_object（无 json_schema）
+  //    → DeepSeek 走保守降级 json_object（chat() 内若 json_schema 400 也会自动回退）
+  if (/openai|glm|moonshot|zhipu|siliconflow|api\.together|fireworks/.test(fp)) {
+    return { jsonSchema: true };
+  }
+  return { jsonSchema: false };
+}
+
+// ──── Structured Output JSON Schema（Phase 2 编译输出） ────
+
+/**
+ * AIResponse 的简化 JSON Schema，用于 response_format json_schema 约束。
+ * 只描述结构骨架——详细校验（slider min<max、数值合理性、命令黑名单等）仍由 Zod 负责。
+ * 目的：大幅减少 JSON 格式错误（缺括号、key 拼写、类型漂移），降低 AISchemaError 重试率。
+ */
+const AI_RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    explanation: { type: "string", description: "操作说明，≤500 字" },
+    commands: {
+      type: "array",
+      description: "GGB 命令列表，≤64 条",
+      items: {
+        type: "object",
+        properties: {
+          op: {
+            type: "string",
+            enum: ["eval", "slider", "animate", "trace", "style", "view",
+                   "caption", "delete", "reset", "vector", "forceDiagram",
+                   "physicsTrace", "unitAxes", "constants"]
+          }
+        },
+        required: ["op"]
+      }
+    },
+    ask: { type: "string", description: "反问用户的内容（与 commands 互斥，有此字段时 commands 为空数组）" },
+    self_check: { type: "string", description: "AI 自检报告，≤400 字" }
+  },
+  required: ["explanation", "commands"],
+  additionalProperties: false
+};
+
+// ──── 传统 JSON 模式 ────
+
+/**
+ * 调用 OpenAI 兼容的 chat completions 接口（优先 json_schema 结构化输出，降级 json_object）。
+ * 网络 / 鉴权问题抛 AIError；JSON / schema 问题抛 AISchemaError（可重试）。
+ * @param onUsage 可选：回传本次调用的 token 用量（AB 测试统计成本用）
+ */
+export async function chat(
+  config: AIConfig,
+  messages: ChatMessage[],
+  signal?: AbortSignal,
+  modelOverride?: string,
+  onUsage?: (usage: { prompt: number; completion: number; reasoning?: number; cacheHit?: number }) => void
+): Promise<AIResponseT> {
+  const caps = getProviderCapabilities(config);
+  const body: Record<string, unknown> = {
+    model: modelOverride ?? config.model,
+    messages,
+    temperature: config.temperature ?? 0.2,
+    stream: false
+  };
+  // ★ 输出预算：仅在用户显式配置时下发（Phase 2 大命令 JSON 防截断；未配置沿用 provider 默认）
+  if (config.maxOutputTokens && config.maxOutputTokens > 0) {
+    body[getProviderQuirks(config).maxTokensField ?? "max_tokens"] = config.maxOutputTokens;
+  }
+
+  // ★ 思考深度：经 buildThinkingParam 按 provider 翻译（DeepSeek=reasoning_effort / GLM=thinking.type）
+  const thinking = buildThinkingParam(config);
+  if (thinking) Object.assign(body, thinking);
+
+  // ★ 优先 json_schema（结构化约束更强），降级 json_object
+  const usedJsonSchema = caps.jsonSchema;
+  if (usedJsonSchema) {
+    body.response_format = {
+      type: "json_schema",
+      json_schema: {
+        name: "ai_response",
+        strict: false,   // false 以兼容 optional 字段 + discriminatedUnion
+        schema: AI_RESPONSE_JSON_SCHEMA
+      }
+    };
+  } else {
+    body.response_format = { type: "json_object" };
+  }
+
+  // ★ 运行时降级：部分 provider（如 DeepSeek v4-flash）声明支持但端点实际返回 400
+  //    "response_format type unavailable" → 回退 json_object 重试一次
+  let data: ChatCompletionResponse;
+  try {
+    data = await callAPI(config, body, signal);
+  } catch (err) {
+    if (usedJsonSchema && err instanceof AIError && /400/.test(err.message)) {
+      console.warn("[aiClient] json_schema 请求被拒（400），回退 json_object 重试");
+      body.response_format = { type: "json_object" };
+      data = await callAPI(config, body, signal);
+    } else {
+      throw err;
+    }
+  }
+
+  const raw = data.choices?.[0]?.message?.content ?? "";
+  if (!raw) {
+    throw new AISchemaError("AI 响应为空", raw, "choices[0].message.content 为空");
+  }
+
+  // 模型偶尔仍会用 ```json 包裹，做一次容错剥离
+  const cleaned = stripCodeFence(raw);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch (e) {
+    throw new AISchemaError(
+      "AI 返回的不是合法 JSON",
+      cleaned,
+      e instanceof Error ? e.message : "JSON.parse 失败"
+    );
+  }
+
+  const result = AIResponse.safeParse(parsed);
+  if (!result.success) {
+    throw new AISchemaError(
+      "AI 输出不符合 schema",
+      cleaned,
+      formatZodError(result.error)
+    );
+  }
+
+  // ★ token 用量回传（AB 测试统计 thinking 成本；reasoning/cacheHit 见 AgentResponse.usage）
+  if (onUsage && data.usage) {
+    onUsage({
+      prompt: data.usage.prompt_tokens ?? 0,
+      completion: data.usage.completion_tokens ?? 0,
+      reasoning: data.usage.completion_tokens_details?.reasoning_tokens,
+      cacheHit: data.usage.prompt_cache_hit_tokens ?? data.usage.prompt_tokens_details?.cached_tokens
+    });
+  }
+  return result.data;
+}
+
+// ──── Function Calling（工具调用）模式 ────
+
+/** SSE 流式分块的最小结构（用于增量解析 tool_calls） */
+interface StreamChunk {
+  choices?: Array<{
+    delta?: {
+      content?: string | null;
+      reasoning_content?: string | null; // V4 thinking 推理过程（流式增量）
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        type?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+    finish_reason?: string | null;
+  }>;
+  /** 流式 token 用量（需请求 stream_options.include_usage=true，出现在最后一块） */
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    /** 思考 token 明细（部分 provider 提供，如 DeepSeek：reasoning_tokens） */
+    completion_tokens_details?: { reasoning_tokens?: number } | null;
+    /** KV Cache 命中/未命中明细（DeepSeek 提供） */
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
+    /** prompt 明细（cached_tokens 兜底字段，OpenAI 风格） */
+    prompt_tokens_details?: { cached_tokens?: number } | null;
+  } | null;
+}
+
+/**
+ * 发送带工具定义的【流式】对话请求，返回 AI 的文本回复或工具调用请求。
+ * - stream:true + SSE 增量解析，content 经 onContent 实时回调（UI 展示减少等待）
+ * - V4 thinking：reasoning_content 增量经 onReasoning 实时回调（UI 展示思考过程）
+ * - tool_calls 按 delta.index 累积合并为完整 JSON 字符串
+ * - 不使用 response_format: json_object（与 tools 不兼容）
+ * - 兼容回退：部分 provider 忽略 stream:true 返回普通 JSON → 自动按 JSON 解析
+ */
+export async function agentChat(
+  config: AIConfig,
+  messages: AgentMessage[],
+  tools: ToolDefinition[],
+  signal?: AbortSignal,
+  modelOverride?: string,
+  onContent?: (text: string) => void,
+  onReasoning?: (text: string) => void,
+  overrides?: AgentChatOverrides
+): Promise<AgentResponse> {
+  const quirks = getProviderQuirks(config);
+  const maxTokField = quirks.maxTokensField ?? "max_tokens";
+  // ★ 输出预算/思考档位可覆盖：截断重试必须改变条件（扩容 + 降档），
+  //   否则同参数重试必然再次被同样截断（见 agentLoop「情况 2」）
+  const reasoningEffort = overrides?.reasoningEffort !== undefined
+    ? overrides.reasoningEffort
+    : config.reasoningEffort;
+  const thinkingOn = !!reasoningEffort && reasoningEffort !== "none" && quirks.supportsThinking === true;
+  const baseBudget = resolveMaxOutputTokens(config, thinkingOn, reasoningEffort);
+  const scaledBudget = Math.round(baseBudget * (overrides?.maxTokensScale ?? 1));
+  const maxTokens = overrides?.maxTokens
+    ?? Math.max(baseBudget, Math.min(scaledBudget, MAX_OUTPUT_TOKENS));
+  const body: Record<string, unknown> = {
+    model: modelOverride ?? config.model,
+    messages,
+    tools,
+    // ★ DeepSeek 对温度敏感，低 temp 减少 tool name 拼写幻觉，同时不抑制多样性。
+    //   注意（官方 2026-10）：thinking 模式下 temperature 被服务端忽略（不报错但无效），
+    //   即「关闭思考」是低温度防幻觉真正生效的前提。
+    temperature: quirks.agentTemperature ?? config.temperature ?? 0.2,
+    stream: true,
+    // ★ 流式也要 token 统计（usage 在最后一块返回）
+    stream_options: { include_usage: true },
+    // 工具 JSON 参数可能较长（create_parametric / eval_raw / eval_sequence），给足空间防截断
+    // ★ thinking 模式下 reasoning tokens 也占用输出预算，需额外空间
+    [maxTokField]: maxTokens
+  };
+  // ★ 思考深度（Agent 模式同样生效；经 buildThinkingParam 按 provider 翻译）
+  const thinkingConfig: AIConfig = reasoningEffort === config.reasoningEffort
+    ? config
+    : { ...config, reasoningEffort: reasoningEffort ?? undefined };
+  const thinkingParam = buildThinkingParam(thinkingConfig);
+  if (thinkingParam) Object.assign(body, thinkingParam);
+
+  const resp = await fetchCompletion(config, body, signal);
+
+  // ★ 兼容回退：provider 忽略 stream:true 时返回 application/json
+  const contentType = resp.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json") && !contentType.includes("text/event-stream")) {
+    const data = (await resp.json()) as ChatCompletionResponse;
+    const msg = data.choices?.[0]?.message;
+    const content = msg?.content ?? null;
+    const finishReason = data.choices?.[0]?.finish_reason ?? null;
+    const toolCalls: ToolCallDelta[] = (msg?.tool_calls ?? []).map(tc => ({
+      id: tc.id,
+      type: "function",
+      function: { name: tc.function.name, arguments: tc.function.arguments }
+    }));
+    if (onContent && content) onContent(content);
+    const reasoning = msg?.reasoning_content ?? undefined;
+    if (onReasoning && reasoning) onReasoning(reasoning);
+    const fallbackUsage = data.usage
+      ? {
+          prompt: data.usage.prompt_tokens ?? 0,
+          completion: data.usage.completion_tokens ?? 0,
+          reasoning: data.usage.completion_tokens_details?.reasoning_tokens,
+          cacheHit: data.usage.prompt_cache_hit_tokens ?? data.usage.prompt_tokens_details?.cached_tokens
+        }
+      : undefined;
+    return { content, toolCalls, finishReason, reasoningContent: reasoning, usage: fallbackUsage };
+  }
+
+  if (!resp.body) {
+    throw new AIError("响应无流（当前环境不支持流式读取）");
+  }
+
+  // ★ SSE 流式解析：累积 content + 按 index 合并 tool_calls
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let reasoningContent = "";
+  const toolCalls: ToolCallDelta[] = [];
+  let finishReason: string | null = null;
+  let usage: { prompt: number; completion: number; reasoning?: number; cacheHit?: number } | undefined;
+
+  const handleLine = (line: string): void => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === "[DONE]") return;
+
+    let chunk: StreamChunk;
+    try {
+      chunk = JSON.parse(data) as StreamChunk;
+    } catch {
+      return; // 跳过无法解析的分块
+    }
+
+    // ★ 捕获 finish_reason（通常在最后一块的 choice 级别）
+    const choiceFinish = chunk.choices?.[0]?.finish_reason;
+    if (choiceFinish) finishReason = choiceFinish;
+
+    // ★ 捕获流式 usage（include_usage 时在最后一块返回）
+    //   completion_tokens_details.reasoning_tokens = 思考占用的输出 token（与正文共享预算）
+    //   prompt_cache_hit_tokens / prompt_tokens_details.cached_tokens = KV Cache 命中输入 token
+    if (chunk.usage) {
+      usage = {
+        prompt: chunk.usage.prompt_tokens ?? 0,
+        completion: chunk.usage.completion_tokens ?? 0,
+        reasoning: chunk.usage.completion_tokens_details?.reasoning_tokens,
+        cacheHit: chunk.usage.prompt_cache_hit_tokens ?? chunk.usage.prompt_tokens_details?.cached_tokens
+      };
+    }
+
+    const delta = chunk.choices?.[0]?.delta;
+    if (!delta) return;
+
+    if (typeof delta.content === "string" && delta.content.length > 0) {
+      content += delta.content;
+      onContent?.(delta.content);
+    }
+
+    // ★ V4 thinking：累积 reasoning_content（多轮需回传），增量经 onReasoning 实时展示
+    if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
+      reasoningContent += delta.reasoning_content;
+      onReasoning?.(delta.reasoning_content);
+    }
+
+    if (Array.isArray(delta.tool_calls)) {
+      for (const tc of delta.tool_calls) {
+        const idx = typeof tc.index === "number" ? tc.index : 0;
+        let cur = toolCalls[idx];
+        if (!cur) {
+          cur = { id: tc.id ?? `call_${idx}`, type: "function", function: { name: "", arguments: "" } };
+          toolCalls[idx] = cur;
+        }
+        if (tc.id) cur.id = tc.id;
+        if (tc.function?.name) cur.function.name += tc.function.name;
+        if (tc.function?.arguments) cur.function.arguments += tc.function.arguments;
+      }
+    }
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? ""; // 末尾可能是不完整行，留到下一块
+      for (const line of lines) handleLine(line);
+    }
+    if (buffer) {
+      buffer += decoder.decode(); // flush 解码器残留
+      for (const line of buffer.split("\n")) handleLine(line);
+    }
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    throw new AIError("流式响应中断", err);
+  }
+
+  const finalToolCalls = toolCalls.filter(tc => tc.function.name.trim().length > 0);
+
+  // ★ 诊断：空响应时记录详细信息便于排查（尤以 finish_reason="length" + reasoning
+  //   有量 → 输出预算被思考吃光，见 agentLoop 截断重试）
+  if (!content && finalToolCalls.length === 0) {
+    console.warn(
+      `[agentChat] ${getTraceId()} 空响应: finishReason=${finishReason || "无"}, ` +
+      `rawToolCalls=${toolCalls.length}, msgCount=${messages.length}, ` +
+      `model=${modelOverride ?? config.model}, ` +
+      `reasoningChars=${reasoningContent.length}, ` +
+      `completionTokens=${usage?.completion ?? "?"}/${maxTokens}（其中推理 ${usage?.reasoning ?? "?"}）`
+    );
+  }
+
+  return { content: content || null, toolCalls: finalToolCalls, finishReason, reasoningContent: reasoningContent || undefined, usage };
+}
+
+// ──── Phase 1 精炼（纯文本） ────
+
+/**
+ * Phase 1 精炼调用——无 schema 校验，返回纯文本。
+ * 用于意图 → 精炼规格阶段（输出自然语言，不是命令 JSON）。
+ */
+export async function chatRaw(
+  config: AIConfig,
+  messages: ChatMessage[],
+  signal?: AbortSignal,
+  modelOverride?: string,
+  maxTokens?: number,
+  /** 约束 AI 输出为 JSON（用于 Phase 1 精炼和满足度评估，降低非 JSON 输出率） */
+  jsonMode?: boolean,
+  /** 可选：回传本次调用 token 用量（统计用；reasoning = 思维链 token，cacheHit = KV Cache 命中） */
+  onUsage?: (usage: { prompt: number; completion: number; reasoning?: number; cacheHit?: number }) => void
+): Promise<string> {
+  const body: Record<string, unknown> = {
+    model: modelOverride ?? config.model,
+    messages,
+    temperature: config.temperature ?? 0.2,
+    stream: false
+  };
+
+  // ★ 输出预算：显式参数 > 配置（maxOutputTokens）> JSON 模式默认 4096
+  const effectiveMax = maxTokens ?? (config.maxOutputTokens && config.maxOutputTokens > 0 ? config.maxOutputTokens : undefined);
+  if (effectiveMax) body.max_tokens = effectiveMax;
+  if (jsonMode) {
+    body.response_format = { type: "json_object" };
+    // ★ V4 文档明确要求：json_object 模式需合理设置 max_tokens 防 JSON 被截断
+    //    未显式传入时给 4K 默认（Phase 1 规格 / 满足度评估输出均远小于此）
+    if (!body.max_tokens) body.max_tokens = 4096;
+  }
+  // ★ 思考深度：经 buildThinkingParam 按 provider 翻译（DeepSeek=reasoning_effort / GLM=thinking.type）
+  const thinkingParam = buildThinkingParam(config);
+  if (thinkingParam) Object.assign(body, thinkingParam);
+
+  const data = await callAPI(config, body, signal);
+
+  if (onUsage && data.usage) {
+    onUsage({
+      prompt: data.usage.prompt_tokens ?? 0,
+      completion: data.usage.completion_tokens ?? 0,
+      reasoning: data.usage.completion_tokens_details?.reasoning_tokens,
+      cacheHit: data.usage.prompt_cache_hit_tokens ?? data.usage.prompt_tokens_details?.cached_tokens
+    });
+  }
+  return data.choices?.[0]?.message?.content ?? "";
+}
+
+// ──── 连接测试 ────
+
+/**
+ * 简单的连接测试：让模型返回 {"ok": true}。
+ * 不强制 schema，只要 200 + 非空内容即视作通过。
+ */
+export async function ping(config: AIConfig, signal?: AbortSignal, modelOverride?: string): Promise<void> {
+  const baseURL = config.baseURL.replace(/\/+$/, "");
+  // ★ 连接测试同样兜底超时（设置面板「测试连接」不应无限转圈）
+  const t = withCallTimeout(signal, AI_CALL_TIMEOUT_MS);
+  try {
+    const resp = await fetch(`${baseURL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.apiKey}`
+      },
+      body: JSON.stringify({
+        model: modelOverride ?? config.model,
+        messages: [
+          { role: "system", content: "Reply with the JSON {\"ok\":true} only." },
+          { role: "user", content: "ping" }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0,
+        max_tokens: 20
+      }),
+      signal: t.signal
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      throw new AIError(`HTTP ${resp.status} ${text.slice(0, 200)}`);
+    }
+  } finally {
+    t.done();
+  }
+}
+
+// ──── 工具 ────
+
+function stripCodeFence(s: string): string {
+  // 先剥离 BOM 与首尾空白，再尝试去除 ```json 代码块
+  const t = s.replace(/^\uFEFF/, "").trim();
+  const m = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return m ? m[1].trim() : t;
+}

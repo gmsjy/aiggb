@@ -1,0 +1,72 @@
+[
+  {
+    "id": "P1",
+    "prompt": "画斜抛运动：初速度 v0 和仰角 θ 用滑块可调，显示理论轨迹曲线、运动点及其速度矢量，运动点留下轨迹痕迹，播放动画",
+    "refineMs": 3014,
+    "specLen": 568,
+    "compileMs": 2684,
+    "ok": true,
+    "rounds": 1,
+    "cmdCount": 19,
+    "corrections": [],
+    "warnings": [],
+    "issues": [],
+    "hasSelfCheck": true
+  },
+  {
+    "id": "P4",
+    "prompt": "画单摆小角度摆动：摆长 L 和最大摆角用滑块可调，摆球绕悬点往复摆动，留下摆球轨迹，播放动画",
+    "refineMs": 2896,
+    "specLen": 535,
+    "compileMs": 3347,
+    "ok": true,
+    "rounds": 1,
+    "cmdCount": 27,
+    "corrections": [],
+    "warnings": [],
+    "issues": [],
+    "hasSelfCheck": true
+  },
+  {
+    "id": "P6",
+    "prompt": "画匀速圆周运动：半径 r 和周期 T 用滑块可调，质点沿圆周运动，画出圆轨迹、半径、切向速度矢量和指向圆心的向心加速度矢量，播放动画",
+    "refineMs": 2866,
+    "specLen": 596,
+    "compileMs": 5104,
+    "ok": true,
+    "rounds": 2,
+    "cmdCount": 22,
+    "corrections": [],
+    "warnings": [],
+    "issues": [],
+    "hasSelfCheck": true
+  },
+  {
+    "id": "P7",
+    "prompt": "画斜面上的物体受力分析：物体沿斜面滑动，画出重力、支持力、摩擦力三个矢量跟随物体移动，并标注 G=mg",
+    "refineMs": 4749,
+    "specLen": 995,
+    "compileMs": 4586,
+    "ok": true,
+    "rounds": 1,
+    "cmdCount": 41,
+    "corrections": [],
+    "warnings": [],
+    "issues": [],
+    "hasSelfCheck": true
+  },
+  {
+    "id": "P10",
+    "prompt": "画机械波传播演示：振幅和波长用滑块可调，正弦波形随时间向右推进，其中一个介质质点只在平衡位置附近上下振动并留下振动轨迹",
+    "refineMs": 3753,
+    "specLen": 651,
+    "compileMs": 3074,
+    "ok": true,
+    "rounds": 1,
+    "cmdCount": 29,
+    "corrections": [],
+    "warnings": [],
+    "issues": [],
+    "hasSelfCheck": true
+  }
+]

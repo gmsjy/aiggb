@@ -1,0 +1,191 @@
+{
+  "commands": [
+    {
+      "op": "slider",
+      "name": "a",
+      "min": 1,
+      "max": 6,
+      "step": 0.1,
+      "value": 3,
+      "unit": "",
+      "label": "边长"
+    },
+    {
+      "op": "slider",
+      "name": "alpha",
+      "min": 0,
+      "max": 6.2832,
+      "step": 0.02,
+      "value": 0,
+      "unit": "rad",
+      "label": "旋转角"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 10,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "eval",
+      "cmd": "A=(0,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B=(a,0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "cube=Cube(A,B)"
+    },
+    {
+      "op": "style",
+      "target": "cube",
+      "color": "#90CAF9",
+      "opacity": 0.3
+    },
+    {
+      "op": "eval",
+      "cmd": "axisAB=Line(A,B)"
+    },
+    {
+      "op": "style",
+      "target": "axisAB",
+      "color": "#FB8C00",
+      "thickness": 2,
+      "dashed": true
+    },
+    {
+      "op": "eval",
+      "cmd": "cubeRot=Rotate(cube,alpha,axisAB)"
+    },
+    {
+      "op": "style",
+      "target": "cubeRot",
+      "color": "#1565C0",
+      "thickness": 2
+    },
+    {
+      "op": "eval",
+      "cmd": "C=(a,a,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Dc=(0,a,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "A1=(0,0,a)"
+    },
+    {
+      "op": "eval",
+      "cmd": "B1=(a,0,a)"
+    },
+    {
+      "op": "eval",
+      "cmd": "C1=(a,a,a)"
+    },
+    {
+      "op": "eval",
+      "cmd": "D1=(0,a,a)"
+    },
+    {
+      "op": "style",
+      "target": "A",
+      "color": "#E53935",
+      "pointSize": 5
+    },
+    {
+      "op": "style",
+      "target": "B",
+      "color": "#E53935",
+      "pointSize": 5
+    },
+    {
+      "op": "style",
+      "target": "C",
+      "color": "#E53935",
+      "pointSize": 5
+    },
+    {
+      "op": "style",
+      "target": "D",
+      "color": "#E53935",
+      "pointSize": 5
+    },
+    {
+      "op": "style",
+      "target": "A1",
+      "color": "#E53935",
+      "pointSize": 5
+    },
+    {
+      "op": "style",
+      "target": "B1",
+      "color": "#E53935",
+      "pointSize": 5
+    },
+    {
+      "op": "style",
+      "target": "C1",
+      "color": "#E53935",
+      "pointSize": 5
+    },
+    {
+      "op": "style",
+      "target": "D1",
+      "color": "#E53935",
+      "pointSize": 5
+    },
+    {
+      "op": "eval",
+      "cmd": "Text(\"A\",A)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Text(\"B\",B)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Text(\"C\",C)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Text(\"Dc\",Dc)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Text(\"A1\",A1)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Text(\"B1\",B1)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Text(\"C1\",C1)"
+    },
+    {
+      "op": "eval",
+      "cmd": "Text(\"D1\",D1)"
+    },
+    {
+      "op": "view",
+      "xmin": -2,
+      "xmax": 6,
+      "ymin": -4,
+      "ymax": 4
+    },
+    {
+      "op": "animate",
+      "target": "alpha",
+      "speed": 0.3,
+      "on": true,
+      "repeat": "increasing"
+    }
+  ]
+}

@@ -1,0 +1,136 @@
+{
+  "commands": [
+    {
+      "op": "slider",
+      "name": "r",
+      "min": 0.5,
+      "max": 5,
+      "step": 0.1,
+      "value": 2,
+      "unit": "m",
+      "label": "半径"
+    },
+    {
+      "op": "slider",
+      "name": "T",
+      "min": 1,
+      "max": 10,
+      "step": 0.1,
+      "value": 4,
+      "unit": "s",
+      "label": "周期"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 10,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "eval",
+      "cmd": "omega=2*pi/T"
+    },
+    {
+      "op": "eval",
+      "cmd": "vMag=r*omega"
+    },
+    {
+      "op": "eval",
+      "cmd": "aMag=r*omega^2"
+    },
+    {
+      "op": "eval",
+      "cmd": "O=(0,0)"
+    },
+    {
+      "op": "style",
+      "target": "O",
+      "color": "#000000",
+      "pointSize": 4
+    },
+    {
+      "op": "eval",
+      "cmd": "c=Circle(O,r)"
+    },
+    {
+      "op": "style",
+      "target": "c",
+      "color": "#1e88e5",
+      "thickness": 2
+    },
+    {
+      "op": "eval",
+      "cmd": "P=(r*cos(omega*t), r*sin(omega*t))"
+    },
+    {
+      "op": "style",
+      "target": "P",
+      "color": "#e53935",
+      "pointSize": 5
+    },
+    {
+      "op": "eval",
+      "cmd": "radiusSeg=Segment(O,P)"
+    },
+    {
+      "op": "style",
+      "target": "radiusSeg",
+      "color": "#616161",
+      "thickness": 2
+    },
+    {
+      "op": "eval",
+      "cmd": "Pv=P+(-sin(omega*t), cos(omega*t))*(vMag/2)"
+    },
+    {
+      "op": "vector",
+      "name": "vArrow",
+      "from": "P",
+      "to": "Pv",
+      "color": "#43a047",
+      "label": "v"
+    },
+    {
+      "op": "eval",
+      "cmd": "Pa=P+(-cos(omega*t), -sin(omega*t))*(aMag/2)"
+    },
+    {
+      "op": "vector",
+      "name": "aArrow",
+      "from": "P",
+      "to": "Pa",
+      "color": "#fb8c00",
+      "label": "a"
+    },
+    {
+      "op": "trace",
+      "target": "P",
+      "on": true
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m",
+      "xLabel": "x/m",
+      "yLabel": "y/m"
+    },
+    {
+      "op": "view",
+      "xmin": -6,
+      "xmax": 6,
+      "ymin": -6,
+      "ymax": 6
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 0.5,
+      "on": true,
+      "repeat": "increasing"
+    }
+  ]
+}

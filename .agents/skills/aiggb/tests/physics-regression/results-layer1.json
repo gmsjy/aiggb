@@ -1,0 +1,373 @@
+{
+  "probes": {
+    "falsePositive": [
+      {
+        "cmd": "Zip(a^2, a, {1,2,3})",
+        "why": "Zip 单列表 3 参（官方合法，修正前 [5,5] 误报）",
+        "pass": true,
+        "detail": {
+          "input": "Zip(a^2, a, {1,2,3})",
+          "warnings": [],
+          "ok": true,
+          "issues": []
+        }
+      },
+      {
+        "cmd": "Zip(a+b, a, {1,2}, b, {3,4})",
+        "why": "Zip 标准双列表 5 参",
+        "pass": true,
+        "detail": {
+          "input": "Zip(a+b, a, {1,2}, b, {3,4})",
+          "warnings": [],
+          "ok": true,
+          "issues": []
+        }
+      },
+      {
+        "cmd": "Slider(0, 10)",
+        "why": "Slider 两参形态（官方 min/max 必选，修正前 [3,9] 误报）",
+        "pass": true,
+        "detail": {
+          "input": "Slider(0, 10)",
+          "warnings": [],
+          "ok": true,
+          "issues": []
+        }
+      },
+      {
+        "cmd": "StartAnimation(t)",
+        "why": "StartAnimation 单滑块形态（修正前 [0,0] 误报）",
+        "pass": true,
+        "detail": {
+          "input": "StartAnimation(t)",
+          "warnings": [],
+          "ok": true,
+          "issues": []
+        }
+      },
+      {
+        "cmd": "StartAnimation(false)",
+        "why": "StartAnimation 布尔暂停形态",
+        "pass": true,
+        "detail": {
+          "input": "StartAnimation(false)",
+          "warnings": [],
+          "ok": true,
+          "issues": []
+        }
+      },
+      {
+        "cmd": "SolveODE(y = x^2)",
+        "why": "SolveODE 单参形态（修正前 [5,5] 误报）",
+        "pass": true,
+        "detail": {
+          "input": "SolveODE(y = x^2)",
+          "warnings": [],
+          "ok": true,
+          "issues": []
+        }
+      },
+      {
+        "cmd": "IntersectPath(l1, poly1)",
+        "why": "IntersectPath 2D 线与多边形形态（修正前标注仅 3D）",
+        "pass": true,
+        "detail": {
+          "input": "IntersectPath(l1, poly1)",
+          "warnings": [],
+          "ok": true,
+          "issues": []
+        }
+      }
+    ],
+    "mustFail": [
+      {
+        "cmd": "Zip(0)",
+        "why": "Zip 参数个数不符",
+        "mode": "2d",
+        "expect": "fail",
+        "blocked": true,
+        "detail": {
+          "input": "Zip(0)",
+          "warnings": [
+            "命令 Zip 需要 3~7 个参数，但只给了 1 个"
+          ],
+          "ok": false,
+          "issues": [
+            {
+              "cmd": "Zip(0)",
+              "kind": "arg-count",
+              "message": "Zip 需要 3~7 个参数，但收到 1 个：\"0\""
+            }
+          ]
+        }
+      },
+      {
+        "cmd": "SetVisible(p, true)",
+        "why": "臆造命令（不存在且无法盲替换）",
+        "mode": "2d",
+        "expect": "fail",
+        "blocked": true,
+        "detail": {
+          "input": "SetVisible(p, true)",
+          "warnings": [],
+          "ok": false,
+          "issues": [
+            {
+              "cmd": "SetVisible(p, true)",
+              "kind": "hallucination",
+              "message": "SetVisible 不存在（引擎静默 no-op / 恒 false）。正确用法：SetVisibleInView(obj, 1, true/false)（GGB 无 SetVisible 命令（5.4.927 实测静默 no-op）——显隐补视图号：SetVisibleInView(obj, 1, false)）"
+            }
+          ]
+        }
+      },
+      {
+        "cmd": "El({1,2,3}, 2)",
+        "why": "臆造命令 El（应被自动纠正为 Element）",
+        "mode": "2d",
+        "expect": "autocorrect",
+        "blocked": true,
+        "corrected": "Element({1,2,3}, 2)",
+        "detail": {
+          "input": "El({1,2,3}, 2)",
+          "corrected": "Element({1,2,3}, 2)",
+          "warnings": [
+            "El 不存在。推荐：Element（GeoGebra 无 El——列表取元素用 Element(list, n)（5.4.927 实测可用））",
+            "已自动替换：El → Element"
+          ],
+          "ok": true,
+          "issues": []
+        }
+      },
+      {
+        "cmd": "xAxis = Line((0,0),(1,0))",
+        "why": "保留对象名",
+        "mode": "2d",
+        "expect": "fail",
+        "blocked": true,
+        "detail": {
+          "input": "xAxis = Line((0,0),(1,0))",
+          "warnings": [],
+          "ok": false,
+          "issues": [
+            {
+              "cmd": "xAxis = Line((0,0),(1,0))",
+              "kind": "reserved-name",
+              "message": "检测到对象赋值名 xAxis 与 GGB 保留名冲突 —— xAxis 是画布自带坐标轴的保留名，无需也无法创建（实测 evalCommand 恒返回 false）。请换用不冲突的名字（函数建议 f/g/h 或语义名如 traj/poly；坐标轴不需要创建，画布自带）。"
+            }
+          ]
+        }
+      },
+      {
+        "cmd": "ell = x^2/9 = 1",
+        "why": "双等号",
+        "mode": "2d",
+        "expect": "fail",
+        "blocked": true,
+        "detail": {
+          "input": "ell = x^2/9 = 1",
+          "warnings": [],
+          "ok": false,
+          "issues": [
+            {
+              "cmd": "ell = x^2/9 = 1",
+              "kind": "double-equals",
+              "message": "赋值形态出现第二个顶层等号：\"ell = x^2/9 = 1\" —— 引擎无法解析 \"name = 表达式 = 值\" 形态。命名等式/圆锥曲线请用**冒号**：ell: x^2/9 + y^2/4 = 1 （或省略名字直接写 x^2/9 + y^2/4 = 1）"
+            }
+          ]
+        }
+      },
+      {
+        "cmd": "Conic(1,2,3,4,5,6,7)",
+        "why": "Conic 7 系数空转型陷阱",
+        "mode": "2d",
+        "expect": "fail",
+        "blocked": true,
+        "detail": {
+          "input": "Conic(1,2,3,4,5,6,7)",
+          "warnings": [
+            "命令 Conic 最多接受 6 个参数，但给了 7 个"
+          ],
+          "ok": false,
+          "issues": [
+            {
+              "cmd": "Conic(1,2,3,4,5,6,7)",
+              "kind": "arg-count",
+              "message": "Conic 需要 5~6 个参数，但收到 7 个：\"1,2,3,4,5,6,7\""
+            }
+          ]
+        }
+      },
+      {
+        "cmd": "SetViewDirection((1,0,0))",
+        "why": "3D 禁令",
+        "mode": "3d",
+        "expect": "fail",
+        "blocked": true,
+        "detail": {
+          "input": "SetViewDirection((1,0,0))",
+          "warnings": [],
+          "ok": false,
+          "issues": [
+            {
+              "cmd": "SetViewDirection((1,0,0))",
+              "kind": "mode-forbidden",
+              "message": "SetViewDirection 在 3D 模式下不可用（执行必失败）。纯 3D applet 中完全不可用——禁止在 3D 模式使用，依靠鼠标旋转。请删除该命令并改用替代方案。"
+            }
+          ]
+        }
+      },
+      {
+        "cmd": "SetFilling(s1, 0.5)",
+        "why": "3D 禁令（3D 模式）",
+        "mode": "3d",
+        "expect": "fail",
+        "blocked": true,
+        "detail": {
+          "input": "SetFilling(s1, 0.5)",
+          "warnings": [],
+          "ok": false,
+          "issues": [
+            {
+              "cmd": "SetFilling(s1, 0.5)",
+              "kind": "mode-forbidden",
+              "message": "SetFilling 在 3D 模式下不可用（执行必失败）。3D 中对立体无效——用 style op 的 opacity 字段替代。请删除该命令并改用替代方案。"
+            }
+          ]
+        }
+      },
+      {
+        "cmd": "Sequence(SetVisibleInView(Element({a,b},u),1,false),u,1,2)",
+        "why": "scripting 嵌套 Sequence",
+        "mode": "2d",
+        "expect": "fail",
+        "blocked": true,
+        "detail": {
+          "input": "Sequence(SetVisibleInView(Element({a,b},u),1,false),u,1,2)",
+          "warnings": [],
+          "ok": false,
+          "issues": [
+            {
+              "cmd": "Sequence(SetVisibleInView(Element({a,b},u),1,false),u,1,2)",
+              "kind": "scripting-nest",
+              "message": "检测到 scripting 语句 SetVisibleInView(...) 嵌套在表达式中 —— Set*/Show* 等**只产生副作用、不返回值**，GGB 只允许它们作整条命令的头部，嵌进 Sequence/Zip/If 等表达式位置必失败（5.4.927 实测）。批量操作请**逐条输出命令**（每条一个 eval），或用 eval_raw 以换行符分隔多条命令（实测可行；分号分隔无效）。"
+            }
+          ]
+        }
+      },
+      {
+        "cmd": "rad = Segment((0,0),(1,1))",
+        "why": "rad 单位关键字保留名（静默改名断链）",
+        "mode": "2d",
+        "expect": "fail",
+        "blocked": true,
+        "detail": {
+          "input": "rad = Segment((0,0),(1,1))",
+          "warnings": [],
+          "ok": false,
+          "issues": [
+            {
+              "cmd": "rad = Segment((0,0),(1,1))",
+              "kind": "reserved-name",
+              "message": "检测到对象赋值名 rad 与 GGB 保留名冲突 —— rad 是 GGB 弧度单位关键字，赋值后对象会被引擎静默改名（如 eq1），下游按原名引用全部断链（2026-11 整机回归实测）。请换用不冲突的名字（函数建议 f/g/h 或语义名如 traj/poly；坐标轴不需要创建，画布自带）。"
+            }
+          ]
+        }
+      },
+      {
+        "cmd": "P = (1,2)\nxL = P_x - 0.4",
+        "why": "P_x 坐标访问形态（基名已定义、下标名未定义 → 必拒绝）",
+        "mode": "2d",
+        "expect": "fail",
+        "blocked": true,
+        "detail": {
+          "input": "P = (1,2)",
+          "warnings": [],
+          "ok": true,
+          "issues": []
+        }
+      }
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "P1",
+      "name": "斜抛运动（v0/仰角滑块+轨迹+速度矢量+动画）",
+      "evalCount": 11,
+      "ok": true,
+      "issues": [],
+      "warnings": []
+    },
+    {
+      "id": "P2",
+      "name": "平抛运动（水平速度+下落速度分解+轨迹）",
+      "evalCount": 12,
+      "ok": true,
+      "issues": [],
+      "warnings": []
+    },
+    {
+      "id": "P3",
+      "name": "自由落体对比（轻重物体同时落地）",
+      "evalCount": 8,
+      "ok": true,
+      "issues": [],
+      "warnings": []
+    },
+    {
+      "id": "P4",
+      "name": "单摆小角度摆动（摆长/摆角滑块+摆球轨迹）",
+      "evalCount": 12,
+      "ok": true,
+      "issues": [],
+      "warnings": []
+    },
+    {
+      "id": "P5",
+      "name": "弹簧振子（简谐运动+弹簧随动）",
+      "evalCount": 9,
+      "ok": true,
+      "issues": [],
+      "warnings": []
+    },
+    {
+      "id": "P6",
+      "name": "匀速圆周运动（向心加速度方向+切向速度）",
+      "evalCount": 14,
+      "ok": true,
+      "issues": [],
+      "warnings": []
+    },
+    {
+      "id": "P7",
+      "name": "斜面受力分析（重力/支持力/摩擦力矢量随动）",
+      "evalCount": 10,
+      "ok": true,
+      "issues": [],
+      "warnings": []
+    },
+    {
+      "id": "P8",
+      "name": "追及相遇（两车运动+相遇点标记）",
+      "evalCount": 14,
+      "ok": true,
+      "issues": [],
+      "warnings": []
+    },
+    {
+      "id": "P9",
+      "name": "带电粒子磁场圆周运动（洛伦兹力指向圆心）",
+      "evalCount": 12,
+      "ok": true,
+      "issues": [],
+      "warnings": []
+    },
+    {
+      "id": "P10",
+      "name": "机械波传播（波形推进+质点只振动不迁移）",
+      "evalCount": 11,
+      "ok": true,
+      "issues": [],
+      "warnings": []
+    }
+  ]
+}

@@ -1,0 +1,925 @@
+{
+  "scenarios": [
+    {
+      "id": "P1",
+      "name": "斜抛运动（v0/仰角滑块+轨迹+速度矢量+动画）",
+      "expect": [
+        "v0",
+        "theta",
+        "t",
+        "P",
+        "T_end",
+        "traj",
+        "vVec"
+      ],
+      "cmds": [
+        {
+          "op": "view",
+          "xmin": -2,
+          "xmax": 45,
+          "ymin": -2,
+          "ymax": 28
+        },
+        {
+          "op": "eval",
+          "cmd": "v0 = Slider(5, 50, 1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "theta = Slider(10, 80, 1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "t = Slider(0, 8, 0.01)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(v0, 20)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(theta, 45)"
+        },
+        {
+          "op": "eval",
+          "cmd": "P = (v0*cos(theta*pi/180)*t, v0*sin(theta*pi/180)*t - 4.9*t^2)"
+        },
+        {
+          "op": "eval",
+          "cmd": "T_end = 2*v0*sin(theta*pi/180)/9.8"
+        },
+        {
+          "op": "eval",
+          "cmd": "traj = Curve(v0*cos(theta*pi/180)*u, v0*sin(theta*pi/180)*u - 4.9*u^2, u, 0, T_end)"
+        },
+        {
+          "op": "eval",
+          "cmd": "vVec = Vector(P, P + (v0*cos(theta*pi/180), v0*sin(theta*pi/180) - 9.8*t))"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetTrace(P, true)"
+        },
+        {
+          "op": "eval",
+          "cmd": "StartAnimation(t)"
+        },
+        {
+          "op": "style",
+          "target": "traj",
+          "color": "#1565C0",
+          "thickness": 3
+        },
+        {
+          "op": "style",
+          "target": "P",
+          "color": "#C62828",
+          "pointSize": 6
+        },
+        {
+          "op": "style",
+          "target": "vVec",
+          "color": "#2E7D32",
+          "thickness": 4
+        }
+      ]
+    },
+    {
+      "id": "P2",
+      "name": "平抛运动（水平速度+下落速度分解+轨迹）",
+      "expect": [
+        "h0",
+        "vh",
+        "t",
+        "P",
+        "traj",
+        "vx",
+        "vy",
+        "v"
+      ],
+      "cmds": [
+        {
+          "op": "view",
+          "xmin": -2,
+          "xmax": 45,
+          "ymin": -2,
+          "ymax": 30
+        },
+        {
+          "op": "eval",
+          "cmd": "h0 = Slider(5, 30, 1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "vh = Slider(5, 30, 1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "t = Slider(0, 3, 0.01)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(h0, 20)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(vh, 15)"
+        },
+        {
+          "op": "eval",
+          "cmd": "P = (vh*t, h0 - 4.9*t^2)"
+        },
+        {
+          "op": "eval",
+          "cmd": "ground = Segment((-1, 0), (45, 0))"
+        },
+        {
+          "op": "eval",
+          "cmd": "traj = Curve(vh*u, h0 - 4.9*u^2, u, 0, sqrt(2*h0/9.8))"
+        },
+        {
+          "op": "eval",
+          "cmd": "vx = Vector(P, P + (vh, 0))"
+        },
+        {
+          "op": "eval",
+          "cmd": "vy = Vector(P, P + (0, -9.8*t))"
+        },
+        {
+          "op": "eval",
+          "cmd": "v = Vector(P, P + (vh, -9.8*t))"
+        },
+        {
+          "op": "eval",
+          "cmd": "StartAnimation(t)"
+        },
+        {
+          "op": "style",
+          "target": "traj",
+          "color": "#6A1B9A",
+          "thickness": 3
+        },
+        {
+          "op": "style",
+          "target": "vx",
+          "color": "#2E7D32",
+          "thickness": 4
+        },
+        {
+          "op": "style",
+          "target": "vy",
+          "color": "#C62828",
+          "thickness": 4
+        },
+        {
+          "op": "style",
+          "target": "v",
+          "color": "#1565C0",
+          "thickness": 5
+        }
+      ]
+    },
+    {
+      "id": "P3",
+      "name": "自由落体对比（轻重物体同时落地）",
+      "expect": [
+        "t",
+        "A",
+        "B",
+        "ground",
+        "tA",
+        "tB"
+      ],
+      "cmds": [
+        {
+          "op": "view",
+          "xmin": -3,
+          "xmax": 40,
+          "ymin": -3,
+          "ymax": 50
+        },
+        {
+          "op": "eval",
+          "cmd": "t = Slider(0, 3.5, 0.01)"
+        },
+        {
+          "op": "eval",
+          "cmd": "h0 = 45"
+        },
+        {
+          "op": "eval",
+          "cmd": "A = (0, h0 - 4.9*t^2)"
+        },
+        {
+          "op": "eval",
+          "cmd": "B = (2, h0 - 4.9*t^2)"
+        },
+        {
+          "op": "eval",
+          "cmd": "ground = Segment((-1, 0), (40, 0))"
+        },
+        {
+          "op": "eval",
+          "cmd": "tA = Text(\"轻物\", A + (0.4, 0.4))"
+        },
+        {
+          "op": "eval",
+          "cmd": "tB = Text(\"重物\", B + (0.4, 0.4))"
+        },
+        {
+          "op": "eval",
+          "cmd": "StartAnimation(t)"
+        },
+        {
+          "op": "style",
+          "target": "A",
+          "color": "#C62828",
+          "pointSize": 7
+        },
+        {
+          "op": "style",
+          "target": "B",
+          "color": "#1565C0",
+          "pointSize": 7
+        },
+        {
+          "op": "style",
+          "target": "ground",
+          "thickness": 3
+        }
+      ]
+    },
+    {
+      "id": "P4",
+      "name": "单摆小角度摆动（摆长/摆角滑块+摆球轨迹）",
+      "expect": [
+        "L",
+        "th0",
+        "t",
+        "O",
+        "B",
+        "rod",
+        "tArc"
+      ],
+      "cmds": [
+        {
+          "op": "view",
+          "xmin": -3,
+          "xmax": 3,
+          "ymin": -3,
+          "ymax": 1
+        },
+        {
+          "op": "eval",
+          "cmd": "L = Slider(0.5, 2.5, 0.1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "th0 = Slider(5, 30, 1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "t = Slider(0, 10, 0.01)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(L, 1.5)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(th0, 20)"
+        },
+        {
+          "op": "eval",
+          "cmd": "O = (0, 0)"
+        },
+        {
+          "op": "eval",
+          "cmd": "th = th0*pi/180*cos(sqrt(9.8/L)*t)"
+        },
+        {
+          "op": "eval",
+          "cmd": "B = O + (L*sin(th), -L*cos(th))"
+        },
+        {
+          "op": "eval",
+          "cmd": "rod = Segment(O, B)"
+        },
+        {
+          "op": "eval",
+          "cmd": "tArc = Curve(0.25*L*sin(u), -0.25*L*cos(u), u, -th0*pi/180, th0*pi/180)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetTrace(B, true)"
+        },
+        {
+          "op": "eval",
+          "cmd": "StartAnimation(t)"
+        },
+        {
+          "op": "style",
+          "target": "B",
+          "color": "#C62828",
+          "pointSize": 6
+        },
+        {
+          "op": "style",
+          "target": "rod",
+          "thickness": 4
+        },
+        {
+          "op": "style",
+          "target": "tArc",
+          "color": "#9E9E9E",
+          "dashed": true
+        }
+      ]
+    },
+    {
+      "id": "P5",
+      "name": "弹簧振子（简谐运动+弹簧随动）",
+      "expect": [
+        "Amp",
+        "t",
+        "bx",
+        "block",
+        "spring",
+        "wall"
+      ],
+      "cmds": [
+        {
+          "op": "view",
+          "xmin": -5.5,
+          "xmax": 1,
+          "ymin": -1.5,
+          "ymax": 1.5
+        },
+        {
+          "op": "eval",
+          "cmd": "Amp = Slider(0.5, 2, 0.1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "t = Slider(0, 10, 0.01)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(Amp, 1.5)"
+        },
+        {
+          "op": "eval",
+          "cmd": "bx = -3 + Amp*sin(2*t)"
+        },
+        {
+          "op": "eval",
+          "cmd": "block = Polygon((bx-0.25, -0.25), (bx+0.25, -0.25), (bx+0.25, 0.25), (bx-0.25, 0.25))"
+        },
+        {
+          "op": "eval",
+          "cmd": "wall = Segment((-4.5, -0.8), (-4.5, 0.8))"
+        },
+        {
+          "op": "eval",
+          "cmd": "spring = PolyLine(Sequence((-4.5 + (i/21)*(bx + 4.5), 0.18*(-1)^i), i, 0, 21))"
+        },
+        {
+          "op": "eval",
+          "cmd": "baseline = Segment((-4.5, 0), (0, 0))"
+        },
+        {
+          "op": "eval",
+          "cmd": "StartAnimation(t)"
+        },
+        {
+          "op": "style",
+          "target": "block",
+          "color": "#1565C0",
+          "opacity": 0.6
+        },
+        {
+          "op": "style",
+          "target": "spring",
+          "color": "#616161",
+          "thickness": 3
+        },
+        {
+          "op": "style",
+          "target": "wall",
+          "thickness": 5
+        },
+        {
+          "op": "style",
+          "target": "baseline",
+          "color": "#9E9E9E",
+          "dashed": true
+        }
+      ]
+    },
+    {
+      "id": "P6",
+      "name": "匀速圆周运动（向心加速度方向+切向速度）",
+      "expect": [
+        "r",
+        "Tper",
+        "t",
+        "O",
+        "circ",
+        "P",
+        "vT",
+        "aC"
+      ],
+      "cmds": [
+        {
+          "op": "view",
+          "xmin": -5,
+          "xmax": 5,
+          "ymin": -5,
+          "ymax": 5
+        },
+        {
+          "op": "eval",
+          "cmd": "r = Slider(1, 5, 0.1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "Tper = Slider(1, 6, 0.5)"
+        },
+        {
+          "op": "eval",
+          "cmd": "t = Slider(0, 12, 0.02)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(r, 3)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(Tper, 3)"
+        },
+        {
+          "op": "eval",
+          "cmd": "O = (0, 0)"
+        },
+        {
+          "op": "eval",
+          "cmd": "alpha = 2*pi*t/Tper"
+        },
+        {
+          "op": "eval",
+          "cmd": "circ = Circle(O, r)"
+        },
+        {
+          "op": "eval",
+          "cmd": "P = O + (r*cos(alpha), r*sin(alpha))"
+        },
+        {
+          "op": "eval",
+          "cmd": "arm = Segment(O, P)"
+        },
+        {
+          "op": "eval",
+          "cmd": "vT = Vector(P, P + (-sin(alpha), cos(alpha)))"
+        },
+        {
+          "op": "eval",
+          "cmd": "aC = Vector(P, P + (-cos(alpha), -sin(alpha)))"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetTrace(P, true)"
+        },
+        {
+          "op": "eval",
+          "cmd": "StartAnimation(t)"
+        },
+        {
+          "op": "style",
+          "target": "circ",
+          "color": "#9E9E9E",
+          "dashed": true
+        },
+        {
+          "op": "style",
+          "target": "arm",
+          "thickness": 3
+        },
+        {
+          "op": "style",
+          "target": "P",
+          "color": "#C62828",
+          "pointSize": 6
+        },
+        {
+          "op": "style",
+          "target": "vT",
+          "color": "#2E7D32",
+          "thickness": 4
+        },
+        {
+          "op": "style",
+          "target": "aC",
+          "color": "#C62828",
+          "thickness": 4
+        }
+      ]
+    },
+    {
+      "id": "P7",
+      "name": "斜面受力分析（重力/支持力/摩擦力矢量随动）",
+      "expect": [
+        "incline",
+        "surf",
+        "M",
+        "G",
+        "N",
+        "f"
+      ],
+      "cmds": [
+        {
+          "op": "view",
+          "xmin": -1,
+          "xmax": 7.5,
+          "ymin": -2.5,
+          "ymax": 4
+        },
+        {
+          "op": "eval",
+          "cmd": "A1 = (0, 0)"
+        },
+        {
+          "op": "eval",
+          "cmd": "B1 = (6, 0)"
+        },
+        {
+          "op": "eval",
+          "cmd": "C1 = (0, 3)"
+        },
+        {
+          "op": "eval",
+          "cmd": "incline = Polygon(A1, B1, C1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "surf = Segment((6, 0), (0, 3))"
+        },
+        {
+          "op": "eval",
+          "cmd": "M = Point(surf)"
+        },
+        {
+          "op": "eval",
+          "cmd": "G = Vector(M, M + (0, -1.5))"
+        },
+        {
+          "op": "eval",
+          "cmd": "N = Vector(M, M + (1.5/sqrt(5), 3/sqrt(5)))"
+        },
+        {
+          "op": "eval",
+          "cmd": "f = Vector(M, M + (-3/sqrt(5), 1.5/sqrt(5)))"
+        },
+        {
+          "op": "eval",
+          "cmd": "StartAnimation(M)"
+        },
+        {
+          "op": "caption",
+          "target": "G",
+          "text": "G = mg"
+        },
+        {
+          "op": "caption",
+          "target": "N",
+          "text": "N"
+        },
+        {
+          "op": "caption",
+          "target": "f",
+          "text": "f"
+        },
+        {
+          "op": "style",
+          "target": "incline",
+          "color": "#8D6E63",
+          "opacity": 0.3
+        },
+        {
+          "op": "style",
+          "target": "M",
+          "color": "#1565C0",
+          "pointSize": 6
+        },
+        {
+          "op": "style",
+          "target": "G",
+          "color": "#C62828",
+          "thickness": 4
+        },
+        {
+          "op": "style",
+          "target": "N",
+          "color": "#2E7D32",
+          "thickness": 4
+        },
+        {
+          "op": "style",
+          "target": "f",
+          "color": "#EF6C00",
+          "thickness": 4
+        }
+      ]
+    },
+    {
+      "id": "P8",
+      "name": "追及相遇（两车运动+相遇点标记）",
+      "expect": [
+        "v1",
+        "v2",
+        "t",
+        "A",
+        "B",
+        "tm",
+        "Mpt"
+      ],
+      "cmds": [
+        {
+          "op": "view",
+          "xmin": -2,
+          "xmax": 45,
+          "ymin": -1,
+          "ymax": 4
+        },
+        {
+          "op": "eval",
+          "cmd": "v1 = Slider(5, 20, 1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "v2 = Slider(5, 20, 1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "t = Slider(0, 20, 0.05)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(v1, 10)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(v2, 15)"
+        },
+        {
+          "op": "eval",
+          "cmd": "xA = v1*t"
+        },
+        {
+          "op": "eval",
+          "cmd": "xB = If(t > 2, v2*(t - 2), 0)"
+        },
+        {
+          "op": "eval",
+          "cmd": "A = (xA, 1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "B = (xB, 2)"
+        },
+        {
+          "op": "eval",
+          "cmd": "laneA = Segment((0, 1), (45, 1))"
+        },
+        {
+          "op": "eval",
+          "cmd": "laneB = Segment((0, 2), (45, 2))"
+        },
+        {
+          "op": "eval",
+          "cmd": "tm = 2*v2/(v2 - v1 + 0.001)"
+        },
+        {
+          "op": "eval",
+          "cmd": "Mpt = (v1*tm, 1.5)"
+        },
+        {
+          "op": "eval",
+          "cmd": "StartAnimation(t)"
+        },
+        {
+          "op": "style",
+          "target": "A",
+          "color": "#C62828",
+          "pointSize": 6
+        },
+        {
+          "op": "style",
+          "target": "B",
+          "color": "#1565C0",
+          "pointSize": 6
+        },
+        {
+          "op": "style",
+          "target": "laneA",
+          "color": "#BDBDBD",
+          "dashed": true
+        },
+        {
+          "op": "style",
+          "target": "laneB",
+          "color": "#BDBDBD",
+          "dashed": true
+        },
+        {
+          "op": "style",
+          "target": "Mpt",
+          "color": "#2E7D32",
+          "pointSize": 5
+        }
+      ]
+    },
+    {
+      "id": "P9",
+      "name": "带电粒子磁场圆周运动（洛伦兹力指向圆心）",
+      "expect": [
+        "r",
+        "t",
+        "O",
+        "circ",
+        "P",
+        "vT",
+        "F"
+      ],
+      "cmds": [
+        {
+          "op": "view",
+          "xmin": -5.5,
+          "xmax": 5.5,
+          "ymin": -5.5,
+          "ymax": 6.5
+        },
+        {
+          "op": "eval",
+          "cmd": "r = Slider(1, 5, 0.1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "t = Slider(0, 8, 0.02)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(r, 3)"
+        },
+        {
+          "op": "eval",
+          "cmd": "O = (0, 0)"
+        },
+        {
+          "op": "eval",
+          "cmd": "alpha = pi*t/2"
+        },
+        {
+          "op": "eval",
+          "cmd": "circ = Circle(O, r)"
+        },
+        {
+          "op": "eval",
+          "cmd": "P = O + (r*cos(alpha), r*sin(alpha))"
+        },
+        {
+          "op": "eval",
+          "cmd": "vT = Vector(P, P + (-sin(alpha), cos(alpha)))"
+        },
+        {
+          "op": "eval",
+          "cmd": "F = Vector(P, P + (-cos(alpha), -sin(alpha)))"
+        },
+        {
+          "op": "eval",
+          "cmd": "bInfo = Text(\"B 垂直纸面向外\", (-4.5, 5.8))"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetTrace(P, true)"
+        },
+        {
+          "op": "eval",
+          "cmd": "StartAnimation(t)"
+        },
+        {
+          "op": "style",
+          "target": "circ",
+          "color": "#9E9E9E",
+          "dashed": true
+        },
+        {
+          "op": "style",
+          "target": "P",
+          "color": "#6A1B9A",
+          "pointSize": 6
+        },
+        {
+          "op": "style",
+          "target": "vT",
+          "color": "#2E7D32",
+          "thickness": 4
+        },
+        {
+          "op": "style",
+          "target": "F",
+          "color": "#C62828",
+          "thickness": 4
+        }
+      ]
+    },
+    {
+      "id": "P10",
+      "name": "机械波传播（波形推进+质点只振动不迁移）",
+      "expect": [
+        "Amp",
+        "lam",
+        "t",
+        "wave",
+        "P",
+        "vline"
+      ],
+      "cmds": [
+        {
+          "op": "view",
+          "xmin": -0.5,
+          "xmax": 17,
+          "ymin": -3,
+          "ymax": 3.5
+        },
+        {
+          "op": "eval",
+          "cmd": "Amp = Slider(0.5, 2, 0.1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "lam = Slider(2, 8, 0.5)"
+        },
+        {
+          "op": "eval",
+          "cmd": "t = Slider(0, 8, 0.02)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(Amp, 1)"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetValue(lam, 4)"
+        },
+        {
+          "op": "eval",
+          "cmd": "wave = Curve(u, Amp*sin((2*pi/lam)*u - 2*pi*t), u, 0, 16)"
+        },
+        {
+          "op": "eval",
+          "cmd": "P = (3, Amp*sin((2*pi/lam)*3 - 2*pi*t))"
+        },
+        {
+          "op": "eval",
+          "cmd": "vline = Segment((3, -2.5), (3, 2.5))"
+        },
+        {
+          "op": "eval",
+          "cmd": "eq = Segment((0, 0), (16, 0))"
+        },
+        {
+          "op": "eval",
+          "cmd": "SetTrace(P, true)"
+        },
+        {
+          "op": "eval",
+          "cmd": "StartAnimation(t)"
+        },
+        {
+          "op": "style",
+          "target": "wave",
+          "color": "#1565C0",
+          "thickness": 3
+        },
+        {
+          "op": "style",
+          "target": "P",
+          "color": "#C62828",
+          "pointSize": 6
+        },
+        {
+          "op": "style",
+          "target": "vline",
+          "color": "#BDBDBD",
+          "dashed": true
+        },
+        {
+          "op": "style",
+          "target": "eq",
+          "color": "#9E9E9E",
+          "dashed": true
+        }
+      ]
+    }
+  ]
+}

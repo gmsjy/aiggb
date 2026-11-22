@@ -1,0 +1,140 @@
+{
+  "commands": [
+    {
+      "op": "constants",
+      "names": [
+        "g"
+      ]
+    },
+    {
+      "op": "slider",
+      "name": "L",
+      "min": 0.3,
+      "max": 2,
+      "step": 0.05,
+      "value": 1,
+      "unit": "m",
+      "label": "摆长"
+    },
+    {
+      "op": "slider",
+      "name": "theta0",
+      "min": 0.05,
+      "max": 0.6,
+      "step": 0.01,
+      "value": 0.5236,
+      "unit": "rad",
+      "label": "初始角"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 10,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "eval",
+      "cmd": "omega=sqrt(g/L)"
+    },
+    {
+      "op": "eval",
+      "cmd": "T=2*pi/omega"
+    },
+    {
+      "op": "eval",
+      "cmd": "O=(0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "theta=theta0*cos(omega*t)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P=(L*sin(theta), -L*cos(theta))"
+    },
+    {
+      "op": "style",
+      "target": "P",
+      "color": "#e53935",
+      "pointSize": 5
+    },
+    {
+      "op": "eval",
+      "cmd": "rod=Segment(O,P)"
+    },
+    {
+      "op": "style",
+      "target": "rod",
+      "color": "#616161",
+      "thickness": 3
+    },
+    {
+      "op": "eval",
+      "cmd": "Eq=(0,-L)"
+    },
+    {
+      "op": "eval",
+      "cmd": "eqLine=Segment(O,Eq)"
+    },
+    {
+      "op": "style",
+      "target": "eqLine",
+      "color": "#9e9e9e",
+      "dashed": true
+    },
+    {
+      "op": "eval",
+      "cmd": "arcR=0.25*L"
+    },
+    {
+      "op": "eval",
+      "cmd": "angArc=CircumcircleArc((arcR*sin(theta),-arcR*cos(theta)),(0,-arcR),(arcR*sin(theta),-arcR*cos(theta)))"
+    },
+    {
+      "op": "style",
+      "target": "angArc",
+      "color": "#fb8c00",
+      "thickness": 2
+    },
+    {
+      "op": "eval",
+      "cmd": "thetaLabel=Text(\"θ=\"+theta0+\"·cos(ωt)\",(0.6*L,-0.15*L))"
+    },
+    {
+      "op": "trace",
+      "target": "P",
+      "on": true
+    },
+    {
+      "op": "style",
+      "target": "P",
+      "color": "#1e88e5",
+      "pointSize": 4
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m",
+      "xLabel": "x/m",
+      "yLabel": "y/m"
+    },
+    {
+      "op": "view",
+      "xmin": -2.5,
+      "xmax": 2.5,
+      "ymin": -2.5,
+      "ymax": 0.5
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 1,
+      "on": true,
+      "repeat": "increasing"
+    }
+  ]
+}

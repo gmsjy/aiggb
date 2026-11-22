@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh">
+<head><meta charset="UTF-8"><title>AiGGB Render Host</title>
+<style>
+  body{margin:0;background:#fff;overflow:hidden}
+  #ggb{width:100vw;height:100vh}
+</style>
+<!-- aiggb skill 渲染宿主：由 render 命令的内置静态服务器在 "/" 提供，
+     GGB 引擎从 /engine/（--engine 指向的 Math Apps Bundle 目录）加载，不依赖 CDN。
+     op 执行器镜像主项目 tests/visual.html（其本身镜像 src/lib/ggbBridge.ts）。
+     用法：?cmds=<14-op JSON>&app=3d|classic&static=1&export=1&w=&h=
+     信号：document.title = "DONE:ok/total fail:idx" → 导出后 "PNG:<bytes>" -->
+<script src="/engine/deployggb.js"></script>
+</head>
+<body>
+<div id="ggb"></div>
+<script>
+const params = new URLSearchParams(location.search);
+const commandsJson = params.get("cmds");
+const appName = params.get("app") === "3d" ? "3d" : "classic";
+const wantExport = params.get("export") === "1";
+const wantGgbFile = params.get("ggb") === "1"; // 导出 .ggb 构造文件（getBase64 的 ZIP 容器）
+const isStatic = params.get("static") === "1";
+const W = Math.max(400, parseInt(params.get("w") ?? "1280", 10) || 1280);
+const H = Math.max(300, parseInt(params.get("h") ?? "800", 10) || 800);
+window.__execReport = null;
+window.__PNG = null;
+
+if (!commandsJson) {
+  document.title = "ERR:no-cmds";
+} else {
+  let commands;
+  try { commands = JSON.parse(decodeURIComponent(commandsJson)); }
+  catch (e) { document.title = "ERR:bad-json"; throw e; }
+
+  const applet = new GGBApplet({
+    appName: appName, width: W, height: H,
+    showToolBar: false, showAlgebraInput: false, showMenuBar: false,
+    showResetIcon: false, enableLabelDrags: false, enableShiftDragZoom: true,
+    enableRightClick: false, errorDialogsActive: false, useBrowserForJS: true,
+    language: "zh", preventFocus: true,
+    appletOnLoad: api => { window.__ggbApplet__ = api; }
+  }, true);
+  applet.setHTML5Codebase(new URL("/engine/HTML5/5.0/web3d/", location.origin).href);
+  applet.inject("ggb");
+
+  // ── op 执行器（镜像 tests/visual.html / src/lib/ggbBridge.ts）──
+  const hexToRgb = hex => {
+    const m = hex.replace(/^#/, "");
+    return [parseInt(m.slice(0,2),16), parseInt(m.slice(2,4),16), parseInt(m.slice(4,6),16)];
+  };
+  const isCoordLiteral = s => /^\s*\(/.test(s) && /\)\s*$/.test(s);
+
+  function executeOne(api, cmd) {
+    try {
+      switch (cmd.op) {
+        case "eval": {
+          const delM = /^(?:\w+\s*=\s*)?Delete\s*\(\s*([A-Za-z_]\w*)\s*\)\s*;?\s*$/.exec(cmd.cmd.trim());
+          if (delM) {
+            const existed = api.exists(delM[1]);
+            api.evalCommand(cmd.cmd);
+            const ok2 = existed && !api.exists(delM[1]);
+            return ok2;
+          }
+          const ok = api.evalCommand(cmd.cmd);
+          // scripting 命令（Set*/Show*/ZoomIn 等）成功也返回 false——不以此判定失败
+          if (!ok && /^(?:Set|Show)[A-Za-z]|^(?:ZoomIn|ZoomOut|CenterView|Pan|StartAnimation|StopAnimation)\b/.test(cmd.cmd.trim())) return true;
+          return ok;
+        }
+        case "slider": {
+          const ok = api.evalCommand(`${cmd.name} = Slider(${cmd.min}, ${cmd.max}, ${cmd.step}, 1, 150, false, true, false, false)`);
+          if (!ok) return false;
+          api.evalCommand(`SetValue(${cmd.name}, ${cmd.value})`);
+          const cap = cmd.label ? (cmd.unit ? `${cmd.label} = %v ${cmd.unit}` : `${cmd.label} = %v`) : (cmd.unit ? `${cmd.name} = %v ${cmd.unit}` : "");
+          if (cap) { api.setCaption(cmd.name, cap); api.setLabelStyle(cmd.name, 3); }
+          return true;
+        }
+        case "animate": {
+          if (!api.exists(cmd.target)) return false;
+          if (cmd.speed !== undefined) api.setAnimationSpeed(cmd.target, cmd.speed);
+          if (cmd.repeat) {
+            const map = { oscillating: 0, increasing: 1, once: 3 };
+            api.evalCommand(`SetAnimationType(${cmd.target}, ${map[cmd.repeat]})`);
+          }
+          api.setAnimating(cmd.target, cmd.on);
+          if (cmd.on) api.startAnimation(); else api.stopAnimation();
+          return true;
+        }
+        case "trace": {
+          if (!api.exists(cmd.target)) return false;
+          api.setTrace(cmd.target, cmd.on); return true;
+        }
+        case "style": {
+          if (cmd.color) { const [r,g,b]=hexToRgb(cmd.color); api.setColor(cmd.target,r,g,b); }
+          if (cmd.thickness !== undefined) api.setLineThickness(cmd.target, cmd.thickness);
+          if (cmd.visible !== undefined) api.setVisible(cmd.target, cmd.visible);
+          if (cmd.opacity !== undefined) {
+            api.evalCommand(`SetLineOpacity(${cmd.target}, ${cmd.opacity})`);
+            const ls = /<lineStyle[^>]*?opacity="([\d.]+)"/.exec(api.getXML(cmd.target) || "");
+            const lo = ls ? parseFloat(ls[1]) / 255 : undefined;
+            const applied = lo !== undefined ? Math.abs(lo - cmd.opacity) <= 0.02 : cmd.opacity >= 0.99;
+            if (!applied) api.evalCommand(`SetFilling(${cmd.target}, ${cmd.opacity})`);
+          }
+          if (cmd.dashed !== undefined) api.setLineStyle(cmd.target, cmd.dashed ? 1 : 0);
+          if (cmd.pointSize !== undefined) api.setPointSize(cmd.target, cmd.pointSize);
+          if (cmd.pointStyle !== undefined) api.setPointStyle(cmd.target, cmd.pointStyle);
+          return true;
+        }
+        case "view": {
+          api.setCoordSystem(cmd.xmin, cmd.xmax, cmd.ymin, cmd.ymax);
+          if (cmd.axesUnit && api.setAxisUnits) api.setAxisUnits(1, cmd.axesUnit[0], cmd.axesUnit[1], "");
+          return true;
+        }
+        case "caption": { api.setCaption(cmd.target, cmd.text); api.setLabelStyle(cmd.target, 3); return true; }
+        case "delete": { api.deleteObject(cmd.target); return true; }
+        case "reset": { api.newConstruction(); return true; }
+        case "vector": {
+          if (!(isCoordLiteral(cmd.from) || api.exists(cmd.from))) return false;
+          const ok = api.evalCommand(`${cmd.name} = Vector(${cmd.from}, ${cmd.to})`);
+          if (!ok) return false;
+          if (cmd.color) { const [r,g,b]=hexToRgb(cmd.color); api.setColor(cmd.name,r,g,b); }
+          api.setLineThickness(cmd.name, 4);
+          if (cmd.label) { api.setCaption(cmd.name, cmd.label); api.setLabelStyle(cmd.name, 3); }
+          return true;
+        }
+        case "forceDiagram": {
+          if (!(isCoordLiteral(cmd.at) || api.exists(cmd.at))) return false;
+          let allOk = true;
+          for (let fi = 0; fi < cmd.forces.length; fi++) {
+            const f = cmd.forces[fi];
+            const t = `tmpFv${fi}`;
+            if (!api.evalCommand(`${t} = Vector((0,0), ${f.vec})`)) { allOk = false; continue; }
+            if (!api.evalCommand(`${f.name} = Vector(${cmd.at}, ${cmd.at} + ${t})`)) { allOk = false; continue; }
+            if (f.color) { const [r,g,b]=hexToRgb(f.color); api.setColor(f.name,r,g,b); }
+            api.setLineThickness(f.name, 4);
+            if (f.label) { api.setCaption(f.name, f.label); api.setLabelStyle(f.name, 3); }
+            api.setVisible(t, false);
+          }
+          return allOk;
+        }
+        case "physicsTrace": { api.setTrace(cmd.target, true); return true; }
+        case "unitAxes": {
+          const xl = cmd.xLabel ? `${cmd.xLabel}/${cmd.xUnit}` : `/${cmd.xUnit}`;
+          const yl = cmd.yLabel ? `${cmd.yLabel}/${cmd.yUnit}` : `/${cmd.yUnit}`;
+          api.setAxisLabels(1, xl, yl, "");
+          return true;
+        }
+        case "constants": {
+          const vals = { g:9.8, c:3e8, e:1.6e-19, eps0:8.854e-12, mu0:1.2566e-6, k_e:8.99e9, Grav:6.6743e-11, h:6.626e-34, k_B:1.381e-23 };
+          for (const n of cmd.names) {
+            if (!(n in vals)) continue;
+            if (api.exists(n)) continue;
+            if (!api.evalCommand(`${n} = ${vals[n]}`)) return false;
+            api.setVisible(n, false);
+          }
+          return true;
+        }
+        default: return false;
+      }
+    } catch(e) { return false; }
+  }
+
+  window.__ggbApplet__ = undefined;
+  const waitForAPI = setInterval(() => {
+    const api = window.__ggbApplet__;
+    if (!api || !api.evalCommand) return;
+    clearInterval(waitForAPI);
+
+    let ok = 0, fail = 0;
+    const failedIdx = [];
+    for (let i = 0; i < commands.length; i++) {
+      if (executeOne(api, commands[i])) ok++; else { fail++; failedIdx.push(i); }
+    }
+    if (isStatic) { try { api.stopAnimation(); } catch (e) {} }
+    window.__execReport = { ok, total: ok + fail, failedIdx, objects: api.getObjectNumber() };
+    document.title = "DONE:" + ok + "/" + (ok + fail) + " fail:" + failedIdx.join(",");
+
+    if (wantExport && wantGgbFile) {
+      // ★ .ggb 构造文件导出：getBase64 返回 ZIP 容器（geogebra.xml + 缩略图等）的 base64，
+      //   与主项目工具栏「导出」同源。GIF 模式优先（ggb 与 gif 互斥时由 CLI 控制）。
+      setTimeout(() => {
+        try {
+          const sync = api.getBase64(b64 => {
+            window.__GGBFILE = b64 ?? null;
+            document.title = "GGBF:" + (b64 ? b64.length : 0);
+          });
+          if (typeof sync === "string" && sync.length > 0) {
+            window.__GGBFILE = sync;
+            document.title = "GGBF:" + sync.length;
+          }
+        } catch (e) { document.title = "GGBF:0"; }
+      }, 400);
+    } else if (wantExport) {
+      // 等渲染管线稳定一拍再导出
+      setTimeout(() => {
+        let settled = false;
+        const valid = b64 => typeof b64 === "string" && b64.length > 100 && b64.startsWith("iVBOR"); // PNG 魔数
+        const done = b64 => {
+          if (settled) return;
+          settled = true;
+          window.__PNG = b64 ?? null;
+          document.title = "PNG:" + (b64 ? b64.length : 0);
+        };
+        try {
+          // ★ getPNGBase64(scale, transparent, dpi) 同步返回 PNG base64（镜像主项目 ggbBridge.exportPNG）；
+          //   getBase64 返回的是 .ggs 构造文件（zip），不是图片——仅在无 getPNGBase64 时作 .ggs 导出通道
+          const png = api.getPNGBase64 ? api.getPNGBase64(1, false, 96) : null;
+          if (valid(png)) { done(png); return; }
+        } catch (e) { /* 落到截图兜底 */ }
+        try {
+          const ggs = api.getBase64 ? api.getBase64(b64 => {}) : null;
+          void ggs; // 仅触发内部刷新；不采用其返回（zip）
+        } catch (e) { /* noop */ }
+        done(null); // 无有效 PNG → CLI 用视口截图兜底
+      }, 400);
+    }
+
+    // ── GIF 帧步进模式：确定性驱动动画滑块 → 逐帧导出 RGBA ──
+    if (params.get("gif") === "1" && wantExport) {
+      const nFrames = Math.max(2, parseInt(params.get("frames") ?? "24", 10) || 24);
+      const target = params.get("anim") || "";
+      const from = parseFloat(params.get("animFrom") ?? "0") || 0;
+      const to = parseFloat(params.get("animTo") ?? "1");
+      const scale = Math.min(1, Math.max(0.2, parseFloat(params.get("gifScale") ?? "0.5") || 0.5));
+      const pingpong = params.get("pingpong") === "1";
+      const frameVal = k => {
+        const half = Math.ceil(nFrames / 2);
+        if (pingpong && k >= half) {
+          const m = nFrames - 1 - k; // 回程
+          return from + (to - from) * (nFrames > 1 ? m / (nFrames - 1) : 0);
+        }
+        return from + (to - from) * (nFrames > 1 ? k / (nFrames - 1) : 0);
+      };
+      window.__FRAMES = [];
+      window.__GIFINFO = { target, from, to, frames: nFrames };
+      let k = 0;
+      const grabFrame = () => {
+        const pngB64 = api.getPNGBase64 ? api.getPNGBase64(1, false, 96) : null;
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const cv = document.createElement("canvas");
+            cv.width = Math.round(W * scale);
+            cv.height = Math.round(H * scale);
+            const ctx = cv.getContext("2d");
+            ctx.drawImage(img, 0, 0, cv.width, cv.height);
+            const data = ctx.getImageData(0, 0, cv.width, cv.height).data;
+            // base64 传输（Playwright evaluate 兼容性最稳的通道）
+            let bin = "";
+            const CH = 0x8000;
+            for (let i = 0; i < data.length; i += CH) {
+              bin += String.fromCharCode.apply(null, data.subarray(i, i + CH));
+            }
+            window.__FRAMES.push(btoa(bin));
+          } catch (e) { window.__GIFERR = String(e); }
+          k++;
+          if (k < nFrames) stepFrame(); else document.title = "GIF:" + window.__FRAMES.length;
+        };
+        img.onerror = () => { window.__GIFERR = "frame image load failed"; k++; document.title = "GIF:" + window.__FRAMES.length; };
+        img.src = "data:image/png;base64," + pngB64;
+      };
+      const stepFrame = () => {
+        if (target) api.evalCommand(`SetValue(${target}, ${frameVal(k)})`);
+        setTimeout(grabFrame, 70); // 渲染稳定一拍
+      };
+      setTimeout(stepFrame, 500); // 静态导出完成后稍等再开始步进
+    }
+  }, 200);
+}
+</script>
+</body>
+</html>

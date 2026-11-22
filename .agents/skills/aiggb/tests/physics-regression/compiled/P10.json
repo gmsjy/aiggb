@@ -1,0 +1,177 @@
+{
+  "commands": [
+    {
+      "op": "slider",
+      "name": "A",
+      "min": 0.2,
+      "max": 2,
+      "step": 0.1,
+      "value": 1,
+      "unit": "m",
+      "label": "振幅"
+    },
+    {
+      "op": "slider",
+      "name": "lam",
+      "min": 1,
+      "max": 10,
+      "step": 0.5,
+      "value": 4,
+      "unit": "m",
+      "label": "波长"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 10,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间"
+    },
+    {
+      "op": "slider",
+      "name": "v",
+      "min": 1,
+      "max": 5,
+      "step": 0.1,
+      "value": 2,
+      "unit": "m/s",
+      "label": "波速"
+    },
+    {
+      "op": "slider",
+      "name": "x0",
+      "min": 0,
+      "max": 10,
+      "step": 0.1,
+      "value": 2,
+      "unit": "m",
+      "label": "质点平衡位置"
+    },
+    {
+      "op": "eval",
+      "cmd": "k=2*pi/lam"
+    },
+    {
+      "op": "eval",
+      "cmd": "omega=k*v"
+    },
+    {
+      "op": "eval",
+      "cmd": "f(x)=A*sin(k*x-omega*t)"
+    },
+    {
+      "op": "style",
+      "target": "f",
+      "color": "#1e88e5",
+      "thickness": 3
+    },
+    {
+      "op": "eval",
+      "cmd": "P=(x0,A*sin(k*x0-omega*t))"
+    },
+    {
+      "op": "style",
+      "target": "P",
+      "color": "#e53935",
+      "pointSize": 5
+    },
+    {
+      "op": "eval",
+      "cmd": "Q=(x0,0)"
+    },
+    {
+      "op": "style",
+      "target": "Q",
+      "color": "#9e9e9e",
+      "pointSize": 3
+    },
+    {
+      "op": "eval",
+      "cmd": "vline:x=x0"
+    },
+    {
+      "op": "style",
+      "target": "vline",
+      "color": "#9e9e9e",
+      "dashed": true
+    },
+    {
+      "op": "eval",
+      "cmd": "topLine:y=A"
+    },
+    {
+      "op": "style",
+      "target": "topLine",
+      "color": "#9e9e9e",
+      "dashed": true
+    },
+    {
+      "op": "eval",
+      "cmd": "botLine:y=-A"
+    },
+    {
+      "op": "style",
+      "target": "botLine",
+      "color": "#9e9e9e",
+      "dashed": true
+    },
+    {
+      "op": "eval",
+      "cmd": "lamSeg=Segment((0,0),(lam,0))"
+    },
+    {
+      "op": "style",
+      "target": "lamSeg",
+      "color": "#43a047",
+      "thickness": 2
+    },
+    {
+      "op": "eval",
+      "cmd": "lamTxt=Text(\"λ\",(lam/2,0.25))"
+    },
+    {
+      "op": "style",
+      "target": "lamTxt",
+      "color": "#43a047"
+    },
+    {
+      "op": "eval",
+      "cmd": "trajSeg=Segment((x0,-A),(x0,A))"
+    },
+    {
+      "op": "style",
+      "target": "trajSeg",
+      "color": "#fb8c00",
+      "thickness": 2
+    },
+    {
+      "op": "trace",
+      "target": "P",
+      "on": true
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m",
+      "xLabel": "x/m",
+      "yLabel": "y/m"
+    },
+    {
+      "op": "view",
+      "xmin": -1,
+      "xmax": 13,
+      "ymin": -2.5,
+      "ymax": 2.5
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 0.5,
+      "on": true,
+      "repeat": "increasing"
+    }
+  ]
+}

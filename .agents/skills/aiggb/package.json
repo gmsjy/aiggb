@@ -1,0 +1,22 @@
+{
+  "name": "aiggb-skill",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "aiggb skill —— 自然语言生成 GeoGebra 命令（从 AiGGB 项目抽离的纯 TS 核心护栏 + headless 编排）",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "selfcheck": "node scripts/aiggb.mjs list && node scripts/aiggb.mjs hallucinations --json"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "typescript": "^5.6.0",
+    "zod": "^3.23.0"
+  },
+  "dependencies": {
+    "gifenc": "^1.0.3"
+  }
+}

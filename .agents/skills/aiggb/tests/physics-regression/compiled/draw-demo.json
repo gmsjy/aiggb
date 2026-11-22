@@ -1,0 +1,202 @@
+{
+  "commands": [
+    {
+      "op": "slider",
+      "name": "k",
+      "min": 1,
+      "max": 50,
+      "step": 1,
+      "value": 10,
+      "unit": "N/m",
+      "label": "劲度系数k"
+    },
+    {
+      "op": "slider",
+      "name": "m",
+      "min": 0.5,
+      "max": 5,
+      "step": 0.1,
+      "value": 1,
+      "unit": "kg",
+      "label": "质量m"
+    },
+    {
+      "op": "slider",
+      "name": "A",
+      "min": 0.5,
+      "max": 4,
+      "step": 0.1,
+      "value": 2,
+      "unit": "m",
+      "label": "振幅A"
+    },
+    {
+      "op": "slider",
+      "name": "t",
+      "min": 0,
+      "max": 10,
+      "step": 0.02,
+      "value": 0,
+      "unit": "s",
+      "label": "时间t"
+    },
+    {
+      "op": "eval",
+      "cmd": "omega=sqrt(k/m)"
+    },
+    {
+      "op": "eval",
+      "cmd": "T=2*pi/omega"
+    },
+    {
+      "op": "eval",
+      "cmd": "O=(0,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "W=(-4,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "P=(A*cos(omega*t),0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "PL=P-(0.4,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "PR=P+(0.4,0)"
+    },
+    {
+      "op": "eval",
+      "cmd": "PT=P+(0,0.4)"
+    },
+    {
+      "op": "eval",
+      "cmd": "PB=P-(0,0.4)"
+    },
+    {
+      "op": "eval",
+      "cmd": "block=Polygon(PL,PT,PR,PB)"
+    },
+    {
+      "op": "style",
+      "target": "block",
+      "color": "#1e88e5",
+      "thickness": 2,
+      "opacity": 0.8
+    },
+    {
+      "op": "eval",
+      "cmd": "nCoil=8"
+    },
+    {
+      "op": "eval",
+      "cmd": "coilAmp=0.25"
+    },
+    {
+      "op": "eval",
+      "cmd": "springPts=Sequence((x(W)+i*(x(PL)-x(W))/(2*nCoil), If(i==0,0,If(i==2*nCoil,0,coilAmp*(-1)^i))), i, 0, 2*nCoil, 1)"
+    },
+    {
+      "op": "eval",
+      "cmd": "spring=PolyLine(Join({{W},springPts,{PL}}))"
+    },
+    {
+      "op": "style",
+      "target": "spring",
+      "color": "#616161",
+      "thickness": 3
+    },
+    {
+      "op": "eval",
+      "cmd": "wall=Segment((-4,-1),(-4,1))"
+    },
+    {
+      "op": "style",
+      "target": "wall",
+      "color": "#424242",
+      "thickness": 4
+    },
+    {
+      "op": "eval",
+      "cmd": "v=-A*omega*sin(omega*t)"
+    },
+    {
+      "op": "eval",
+      "cmd": "acc=-omega^2*x(P)"
+    },
+    {
+      "op": "eval",
+      "cmd": "dTip=P"
+    },
+    {
+      "op": "vector",
+      "name": "dArrow",
+      "from": "O",
+      "to": "dTip",
+      "color": "#1e88e5",
+      "label": "d"
+    },
+    {
+      "op": "eval",
+      "cmd": "vTip=P+(v/5,0)"
+    },
+    {
+      "op": "vector",
+      "name": "vArrow",
+      "from": "P",
+      "to": "vTip",
+      "color": "#43a047",
+      "label": "v"
+    },
+    {
+      "op": "eval",
+      "cmd": "aTip=P+(acc/25,0)"
+    },
+    {
+      "op": "vector",
+      "name": "aArrow",
+      "from": "P",
+      "to": "aTip",
+      "color": "#fb8c00",
+      "label": "a"
+    },
+    {
+      "op": "eval",
+      "cmd": "txtT=Text(\"T=\"+round(T,3)+\" s\",(2.5,1.5))"
+    },
+    {
+      "op": "style",
+      "target": "txtT",
+      "color": "#424242"
+    },
+    {
+      "op": "trace",
+      "target": "P",
+      "on": true
+    },
+    {
+      "op": "unitAxes",
+      "xUnit": "m",
+      "yUnit": "m",
+      "xLabel": "x/m",
+      "yLabel": "t/s"
+    },
+    {
+      "op": "view",
+      "xmin": -5,
+      "xmax": 5,
+      "ymin": -2,
+      "ymax": 2
+    },
+    {
+      "op": "animate",
+      "target": "t",
+      "speed": 0.5,
+      "on": true,
+      "repeat": "increasing"
+    }
+  ]
+}
