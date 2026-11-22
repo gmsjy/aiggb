@@ -1,7 +1,7 @@
 /**
  * 题目识别输出 Schema —— 视觉模型 ProblemAnalysis 校验
  *
- * 仿 specSchema.ts：剥 code fence + Zod 容错 + 确定性序列化。
+ * 剥 code fence + Zod 容错 + 确定性序列化。
  */
 
 import { z } from "zod";

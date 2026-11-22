@@ -2,6 +2,8 @@
 
 > 本文档是给 AI agent 使用的项目梳理，描述了当前代码实现的功能与架构。
 > 详细规格见 [SPEC.md](SPEC.md)，使用说明见 [README.md](README.md)。
+>
+> ⚠️ **v2.0 架构迁移中**：两阶段流水线（Phase 1 精炼 → 规格确认 → Phase 2 编译）已整体移除，纯文字与带图统一走 Agent 模式（`runAgentPipeline` / `runVisionPipeline`，见 `pipeline.ts` 头注释）。下文「核心架构：两阶段流水线」等章节描述的是 v1.x 形态，待按 v2.0 重写；模块表中 `prompts.ts` 的 compile/checker 模式已无调用方。
 
 ## 项目一句话
 
@@ -42,16 +44,13 @@
 | `pipeline.ts` | **两阶段流水线状态机**（从 ChatPanel 抽取）+ **多模态视觉管线** | `runPipeline(userText, deps, cb)`（Phase 1→确认→Phase 2→修复→**满足度评估**）、**`runVisionPipeline({text, images}, deps, cb)`**（带图轮入口：识别→题目确认→Agent 构造+状态核对）、`runAgentPipeline`/内部 `runAgentRound(userText, deps, cb, {stateCheck?, evalBasis?})`、`ReviewHandle`/`ProblemHandle`/对应 Decision、`PipelineDeps`（依赖注入接口，含 4-role 模型解析 + `runAgentLoopImpl?` + `updateProblemReview?` + `appMode`）、`PipelineCallbacks`（含 `onProblemReview?`）、`MAX_REPAIR=2`、`MAX_FORMAT_RETRY=2`、`HISTORY_WINDOW=6`、`parseRefinedSpec`、`collectHistory`（user 带 attachments 时追加 `[附件:图片×N]` 占位）；内部 `runSinglePhase`/`runPhase2`/`executeAndRepair`/`applyRagCorrection`/`chatWithFormatRetry`/`extractProblem`/`waitProblemReview`；Phase 2 调用 `executeCommands(api, cmds, deps.appMode)`；`requestAnimationFrame` 用 `typeof` 守卫兼容 Node.js 单测 |
 | `runControl.ts` | 单轮运行生命周期 | `beginRun()`（返回本轮 AbortSignal）、`abortCurrentRun()`（清空/切模式/撤销时取消请求）、`onRunCancelled(cb)`（spec-review 等待气泡订阅取消）、`wasAborted()`、`endRun()` |
 | `prompts.ts` | System Prompt 构建 | `buildSystemPrompt(domain, appMode, phase="full"\|"compile")`、`buildCompilePrompt`、`buildCheckerPrompt`（修复角色）、`buildRepairMessage`、`buildFormatRepairMessage`；compile 模式含 **self_check 自检指令**；`Domain = "general"\|"physics"` |
-| `refinePrompt.ts` | Phase 1 精炼 prompt | `buildRefinePrompt(domain)` — 输出 JSON `{"spec":"<分节规格>"}`，含物理默认值 |
 | `schema.ts` | AI 输出 Zod 校验 | `Command`（discriminatedUnion，14 op）、`AIResponse`（含 `ask`、`self_check`）、`NumLike`/`BoolLike`/`IntLike` 容错、`SafeCmd`（臆造命令硬黑名单 + XSS 过滤）、`CoordExpr`（vector/forceDiagram 坐标表达式注入防护）、`withTextSafety`（caption/label/unit 文本安全）；`superRefine` 做 slider/view 语义 + ask 互斥校验 |
 | `ggbKB.ts` | **RAG 命令知识库** | `GGB_COMMAND_DEFS`（~130 条命令：签名/参数/2D3D 适用）、`HALLUCINATION_MAP`（30 条臆造→正确映射，含 El→Element / Round→round / SetVisible→SetVisibleInView）、`buildCommandReference(mode, domain)`、`buildHallucinationWarnings(mode)`、`findCommand`、`findHallucination` |
 | `commandCorrect.ts` | 后置命令纠正器 | `correctCommand(cmd)`（Levenshtein ≤2 模糊纠正 + 臆造查表 + 参数个数校验）、`batchCorrect()`、`correctionsToRepairContext()` |
 | `commandValidate.ts` | **执行前静态语法预检**（纯 TS） | `validateGGBCommand(cmd, mode?)` → `{ok, issues[], message}`：括号配对（含坐标括号与嵌套调用）、`).` 句点误用（逗号手误）、Sequence 参数契约（官方 5 种重载分支判定 / 循环变量单字母 / 区间压缩 / 尾部残留）、参数个数（ARG_COUNT_HINTS + 属性命令回退 ggbKB paramCount）、运算符结尾、**属性命令专项**（3D 模式禁令 `mode-forbidden` / SetColor 值域与色名 `value-range`/`color-name` / 透明度 0~1，mode 经 ggbBridge/toolExecutor 透传）、**保留对象名**（`reserved-name`：If/xAxis/yAxis/zAxis/x/y/z/e 赋值拦截，2026-09 整机实测新增）；`validateSequenceArgs(args)` → Sequence 契约/循环变量参数级校验（供 eval_raw 路径与 KB 自查复用）；被 `ggbBridge.executeOne`（eval）与 `toolExecutor`（eval_raw）统一调用，把无语义的引擎 false 变成可自愈的具体诊断 |
-| `specSchema.ts` | Phase 1 输出校验 | `RefinedSpec`（`{title?, spec?, ask?}`，spec/ask 互斥） |
-| `specCache.ts` | 意图→规格缓存 | `lookupCachedSpec`/`storeCachedSpec`（模板精确匹配优先 + 存储精确键）、**`SpecStorage` 注入接口 + `createMemoryStorage()`（供单测）**；LRU ≤50 条、TTL 30 天、键含画布对象指纹（排除 `_` 前缀临时对象与物理常量，保证同场景稳定命中） |
 | `commands.ts` | 命令黑名单/流程 | `GGB_FORBIDDEN_COMMANDS`（硬黑名单，被 schema 引用）、`GGB_5STAGE_FLOW`（参数→点→图形→动画→属性）；命令签名/模式数据的权威来源是 ggbKB.ts |
 | `physics.ts` | 物理常量 | `PHYSICS_CONSTANTS`（g/c/e/eps0/mu0/k_e/Grav/h/k_B） |
-| `templates.ts` | 12 个一键模板（物理 2D 4 + 数学 2D 4 + 3D 4） | `Template {id, icon, title, subtitle, prompt, domain, mode}`；prompt 即精炼规格，天然命中 specCache |
+| `templates.ts` | 12 个一键模板（物理 2D 4 + 数学 2D 4 + 3D 4） | `Template {id, icon, title, subtitle, prompt, domain, mode}`；prompt 即 Agent 单阶段需求文本 |
 | `repaintGate.ts` | **画布重绘门控**（闪烁防治，纯 TS） | `shouldBatch(count, appMode)`（**任何非空批次都批处理**，3D 可关闭）；`withRepaintBatch(api, count, appMode, fn)`（暂停重绘 → 执行 → 恢复 + 静默期，抛错也恢复）；`isBatch3DEnabled`/`setBatch3DEnabled`（`localStorage: aiggb_batch_3d`）；`isDiagVerbose`（`aiggb_diag` 逐节点日志开关，手改 localStorage）；`markRepaintBusy`/`isRepaintBusy`（`REPAINT_GRACE_MS=2000`，busyUntil 到时自动失效）|
 | `ggbBridge.ts` | op → GGB API 执行器 | `executeCommands(api, commands, appMode?)` — 批量渲染走 `repaintGate.shouldBatch`（暂停重绘 → 整批执行 → 恢复 + `markRepaintBusy` 静默期）；`collectFailures`、**`resetTmpIds`**（vector 容错重试时复位临时对象计数）、`exportGGB`/`exportPNG`（画布导出，Toolbar 消费）|
 | `agentLoop.ts` | **ReAct Agent 工具调用循环** | `runAgentLoop(userText, deps)` — observe→plan→act 循环，最大 30 次迭代，**每轮刷新 api 句柄**（防 applet 重建失效）、**连续 3 轮工具失败熔断**（`MAX_CONSECUTIVE_FAILURES`，参数/预检类错误不计入，给模型自我修正机会）、全拒绝判定按**本轮**被拒数（避免跨轮累积误触发）、危险工具确认按 `toolCallId` 匹配；**`onThinking` 回调**（分析/规划/执行工具/等待确认 4 个节点 + V4 `reasoning_content` 增量 🧠 实时展示）经 pipeline 透传 UI 减少等待焦虑；`reasoning_content` 回传受 `mustRoundtripReasoning` quirk 门控；空响应重试的截断判定**直接信任 `finish_reason="length"`**（不再依赖 `streamsFinishReason` 门控）；**`StateCheckSpec` 终止核对钩子**：AI 输出纯文本视为完成时用 `getRichSnapshot` 快照调 `check()`，未通过把 issues 反馈注入循环继续修正（`MAX_STATE_CHECK_ROUNDS=2`，共享 30 迭代预算；核对异常按通过结束——失败不阻断）；`buildStateCheckFeedback` 组装反馈消息；`convertHistory` 对 user turn attachments 折叠 `[附件:图片×N]` 占位；`registerConfirmationHandler`/`unregisterConfirmationHandler` 危险工具确认注入；**轮次耗尽 → `AgentLoopResult.incomplete`**（画布保留不回滚、对话入 pipeline 续作缓存 `agentResumeCache`，下轮 `resumeMessages` 注入接力，TTL 10min + 画布指纹校验兜底）；`AgentLoopDeps`（含 `agentModel` + `stateCheck?` + `resumeMessages?`）、`AgentLoopResult` |
@@ -295,7 +294,7 @@ A/B 开关：设置面板「3D 批量重绘」（`localStorage: aiggb_batch_3d`�
 | `npm run test:visual` | — | Playwright 截图（physics,dynamic,composite）。前置：`npm run dev` 已运行（5173，宿主 `tests/visual.html` 加载本地 GGB bundle）|
 | `npm run demos:regen` | — | **重生成 README 效果图**（docs/demos/ 10 个 GIF：P- 物理 / X- 复合 / D- 数学动态 / H- 3D）：fixture 场景 → dev server 本地 GGB 画布（宿主 `tests/visual.html`，与视觉回归共用；3D 场景 `?app=3d` 注入）→ Playwright 抓帧 8s → ffmpeg 调色板合成 640×448 GIF。`regen-demos.ts` 支持 per-id 附加命令（EXTRA_COMMANDS：静态场景补动画/覆盖样式）。前置：`npm run dev` 已运行（5173） |
 | `npm run prompt:iterate` | — | Prompt 迭代工作流 |
-| **单测** | — | 323 个（0 API）：`tests/commandValidate.test.ts`（静态预检：Sequence 官方 5 种重载/括号配对/逗号句点误用/循环变量契约 + 属性命令专项：3D 禁令/值域/色名）、`tests/pipeline.test.ts`（流水线状态机 + 视觉管线 + 视觉核对合并 + **原图透传/交叉验证/失败反问**）、`tests/aiClient.test.ts`（provider 适配：DeepSeek/GLM thinking 参数翻译、档位归一、max 档预算）、`tests/providers.test.ts`（模型清单 + **`modelSupportsVision` 多模态判定**）、`tests/agentLoop.test.ts`（截断重试档位语义 + **多模态 content 贯通**）、`tests/specCache.test.ts`（缓存，注入 `createMemoryStorage`）、`tests/satisfactionEval.test.ts`（满足度评估 + evaluateVisual 双模式视觉审查）、`tests/problemSchema.test.ts`（题目识别 schema 容错 + 序列化确定性）、`tests/imageInput.test.ts`（图片校验边界）、`tests/toolExecutor.test.ts` / `agentSmoke.test.ts` / `ggbBridge.test.ts` / `ggbKB.test.ts` / `sessionStore.test.ts` / `trainingStore.test.ts` / `trajectory-replay.test.ts` / `trapStore.test.ts` / `runControl.test.ts` / `repaintGate.test.ts` |
+| **单测** | — | 323 个（0 API）：`tests/commandValidate.test.ts`（静态预检：Sequence 官方 5 种重载/括号配对/逗号句点误用/循环变量契约 + 属性命令专项：3D 禁令/值域/色名）、`tests/pipeline.test.ts`（流水线状态机 + 视觉管线 + 视觉核对合并 + **原图透传/交叉验证/失败反问**）、`tests/aiClient.test.ts`（provider 适配：DeepSeek/GLM thinking 参数翻译、档位归一、max 档预算）、`tests/providers.test.ts`（模型清单 + **`modelSupportsVision` 多模态判定**）、`tests/agentLoop.test.ts`（截断重试档位语义 + **多模态 content 贯通**）、`tests/satisfactionEval.test.ts`（满足度评估 + evaluateVisual 双模式视觉审查）、`tests/problemSchema.test.ts`（题目识别 schema 容错 + 序列化确定性）、`tests/imageInput.test.ts`（图片校验边界）、`tests/toolExecutor.test.ts` / `agentSmoke.test.ts` / `ggbBridge.test.ts` / `ggbKB.test.ts` / `sessionStore.test.ts` / `trainingStore.test.ts` / `trajectory-replay.test.ts` / `trapStore.test.ts` / `runControl.test.ts` / `repaintGate.test.ts` |
 
 关键文件：`tests/runner.ts`（运行器）、`tests/mockGGB.ts`（轻量 GGB mock）、`tests/cases.json`（用例）、`tests/assertions.ts`（12 维断言）、`tests/fixtures/`（回放数据）。基线 323 单测 / 63 回放。
 
@@ -321,7 +320,7 @@ A/B 开关：设置面板「3D 批量重绘」（`localStorage: aiggb_batch_3d`�
 - `npm run dev` 开发（端口 5173），`npm run build` 生产（PWA 预缓存）
 - 修改 `prompts.ts`/`commands.ts` 后跑 `test:replay` 确认无退化
 - **重构编排时优先改 `pipeline.ts` 而非 ChatPanel**：pipeline 是纯 TS 可单测，ChatPanel 只做依赖注入
-- 新增 pipeline 逻辑需配 `tests/pipeline.test.ts`（依赖注入 mock）；新增缓存逻辑配 `tests/specCache.test.ts`（注入 `createMemoryStorage`）
+- 新增 pipeline 逻辑需配 `tests/pipeline.test.ts`（依赖注入 mock）
 - GGB 命名陷阱：`u/v/w`=Vector、`A~Z` 单大写=Point、`f/g/h`=Function；`(x,y)` 赋变量=Point；`Point+Point` 崩；分母加 `+0.001` 防除零
 - **evalCommand 不认科学计数法（5.4.927 实测）**：`c = 3e8` 被解析成 3×e×8（欧拉数）——带 e 的数值一律经 `physics.ts formatGGBNumber` 改写为幂形式（`3 * 10^(8)`）；注意 JS `String()` 仅在 |v|≥1e21 或 <1e-6 才输出 e 计数，`3e8`→"300000000" 无恙，而 Grav/eps0/h/k_B/e 五个常量旧代码长期被静默注入错值（如 Grav=6.6743×e−11≈7.14）。另：`getValueString` 按画布舍入位数显示（小值显示 "0"、独立数值带 `name = ` 前缀），程序化取值用 `getValueString(...).split('=').pop()` 或读 XML `<value val>`
 - **3D 模式：`Cube(A,B)` 两点式优先；`SetViewDirection/SetFilling/SetPointSize/SetCaption` 等 3D 禁用**
